@@ -1,0 +1,91 @@
+# PCLabel taxonomy: the source of truth for class ids, names, colours and flags.
+# Rules about *when* to use each class are in docs/LABELLING_STANDARD.md.
+#
+# id        uint8, stable forever. Never reuse or renumber an id; disable a class instead.
+#           Ranges: 1-19 ground, 20-29 vegetation, 30-39 poles, 40-49 structures, 50-59 temporary, 60+ other.
+# status    core      = asked for by the user
+#           proposed  = planning suggestion; the user decides (see the rule named in `rule`)
+# enabled   shown in the palette. Disabled classes stay valid in old label files.
+# group     used to collapse classes for exports and evaluation
+# countable points of this class may carry instance ids (one id per object)
+# key       default hotkey ("shift+N" for the second row). "0" erases to unassessed.
+
+schema: pclabel.taxonomy/1
+version: "0.1"
+
+groups: [ground, vegetation, pole, structure, temporary, other]
+
+classes:
+  - {id: 0,  name: unassessed,         group: other,      status: core,     enabled: true,  color: "#8E8E93", key: "0",
+     def: "not yet looked at. Never means 'not X'."}
+
+  # ground
+  - {id: 1,  name: road,               group: ground,     status: core,     enabled: true,  color: "#5E5CE6", key: "1",
+     def: "carriageway surface for vehicles", rule: R-005}
+  - {id: 2,  name: curb,               group: ground,     status: core,     enabled: true,  color: "#FF3B30", key: "2",
+     def: "raised kerb unit; exact extent pending", rule: R-004}
+  - {id: 3,  name: curb_lowered,       group: ground,     status: proposed, enabled: true,  color: "#FF9F0A", key: "shift+1",
+     def: "kerb unit at a dropped/ramped section (crossings, driveways)", rule: R-007}
+  - {id: 4,  name: pavement,           group: ground,     status: core,     enabled: true,  color: "#FFD60A", key: "3",
+     def: "paved surface for pedestrians/cyclists: footpaths, park connectors, cycling and shared paths", rule: R-002}
+  - {id: 5,  name: drain,              group: ground,     status: proposed, enabled: true,  color: "#00C7BE", key: "4", countable: true,
+     def: "drainage: kerb inlets, gratings, open channels, drain covers", rule: R-003}
+  - {id: 6,  name: grass,              group: ground,     status: core,     enabled: true,  color: "#30D158", key: "5",
+     def: "turf, low ground cover, bare soil in verges", rule: R-011}
+  - {id: 7,  name: island,             group: ground,     status: proposed, enabled: false, color: "#FF6482",
+     def: "top of a raised traffic island / median (only if R-008 chooses a separate class)", rule: R-008}
+  - {id: 8,  name: driveway,           group: ground,     status: proposed, enabled: false, color: "#AC8E68",
+     def: "vehicle crossing over the pavement (only if R-010 chooses a separate class)", rule: R-010}
+
+  # vegetation
+  - {id: 20, name: shrub_hedge,        group: vegetation, status: proposed, enabled: true,  color: "#9BCB3C", key: "shift+2",
+     def: "shrubs, hedges, planted beds above ground cover", rule: R-011}
+  - {id: 21, name: tree_trunk,         group: vegetation, status: core,     enabled: true,  color: "#A0522D", key: "6", countable: true,
+     def: "trunk and main stems of a tree", rule: R-011}
+  - {id: 22, name: tree_canopy,        group: vegetation, status: core,     enabled: true,  color: "#1B7F3A", key: "7", countable: true,
+     def: "leaves and small branches", rule: R-011}
+
+  # poles
+  - {id: 30, name: lamp_post,          group: pole,       status: core,     enabled: true,  color: "#FF2D95", key: "8", countable: true,
+     def: "street lamp pole including arm and lamp head", rule: R-012}
+  - {id: 31, name: traffic_light_pole, group: pole,       status: proposed, enabled: true,  color: "#BF5AF2", key: "shift+3", countable: true,
+     def: "traffic signal pole including arms and signal heads", rule: R-012}
+  - {id: 32, name: other_pole,         group: pole,       status: proposed, enabled: true,  color: "#64D2FF", key: "shift+4", countable: true,
+     def: "sign posts, bollards, camera poles, other pole-like objects", rule: R-012}
+
+  # structures
+  - {id: 40, name: building_wall,      group: structure,  status: proposed, enabled: false, color: "#C7C7CC",
+     def: "building facades and boundary walls"}
+  - {id: 41, name: fence_railing,      group: structure,  status: proposed, enabled: true,  color: "#D4A373",
+     def: "railings, pedestrian guardrails, fences"}
+  - {id: 42, name: roof_shelter,       group: structure,  status: proposed, enabled: true,  color: "#7D7AFF",
+     def: "covered-linkway roofs, bus shelters, canopies (structure, not vegetation)"}
+  - {id: 43, name: barrier,            group: structure,  status: proposed, enabled: false, color: "#E5E5EA",
+     def: "crash barriers, concrete road barriers"}
+  - {id: 44, name: street_furniture,   group: structure,  status: proposed, enabled: true,  color: "#FFB340", countable: true,
+     def: "benches, bins, hydrants, cabinets, bicycle racks"}
+
+  # temporary / moving
+  - {id: 50, name: vehicle,            group: temporary,  status: proposed, enabled: true,  color: "#0A84FF", key: "shift+5", countable: true,
+     def: "parked or stationary vehicles", rule: R-013}
+  - {id: 51, name: person,             group: temporary,  status: proposed, enabled: true,  color: "#FF453A", key: "shift+6", countable: true,
+     def: "people", rule: R-013}
+  - {id: 52, name: temporary_object,   group: temporary,  status: proposed, enabled: true,  color: "#FF9500", key: "shift+7", countable: true,
+     def: "cones, barricades, incident equipment, construction items", rule: R-013}
+  - {id: 53, name: ghost,              group: temporary,  status: proposed, enabled: true,  color: "#BDB2FF", key: "shift+8",
+     def: "streaks left by objects that moved during the scan", rule: R-013}
+
+  # other
+  - {id: 60, name: noise,              group: other,      status: proposed, enabled: true,  color: "#3A3A3C", key: "shift+9",
+     def: "isolated points, mixed pixels off any surface, below-ground multipath, sky noise", rule: R-014}
+  - {id: 61, name: other,              group: other,      status: core,     enabled: true,  color: "#F2F2F7", key: "9",
+     def: "assessed, but fits no enabled class (log an observation if it recurs)"}
+
+# Per-point flags (uint8 bitfield, independent of the class)
+flags:
+  - {bit: 0, name: ambiguous,   def: "labeller unsure; excluded from scoring by default; should have a decision-needed observation"}
+  - {bit: 1, name: marking,     def: "painted marking on this surface (road, curb or pavement)", rule: R-006}
+  - {bit: 2, name: under_cover, def: "under a roof or canopy; RGB and intensity behave differently"}
+  - {bit: 3, name: exclude,     def: "exclude from scoring (artefacts, scan edge, known bad data)"}
+  - {bit: 4, name: reviewed,    def: "checked in a review pass"}
+  # bits 5-7 reserved

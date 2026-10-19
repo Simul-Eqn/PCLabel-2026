@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pclabel"
+version = "0.0.1"
+description = "Point-by-point labelling of large outdoor TLS scans, built to set a labelling standard"
+requires-python = ">=3.12,<3.13"
+
+[tool.setuptools.packages.find]
+include = ["pclabel*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
