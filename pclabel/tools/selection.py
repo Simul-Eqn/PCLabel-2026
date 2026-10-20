@@ -170,16 +170,18 @@ def project_boxes(lo: np.ndarray, hi: np.ndarray, mvp: np.ndarray, viewport):
 
 @dataclass(frozen=True)
 class SelectFilters:
-    """What is hidden on screen is not selected: clip box and height slice, in local (store) coordinates."""
+    """What is hidden on screen is not selected: clip box, clip volume and height slice, in local (store)
+    coordinates."""
 
     clip_min: tuple | None = None
     clip_max: tuple | None = None
     band_normal: tuple | None = None  # height axis
     band_origin: tuple | None = None  # local point where h = 0
     band: tuple | None = None  # (a, b) in metres
+    volume: object = None  # tools.volume.VolumeSpec: only points inside it
 
     def apply(self, xyz: np.ndarray, idx: np.ndarray) -> np.ndarray:
-        if idx.size == 0 or (self.clip_min is None and self.band is None):
+        if idx.size == 0 or (self.clip_min is None and self.band is None and self.volume is None):
             return idx
         q = np.asarray(xyz[idx], np.float64)
         keep = np.ones(len(idx), bool)
@@ -188,6 +190,8 @@ class SelectFilters:
         if self.band is not None:
             hh = (q - np.asarray(self.band_origin)) @ np.asarray(self.band_normal)
             keep &= (hh >= self.band[0]) & (hh <= self.band[1])
+        if self.volume is not None:
+            keep &= self.volume.contains(q)
         return idx[keep]
 
 

@@ -1,16 +1,23 @@
 """Ground grow: from a seed point, select the connected ground surface (SPEC §11 region grow, on a cell grid).
 
-1. Cells. Points around the seed (a uniform subsample: tiles are shuffled, so their first points are one) are
-   binned into square cells. Per cell, the *ground layer* is the points within ``surface_band`` of the cell's 5th
-   percentile height, so canopy, cars and kerb tops above the ground do not count. For the ground layer the cell
+1. Cells. Every point around the seed is binned into square cells, and each cell keeps its first
+   ``cell_points`` points (a uniform sample of the cell, because tiles are shuffled). Capping per cell, not per
+   tile, matters: a tile near the scanner holds millions of points, and sampling it as a whole would leave its
+   sparser road part with too few points per cell (holes, and straight cut lines along tile edges). Per cell,
+   the *ground layer* is the points within ``surface_band`` of the cell's 5th percentile height, so canopy, cars
+   and kerb tops above the ground do not count. For the ground layer the cell
    keeps a median height, a median intensity and a roughness (standard deviation of height).
-2. Grow (8 directions, from the seed cell). Empty cells (no points: gaps between far scan lines, small shadows) are
-   stepped over, up to ``max_gap``. The next cell with data in a direction joins when all of these hold:
-   - its height differs from the current cell's by at most ``max_step`` per cell of distance: kerbs stop the grow;
+2. Grow (8 directions, from the seed cell). Empty cells (no points: gaps between far scan lines, occlusion shadows
+   of poles and kerbs) are stepped over, up to ``max_gap``. The next cell with data in a direction joins when all of
+   these hold:
+   - its height differs from the current cell's by at most ``max_step``, plus ``max_slope`` times the extra
+     distance when it lies across a gap: kerbs stop the grow, also behind a no-point strip;
    - its roughness is at most ``max_roughness``: kerb faces, vegetation and objects stop it;
-   - its intensity differs from the current cell's by at most ``intensity_step``, and from the seed's by at most
-     ``intensity_range``. A walkway at nearly the road's height but of another material stops the grow; slow
-     changes of intensity with range do not.
+   - its intensity differs from the current cell's by at most ``intensity_step``, and from the *local road
+     intensity* by at most ``intensity_range``. The local road intensity is a running average along the grow
+     (memory about ``intensity_memory``), so intensity may drift slowly with range and incidence, but a walkway
+     at nearly the road's height and of another material stops the grow.
+   Each refused cell records why (``REASONS``), so the user can see which threshold stopped the grow.
 3. Markings. Paint is road too, but its intensity differs. Strips up to ``marking_width`` wide inside or between
    grown areas are bridged (morphological closing), and enclosed holes (arrows, text) are filled, but only where
    the cell lies at the height of the grown surface around it (within 2 x ``max_step``).
@@ -22,6 +29,8 @@ All parameters are thresholds under study; the result carries them, and labellin
 
 from __future__ import annotations
 
+import os
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 
 import numba as nb
@@ -32,15 +41,17 @@ import numpy as np
 class GroundGrowParams:
     max_step: float = 0.02  # m, between neighbouring cells (per cell of distance across gaps)
     intensity_step: float = 0.02  # between neighbouring cells (intensity 0..1 of the stored range)
-    intensity_range: float = 0.04  # from the seed's intensity; 1.0 switches it off
+    intensity_range: float = 0.04  # from the local road intensity (running average); 1.0 switches it off
+    intensity_memory: float = 2.0  # m, how much grown road the running average remembers
     marking_width: float = 0.40  # m, narrower strips of other intensity are bridged
     max_roughness: float = 0.03  # m, standard deviation of a cell's ground layer
-    max_gap: float = 0.30  # m, empty cells (no points) the grow may step over
+    max_gap: float = 1.0  # m, empty cells (no points) the grow may step over
+    max_slope: float = 0.08  # extra height allowed across a gap, per metre (road grade and crossfall)
     surface_tol: float = 0.04  # m, full-resolution points this close to the cell surface are selected
     cell: float = 0.10  # m
     radius: float = 30.0  # m, how far from the seed the grow may reach
     surface_band: float = 0.10  # m, above a cell's 5th percentile height: its ground layer
-    sample_density: float = 4_000.0  # points per m^2 read for the cell statistics (dense tiles are subsampled)
+    cell_points: int = 48  # points kept per cell for its statistics (fewer if the grid is very large)
 
 
 @dataclass
@@ -53,7 +64,7 @@ class CellGrid:
     surf: np.ndarray  # (ny, nx) float64, median ground height (local z), NaN where no data
     inten: np.ndarray  # (ny, nx) float64, median ground intensity 0..1
     rough: np.ndarray  # (ny, nx) float64
-    count: np.ndarray  # (ny, nx) int64, sample points per cell
+    count: np.ndarray  # (ny, nx) int64, all points per cell
     sample_points: int = 0
 
 
@@ -65,19 +76,69 @@ class GrowResult:
     info: dict
 
 
+THREADS = max(1, min(32, os.cpu_count() or 1))  # tiles are processed in parallel (numba kernels release the GIL)
+
+
+def tile_block(tiles, t, x0, y0, cell, nx, ny):
+    """Tile ``t``'s bounds as a block (ox, oy, w, h) of a grid's cells, clipped to the grid (w or h is 0 outside).
+    Every point of the tile that falls in the grid falls in the block."""
+    ox = max(int(np.floor((tiles["x0"][t] - x0) / cell)), 0)
+    oy = max(int(np.floor((tiles["y0"][t] - y0) / cell)), 0)
+    ex = min(int(np.floor((tiles["x1"][t] - x0) / cell)) + 1, nx)
+    ey = min(int(np.floor((tiles["y1"][t] - y0) / cell)) + 1, ny)
+    return ox, oy, max(ex - ox, 0), max(ey - oy, 0)
+
+
+@nb.njit(nogil=True, cache=True)
+def _accumulate(xyz, inten, has_int, a, b, x0, y0, cell, ox, oy, w, h, clip_on, lo, hi, cnt, bz, bi, seen):
+    """Keep the first K points (K = bz.shape[1]) of every cell of the block (ox, oy, w, h) of the grid at (x0, y0)
+    from store points a..b."""
+    k_max = bz.shape[1]
+    for i in range(a, b):
+        x, y, z = xyz[i, 0], xyz[i, 1], xyz[i, 2]
+        if clip_on and (x < lo[0] or x > hi[0] or y < lo[1] or y > hi[1] or z < lo[2] or z > hi[2]):
+            continue
+        cx = int(np.floor((x - x0) / cell)) - ox
+        cy = int(np.floor((y - y0) / cell)) - oy
+        if cx < 0 or cx >= w or cy < 0 or cy >= h:
+            continue
+        c = cy * w + cx
+        seen[c] += 1
+        k = cnt[c]
+        if k < k_max:
+            bz[c, k] = z
+            bi[c, k] = inten[i] / 65535.0 if has_int else 0.0
+            cnt[c] = k + 1
+
+
+@nb.njit(nogil=True, cache=True)
+def _merge_block(nx, ox, oy, w, h, cnt_t, bz_t, bi_t, seen_t, cnt, bz, bi, seen):
+    """Append a block's kept points to the grid's, up to K per cell (blocks merged in tile order keep the same
+    points as one pass over the tiles in that order)."""
+    k_max = bz.shape[1]
+    for r in range(h):
+        for q in range(w):
+            s = r * w + q
+            if seen_t[s] == 0:
+                continue
+            c = (oy + r) * nx + ox + q
+            seen[c] += seen_t[s]
+            k = cnt[c]
+            m = min(cnt_t[s], k_max - k)
+            for j in range(m):
+                bz[c, k + j] = bz_t[s, j]
+                bi[c, k + j] = bi_t[s, j]
+            cnt[c] = k + m
+
+
 @nb.njit(parallel=True, nogil=True, cache=True)
-def _cell_stats(z, inten, order, starts, counts, band, surf, med_i, rough):
-    for c in nb.prange(starts.shape[0]):
-        n = counts[c]
+def _cell_stats(bz, bi, cnt, band, surf, med_i, rough):
+    for c in nb.prange(cnt.shape[0]):
+        n = cnt[c]
         if n < 3:
             continue
-        s = starts[c]
-        zz = np.empty(n)
-        ii = np.empty(n)
-        for k in range(n):
-            j = order[s + k]
-            zz[k] = z[j]
-            ii[k] = inten[j]
+        zz = bz[c, :n].astype(np.float64)
+        ii = bi[c, :n].astype(np.float64)
         o = np.argsort(zz)
         zz = zz[o]
         ii = ii[o]
@@ -93,14 +154,23 @@ def _cell_stats(z, inten, order, starts, counts, band, surf, med_i, rough):
         rough[c] = np.sqrt(((g - mean) ** 2).mean())
 
 
+# why a cell was refused (the first test it failed), for the panel and the debug picture
+R_NONE, R_HEIGHT, R_ROUGH, R_ISTEP, R_IRANGE, R_GAP = range(6)
+REASONS = {R_HEIGHT: "height step", R_ROUGH: "roughness", R_ISTEP: "intensity step",
+           R_IRANGE: "intensity vs local road", R_GAP: "gap wider than max gap"}  # fmt: skip
+
+
 @nb.njit(nogil=True, cache=True)
-def _grow(surf, inten, rough, seed, ref_i, max_step, max_rough, i_step, i_range, gap_cells):
+def _grow(surf, inten, rough, seed, ref_i, max_step, max_slope, cell, max_rough, i_step, i_range, alpha, gap_cells):
     ny, nx = surf.shape
     region = np.zeros((ny, nx), np.bool_)
+    reason = np.zeros((ny, nx), np.uint8)
+    ref = np.full((ny, nx), np.nan)  # running average of road intensity along the grow
     queue = np.empty(ny * nx, np.int64)
     head, tail = 0, 0
     sy, sx = seed
     region[sy, sx] = True
+    ref[sy, sx] = ref_i
     queue[tail] = sy * nx + sx
     tail += 1
     while head < tail:
@@ -109,42 +179,51 @@ def _grow(surf, inten, rough, seed, ref_i, max_step, max_rough, i_step, i_range,
         cy, cx = cur // nx, cur % nx
         h0 = surf[cy, cx]
         i0 = inten[cy, cx]
+        r0 = ref[cy, cx]
         for dy in (-1, 0, 1):
             for dx in (-1, 0, 1):
                 if dy == 0 and dx == 0:
                     continue
                 unit = np.sqrt(2.0) if dy != 0 and dx != 0 else 1.0
+                found = False
                 for s in range(1, gap_cells + 2):  # the neighbour, or the next cell with data across a gap
                     y, x = cy + dy * s, cx + dx * s
                     if y < 0 or y >= ny or x < 0 or x >= nx or region[y, x]:
+                        found = True  # nothing to refuse
                         break
                     h = surf[y, x]
                     if not np.isfinite(h):
                         continue
-                    if abs(h - h0) <= max_step * unit * s and rough[y, x] <= max_rough:
-                        i = inten[y, x]
-                        if abs(i - i0) <= i_step and abs(i - ref_i) <= i_range:
-                            region[y, x] = True
-                            queue[tail] = y * nx + x
-                            tail += 1
+                    found = True
+                    extra = (s * unit - 1.0) * cell  # distance beyond an ordinary neighbour
+                    code = R_NONE
+                    i = inten[y, x]
+                    if abs(h - h0) > max_step + max_slope * extra:
+                        code = R_HEIGHT
+                    elif rough[y, x] > max_rough:
+                        code = R_ROUGH
+                    elif abs(i - i0) > i_step:
+                        code = R_ISTEP
+                    elif abs(i - r0) > i_range:
+                        code = R_IRANGE
+                    if code == R_NONE:
+                        region[y, x] = True
+                        reason[y, x] = R_NONE
+                        ref[y, x] = (1.0 - alpha) * r0 + alpha * i
+                        queue[tail] = y * nx + x
+                        tail += 1
+                    elif reason[y, x] == R_NONE:
+                        reason[y, x] = code
                     break
-    return region
-
-
-@nb.njit(nogil=True, cache=True)
-def _counting_order(cid, n_cells):
-    counts = np.zeros(n_cells, np.int64)
-    for i in range(cid.shape[0]):
-        counts[cid[i]] += 1
-    starts = np.zeros(n_cells, np.int64)
-    for c in range(1, n_cells):
-        starts[c] = starts[c - 1] + counts[c - 1]
-    pos = starts.copy()
-    order = np.empty(cid.shape[0], np.int64)
-    for i in range(cid.shape[0]):
-        order[pos[cid[i]]] = i
-        pos[cid[i]] += 1
-    return order, starts, counts
+                if not found:  # only empty cells within max_gap in this direction
+                    y, x = cy + dy, cx + dx
+                    if reason[y, x] == R_NONE:
+                        reason[y, x] = R_GAP
+    for y in range(ny):
+        for x in range(nx):
+            if region[y, x]:
+                reason[y, x] = R_NONE
+    return region, reason
 
 
 @nb.njit(parallel=True, nogil=True, cache=True)
@@ -171,34 +250,50 @@ def _roi_tiles(tiles, seed, radius, clip=None):
     return np.flatnonzero(near)
 
 
-def cell_grid(xyz, intensity, tiles, seed, params: GroundGrowParams, clip=None) -> CellGrid:
-    """Cell statistics around ``seed`` (local coordinates). ``clip`` = (lo, hi) local box limits the points."""
+def cell_grid(xyz, intensity, tiles, seed, params: GroundGrowParams, clip=None, *, extent=None) -> CellGrid:
+    """Cell statistics around ``seed`` (local coordinates). ``clip`` = (lo, hi) local box limits the points.
+    ``extent`` = (x0, y0, nx, ny) places the grid explicitly instead (``params.radius`` is then unused)."""
     p = params
     seed = np.asarray(seed, np.float64)
-    x0, y0 = seed[0] - p.radius, seed[1] - p.radius
-    nx = ny = int(np.ceil(2 * p.radius / p.cell))
-    xs, iv = [], []
-    for t in _roi_tiles(tiles, seed, p.radius, clip):
+    if extent is None:
+        x0, y0 = seed[0] - p.radius, seed[1] - p.radius
+        nx = ny = int(np.ceil(2 * p.radius / p.cell))
+    else:
+        x0, y0, nx, ny = float(extent[0]), float(extent[1]), int(extent[2]), int(extent[3])
+    half = 0.5 * max(nx, ny) * p.cell
+    centre = np.array([x0 + 0.5 * nx * p.cell, y0 + 0.5 * ny * p.cell])
+    n_cells = nx * ny
+    k = int(max(8, min(p.cell_points, 60_000_000 // n_cells)))  # at most about 0.5 GB of buffers
+    cnt = np.zeros(n_cells, np.int64)
+    seen = np.zeros(n_cells, np.int64)
+    bz = np.empty((n_cells, k), np.float32)
+    bi = np.empty((n_cells, k), np.float32)
+    arr = np.asarray(xyz)
+    has_int = intensity is not None
+    iarr = np.asarray(intensity) if has_int else np.zeros(1, np.uint16)
+    lo, hi = (np.asarray(clip[0], np.float64), np.asarray(clip[1], np.float64)) if clip is not None else (
+        np.zeros(3), np.zeros(3))  # fmt: skip
+    def block(t):
+        ox, oy, w, h = tile_block(tiles, t, x0, y0, p.cell, nx, ny)
+        if w == 0 or h == 0:
+            return None
         a, n = int(tiles["start"][t]), int(tiles["count"][t])
-        area = max((tiles["x1"][t] - tiles["x0"][t]) * (tiles["y1"][t] - tiles["y0"][t]), 0.01)
-        m = int(min(n, max(2000, area * p.sample_density)))
-        q = np.asarray(xyz[a : a + m])
-        keep = (q[:, 0] >= x0) & (q[:, 0] < x0 + nx * p.cell) & (q[:, 1] >= y0) & (q[:, 1] < y0 + ny * p.cell)
-        if clip is not None:
-            keep &= np.all((q >= clip[0]) & (q <= clip[1]), axis=1)
-        xs.append(q[keep])
-        iv.append(np.asarray(intensity[a : a + m])[keep] if intensity is not None else np.zeros(int(keep.sum())))
-    q = np.concatenate(xs) if xs else np.empty((0, 3), np.float32)
-    inten = (np.concatenate(iv).astype(np.float64) / 65535.0) if xs else np.empty(0)
-    cx = np.floor((q[:, 0] - x0) / p.cell).astype(np.int64)
-    cy = np.floor((q[:, 1] - y0) / p.cell).astype(np.int64)
-    order, starts, counts = _counting_order(cy * nx + cx, nx * ny)
-    surf = np.full(nx * ny, np.nan)
-    med_i = np.full(nx * ny, np.nan)
-    rough = np.full(nx * ny, np.nan)
-    _cell_stats(q[:, 2].astype(np.float64), inten, order, starts, counts, p.surface_band, surf, med_i, rough)
+        cnt_t, seen_t = np.zeros(w * h, np.int64), np.zeros(w * h, np.int64)
+        bz_t, bi_t = np.empty((w * h, k), np.float32), np.empty((w * h, k), np.float32)
+        _accumulate(arr, iarr, has_int, a, a + n, x0, y0, p.cell, ox, oy, w, h, clip is not None, lo, hi, cnt_t, bz_t,
+                    bi_t, seen_t)  # fmt: skip
+        return ox, oy, w, h, cnt_t, bz_t, bi_t, seen_t
+
+    with ThreadPoolExecutor(THREADS) as ex:
+        for b in ex.map(block, _roi_tiles(tiles, centre, half, clip)):  # in tile order
+            if b is not None:
+                _merge_block(nx, *b, cnt, bz, bi, seen)
+    surf = np.full(n_cells, np.nan)
+    med_i = np.full(n_cells, np.nan)
+    rough = np.full(n_cells, np.nan)
+    _cell_stats(bz, bi, cnt, p.surface_band, surf, med_i, rough)
     return CellGrid(x0, y0, p.cell, nx, ny, surf.reshape(ny, nx), med_i.reshape(ny, nx), rough.reshape(ny, nx),
-                    counts.reshape(ny, nx), len(q))  # fmt: skip
+                    seen.reshape(ny, nx), int(cnt.sum()))  # fmt: skip
 
 
 def _disk(r: float) -> np.ndarray:
@@ -230,8 +325,9 @@ def grow_cells(grid: CellGrid, seed, params: GroundGrowParams):
     surf = np.where(valid, grid.surf, np.nan)
     rough = np.where(valid, grid.rough, np.inf)
     inten = np.where(valid, grid.inten, np.nan)
-    grown = _grow(surf, inten, rough, (sy, sx), ref_i, p.max_step, p.max_roughness, p.intensity_step,
-                  p.intensity_range, int(round(p.max_gap / grid.cell)))  # fmt: skip
+    alpha = min(1.0, grid.cell / max(p.intensity_memory, grid.cell))
+    grown, reason = _grow(surf, inten, rough, (sy, sx), ref_i, p.max_step, p.max_slope, grid.cell, p.max_roughness,
+                          p.intensity_step, p.intensity_range, alpha, int(round(p.max_gap / grid.cell)))  # fmt: skip
 
     # markings: bridge narrow strips (closing) and fill enclosed holes, at the grown surface's height only
     r = p.marking_width / 2 / grid.cell
@@ -248,7 +344,10 @@ def grow_cells(grid: CellGrid, seed, params: GroundGrowParams):
             local = np.divide(num, den, out=np.full_like(num, np.nan), where=den > 0)
             added = cand & (np.abs(surf - local) <= 2 * p.max_step)
     region = grown | added
+    reason[region] = R_NONE
+    stopped = {REASONS[k]: int((reason == k).sum()) for k in REASONS}
     info = {
+        "stopped_by": stopped,
         "seed_cell": (sy, sx),
         "seed_height_local": float(h_seed),
         "seed_intensity": ref_i,
@@ -257,6 +356,7 @@ def grow_cells(grid: CellGrid, seed, params: GroundGrowParams):
         "area_m2": float(region.sum() * grid.cell**2),
         "reached_edge": bool(region[0, :].any() or region[-1, :].any() or region[:, 0].any() or region[:, -1].any()),
     }
+    info["reason_grid"] = reason  # (ny, nx) uint8, see REASONS; not part of the parameters record
     return region, info
 
 

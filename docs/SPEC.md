@@ -54,13 +54,15 @@ internals are in [ARCHITECTURE.md](ARCHITECTURE.md).
   docks arrive with their milestones.
 - **Mouse, the same in every view** (changed 2026-10-19 after the first use: rotating around the point under the
   cursor made the view jump when a drag started, and the result depended on where the drag started):
-  - left drag rotates. In perspective the camera orbits the surface point at the centre of the view. That point
-    is found from the depth buffer when the button goes down, without moving the camera, and is shown as a cyan
-    cross while rotating. Orthographic views turn their heading.
+  - left drag rotates, and so does right drag (changed 2026-10-19 at the user's request). In perspective the
+    camera orbits the surface point at the centre of the view. That point is found from the depth buffer when the
+    button goes down, without moving the camera, and is shown as a cyan cross while rotating. Orthographic views
+    turn their heading.
   - middle drag, or Shift + left drag, pans;
   - the wheel zooms towards the point under the cursor;
-  - holding the right button in perspective flies: the mouse looks, W A S D move, Q E go down and up, Shift is 4×
-    faster, and the wheel sets the speed. In orthographic views the right button pans.
+  - fly: hold the right button (perspective) and press W A S D or Q E. From then until the button goes up the
+    mouse looks instead of rotating: W A S D move, Q E go down and up, Shift is 4× faster, and the wheel sets the
+    speed. (Before, holding the right button always flew, and in orthographic views it panned.)
 - **Home** (key, View menu, toolbar) resets the view: perspective from the default direction, framing the bulk of
   the points. A toolbar holds Home, the four views, the selection tools, fit plane and the slice.
 - **Views** (changed 2026-10-19 at the user's request: humans could not tell an orthographic top view from a
@@ -214,7 +216,9 @@ Let `h` be a point's height in the active reference frame, or above the referenc
   - a warning when the fit does not look like ground (tilt > 10° or RMS > 5 cm).
 - Frames are named `plane 1`, `plane 2`, …, saved in `frames.json` and listed in the Height axis dock. `H`
   switches between z and the last plane. `F` on the same selection again reuses that plane instead of adding a
-  copy. "delete plane" removes the plane shown.
+  copy. "delete plane" removes the plane shown. "export plane" saves it as JSON (`pclabel.plane/1`): the
+  equation `a x + b y + c z + d = 0` in scan coordinates with (a, b, c) the unit normal (so the left side is the
+  height above the plane), the same as `z = p x + q y + r`, and the frame and its fit report.
 - Not yet:
   - the view does not rotate into the frame (heights are relative to the plane, but the camera still uses z up);
   - no yaw from two picked points; the frame's `along` is the selection's main axis;
@@ -252,14 +256,89 @@ Let `h` be a point's height in the active reference frame, or above the referenc
 - Shapes: **lasso** (`L`) and **rectangle** (`R`), in every view. While a tool is active, the left button draws:
   plain replaces the selection, Shift adds to it, Ctrl subtracts from it. `Esc` drops the tool, then the
   selection.
-- Depth mode *visible surface* only. Every full-resolution point inside the shape is tested against the last
-  frame's depth buffer. The buffer is first min-filtered over 2 pixels so gaps between drawn LOD points do not
-  let hidden surfaces through. Tolerance: 3 cm + 0.2 % of the distance.
+- Two depth modes (both built; *through* added 2026-10-20 at the user's request), chosen in the Height axis
+  dock or with `O`:
+  - **visible**: only points not hidden by others. Every full-resolution point inside the shape is tested
+    against the last frame's depth buffer. The buffer is first min-filtered over 2 pixels so gaps between drawn
+    LOD points do not let hidden surfaces through. Tolerance: 3 cm + 0.2 % of the distance.
+  - **through**: every point inside the shape at any depth, e.g. the ground under a canopy.
+
+  The shape's outline is white for visible and orange for through. The selection records `depth`. The names
+  follow the spec; the user had suggested "cloth" and "dense", but "cloth" is easily read as the cloth-simulation
+  ground filter (CSF).
 - Filters: what is hidden is not selected. The clip box and the height slice apply.
-- The selection runs in a worker thread. It is highlighted in yellow (up to 1M points drawn), and the count and
-  time appear in the Height axis dock. Labelling the selection comes with M3.
+- The selection runs in a worker thread. Selected points are tinted yellow through a GPU-side bit, so exactly
+  the drawn points that are selected are tinted (earlier, a random 1M of them drew as a separate overlay and
+  looked speckled). The count and time appear in the Height axis dock. Labelling the selection comes with M3.
 - From the top, the visible surface under a tree is the canopy: to select the road beneath, turn the slice on
   first.
+- **3D select** (`U`, built 2026-10-20 at the user's request; `tools/volume.py`, `ui/volume.py`): a box or a
+  cylinder standing along the height axis (z, or the active plane's normal). Every point inside is selected, at
+  full resolution, not only what is visible.
+  - **Place it:** click the cloud. It stands on the surface under the cursor; clicking again moves it there.
+  - **Adjust it in the panel:** shape; length, width and turn (box) or radius (cylinder); bottom and top heights
+    from the clicked point (default −0.2 to +2 m).
+  - **Keys:** W A S D move it across the height axis (W away from the viewer, whether looking down or ahead), Q E
+    lower and raise it, Z X turn a box by 5°. Shift: 5×. The step is set in the panel (10 cm).
+  - **Enter** selects what is inside; Shift+Enter adds it, Ctrl+Enter subtracts it (also as buttons). While the
+    tool is on, these keys go to the volume instead of the window's shortcuts (W is otherwise the height wrap).
+  - **Loop, "extrude select"** (2026-10-20, at the user's request; a closed curve swept along its plane's
+    normal). The user's case: draw the kerb line around a pavement area as a loop, then take everything inside.
+    - Choose the shape "loop" with a closed curve selected in the Annotations panel (or press "use selected
+      curve"). The volume runs from bottom to top along the curve plane's normal.
+    - **inset** (cm) pulls the outline in evenly, the same distance everywhere, so the selection can stay clear of
+      the kerb line. Negative values push it out. `-` and `=` change it by 1 cm (Shift: 5 cm). The selection uses
+      the exact distance (a distance transform of the loop rasterised at 1 cm); the drawing offsets the outline
+      along its normals.
+    - Scaling about the loop's centre was asked for too and is there (scale %). For a long, thin area, though, it
+      moves the ends far more than the sides, so inset is usually what keeps clear of a kerb.
+    - turn (Z X) acts about the loop's centre. W A S D move the loop across its normal and Q E along it; a click
+      moves its centre to the clicked point.
+    - Named after CAD's "extrude": "prism" usually means straight sides. Locks help here: lock `curb` and kerb
+      points stay out even with a small inset.
+    - On streets 1, a 10 m loop with a 20 cm inset took 31.7M points in 0.49 s, and a 40 m one 212M points in
+      2.8 s.
+  - The clip box, the slice and locks apply. The selection records the shape, its base, the height axis and the
+    parameters.
+  - **Clip to the volume** (`K` in the tool, or "clip to this"; 2026-10-20, at the user's request): only what is
+    inside the box, cylinder or loop stays visible. The point shader culls the rest per point: analytically for
+    a box or cylinder, through the loop's mask for a loop. What it hides is not selected either, by shapes, grow,
+    magic or 3D select.
+    - **"Clip live":** the clip follows the volume while it is moved or sized, to see exactly what it cuts.
+    - Outside the tool its outline stays drawn, dimmer. "Unclip", or the box in the Clip box panel, turns it
+      off.
+    - The axis-aligned clip box (`K` outside the tool, `Shift+K`) still exists; both clips can be on together.
+    - Annotation lines are not clipped.
+  - **"Vertical lines"** sets how many upright lines are drawn round the volume, spread evenly (24 by default;
+    a box also gets its corners), to see what it cuts.
+  - On streets 1 (GPU), clipping to a 4 m cylinder kept the frame at about 28 ms of GPU time for 23.6M points.
+- **Locks** (built 2026-10-20 at the user's request): with labelling done on annotations (D-007), a point "has a
+  class" when a point set holding it carries that label (its own or its directory's).
+  - The "locks" menu in the Annotations panel lists the labels that point sets carry. A ticked label is locked:
+    its points cannot be selected by any tool (shapes, ground grow, magic select, 3D select, "select points").
+  - Taking points out of the selection is not affected.
+  - The selection count says how many locked points were left out.
+  - Locked labels are saved with the annotations and shown in red in the tree.
+  - **"No class":** taxonomy classes marked `selectable: false` start locked. That is `other` ("assessed, fits
+    no class"), the user's choice of 2026-10-20. Label a point set `other` and its points are not selected
+    again, unless `other` is unticked in the menu like any other label.
+  - **Locks on/off** (2026-10-20, the user's request): "locks on" at the top of the menu (also Select ▸ "Locks on")
+    switches all locks off and on again. The choice of labels is kept. While off the button reads "locks (off)"
+    and nothing is shown in red. Saved with the annotations.
+- **Undo and redo** (built 2026-10-19 at the user's request, before labelling): `Ctrl+Z` undoes, `Ctrl+Y` or
+  `Ctrl+Shift+Z` redoes. The Edit menu names the step ("Undo magic select (add)").
+  - **Covered:** selection changes (shapes, ground grow, magic select, clearing, "select points"), fitting and
+    deleting planes, and every annotation change. Annotation changes are new segments, curves, point sets and
+    directories, moves, colours, renames, deletes and imports, and curve edits (gradient drags, added or removed
+    points, "automatic").
+  - **One step per action:** a seed-tool click and all its threshold changes are one step, and so is a whole
+    handle drag.
+  - **While drawing a segment or curve,** `Ctrl+Z` takes back the last clicked point. In curve edit mode, undo
+    keeps editing the curve if it still exists.
+  - **Limits:** the history lasts for the session (it is cleared when a project is opened). Selection snapshots
+    share their index arrays, so a long history stays cheap: at most 200 steps, and at most 4 GB of selection
+    arrays.
+  - Point labels (M3) will be undone through the journal.
 
 ## 5. cross-sections and profiles [M4]
 
@@ -400,29 +479,150 @@ parameters.
   - Accept neighbours within r if `|Δhs| ≤ t_h`, the normal angle is within `t_n`, `|Δintensity| ≤ t_i` and the
     colour difference (ΔE) is within `t_c`.
   - Stops at locked classes. The sliders update the preview live.
-  - **Built early (2026-10-19, at the user's request) as Ground grow (`G`, `tools/ground.py`).** It uses
+  - **Built early (2026-10-19, at the user's request) as Ground grow (`G`, `tools/ground.py`); renamed Grow
+    select on 2026-10-20, where it is the "height and intensity" mode (the geometric mode is below).** It uses
     intensity, not RGB, by the user's choice.
-    1. Points around the seed (a uniform subsample) are binned into cells (10 cm). Per cell, the ground layer is
-       the points within 10 cm of its 5th percentile height. It gives a median height, a median intensity and a
-       roughness (standard deviation).
-    2. The grow is 8-connected and steps over empty cells up to `max_gap` (30 cm), for sparse scan lines far
-       from the scanner. A cell joins when all of these hold:
-       - height change ≤ `max_step` (2 cm) per cell of distance: kerbs stop it;
-       - roughness ≤ 3 cm: kerb faces, vegetation and objects stop it;
+    1. Every point within the reach is binned into 10 cm cells, keeping up to 48 per cell.
+       - Capping per cell, not per tile, was a fix: per-tile sampling left the sparse road inside dense tiles
+         near the scanner with too few points per cell. That showed as unselected speckle and straight cut lines
+         along tile edges.
+       - Per cell, the ground layer is the points within 10 cm of its 5th percentile height. It gives a median
+         height, a median intensity and a roughness (standard deviation).
+    2. The grow is 8-connected and steps over empty cells (far scan lines, pole shadows) up to `max_gap` (1 m).
+       A cell joins when all of these hold:
+       - height change ≤ `max_step` (2 cm), plus `max_slope` (8 %) × the extra distance across a gap: kerbs
+         stop it, also behind a no-point strip;
+       - roughness ≤ 3 cm;
        - intensity change ≤ `intensity_step` (0.02) from the neighbour;
-       - intensity within `intensity_range` (0.04, 1 = off) of the seed's.
+       - intensity within `intensity_range` (0.04, 1 = off) of the **local road intensity**.
 
-       A walkway at road height but of another material therefore stops the grow.
+       The local road intensity is a running average along the grow, remembering about `intensity_memory`
+       (2 m). Comparing with the seed instead cut the road along a line where intensity had drifted with range.
     3. Markings: strips of other intensity up to `marking_width` (40 cm) are bridged, and enclosed holes are
        filled, but only at the grown surface's height.
     4. Selected: full-resolution points within `surface_tol` (4 cm) of their cell's surface. Drain floors below
        and objects above are not selected.
     5. The reach (30 m) limits it.
+    - **Where it stopped:** every refused cell records the first test it failed. The panel counts them, and the
+      view marks them: red height, magenta roughness, cyan intensity step, blue intensity vs road, green gap.
     - Shift+click adds, Ctrl+click subtracts. Changing a threshold re-grows from the same seed, reusing the
       cells.
     - The selection keeps its tool, seed and parameters for the journal (M3).
     - On the synthetic street (20 cm cells) it takes 98.5 % of road points and 97.6 % of markings, with 0.05 %
       non-road. With the intensity checks off it leaks over a lowered kerb onto the pavement.
+- **Grow select, geometric mode** (`G`, the mode box "geometric: surface normals"; `tools/normals.py`; built
+  2026-10-20 at the user's request). It follows PCL's region growing segmentation
+  (pointclouds.org/documentation/tutorials/region_growing_segmentation.html), on voxels:
+  1. Points in a cube around the click are binned into 3 cm voxels (a hash table, so only occupied voxels cost
+     memory). Each voxel keeps its centroid.
+  2. Each voxel's normal and curvature come from PCA of the centroids within `normal_radius` (9 cm), as PCL
+     computes them. The curvature is the surface variation λ0 / (λ0 + λ1 + λ2): 0 on a plane, 1/3 for scatter.
+  3. Growth from the clicked voxel, as in PCL. A neighbour (within `connect`, 4.5 cm: the touching voxels) joins
+     when its normal is within `smoothness` (6°) of the current voxel's, the sign ignored. It carries the growth
+     on only if its curvature is below `curvature` (0.05). So the region follows surfaces that bend slowly and
+     stops at creases, edges and rough surfaces. It works on any surface (walls, kerb faces, poles), not only
+     ground.
+  4. Every point in a grown voxel is selected. The voxels are built for 1.5 × the reach (6 m) and reused for
+     threshold changes and nearby clicks. Switching the mode re-runs the last click; the click and its re-runs
+     are one undo step.
+  - On streets 1 (GPU), from the road at the magic-select site: 7.39M points of road in 2.3 s, building 1.05M
+    voxels from 47M points. It stops at the kerb face; the straight edges are the 6 m reach. A re-run with 3°
+    took 0.65 s.
+- **Clean up the selection** (Select menu, "Clean up the selection..."; the Clean up panel; `tools/cleanup.py`;
+  built 2026-10-20 at the user's request as "denoising" on its own). The case it was built for: a 3D select cut
+  low, to keep lamp posts out, leaves grass blades and slightly raised pavement unselected.
+  1. **Columns:** the selection is seen across the active height axis, in 5 cm columns. A column's surface is
+     the mean height of its selected points; a column without any takes the mean of the columns around it
+     (within 15 cm).
+  2. **Footprint:** the columns with selected points. With "fill holes", also columns with points where at
+     least 60 % of the columns around are selected.
+  3. **Added:** unselected points in the footprint from 5 cm under to 10 cm over the surface around them.
+  4. **Taken out:** selected points in columns where little around is selected (specks), and footprint
+     islands of fewer than 200 points.
+  5. **Preview and apply:** "preview" tints additions orange and removals magenta, and changing a setting
+     previews again. "Apply" makes it the selection, as one undo step.
+  - Only points visible through the clips and the slice, and not locked, are touched.
+  - On streets 1 the user's case was curve 11 as a loop, inset 5 cm, −0.10 to +0.05 m, giving 27.3M points. The
+    preview would add 739k (the grass at the island's tip, and the feet of people and poles) and take out 15
+    specks, in 3.3 s in a worker.
+- **Set operations on point sets** (2026-10-20, the user's request; replaced "merge points"): "set operations..." in
+  the Annotations panel opens a box with A, B and the result:
+  - A ∪ B (in A or B), A ∩ B (in both), A \ B (in A but not in B), B \ A, and A △ B (in one of them only).
+  - A and B are point sets, or directories standing for all the point sets inside them. They start as the first
+    two entries selected in the tree.
+  - The box shows the points in A, in B and in the result as the choice changes.
+  - "As a new point set" adds the result at the top level, named e.g. "points 4 ∪ points 5", with provenance
+    `{tool: set_operation, op, a: {name, points}, b: {name, points}}`. A and B stay as they are; undoable.
+    Merging is a union saved this way (delete A and B afterwards if they are no longer wanted).
+  - "As the selection" makes the result the selection instead (clips, slice and locks apply, as for "select
+    points").
+- **The clips everywhere** (2026-10-20): what the clip box, the 3D select clip and the slice hide is not selected.
+  This applies to shapes, grow select (both modes), magic select, 3D select, "select points" from the Annotations
+  panel and the clean-up.
+- **Inputs** take one more decimal than before in the tool panels (grow select, magic select, 3D select, split,
+  slice, clip box).
+- **Split by roughness** ("split..." in the Annotations panel, the Split panel; `tools/split.py`; built
+  2026-10-20 at the user's request as "geometric segmentation"). It splits a saved point set in two:
+  1. **Features:** the set's points are binned into 3 cm voxels. From the set's voxels within 9 cm, each gets the
+     curvature (surface variation) and the roughness (spread off the local plane, shown in mm). The set becomes
+     the selection (yellow).
+  2. **Split:** voxels above the threshold of the chosen feature are rough (tinted orange); points follow their
+     voxel. "Auto" sets Otsu's threshold (log scale, weighted by points). The panel shows the feature's 10 %,
+     half and 90 % values over the set.
+  3. **Clean-up,** so stray rough points in the middle of smooth ground (and the other way round) do not stay:
+     - **majority:** a voxel whose neighbourhood within 6 cm (by points) is at least 70 % the other group
+       changes group, for 2 rounds;
+     - **islands:** connected pieces of one group with fewer than 200 points join the other group.
+  4. **Points to look at** (tinted magenta, on by default): voxels the clean-up changed, voxels within ±25 % of
+     the threshold, and voxels with too few neighbours for a feature.
+  5. **"Split into two point sets"** replaces the set by "<name> smooth" and "<name> rough", in its place, with
+     its label. How it was split is added to their provenance. Undoable.
+  - The preview tints come from two more GPU-only bits beside the selection (flags bits 6 and 5), so every point
+    shows exactly. Priority: magenta over orange over yellow.
+  - On streets 1, a 6 m cylinder of 4.83M points (road, kerb, verge, lamp post) took 0.61 s for features and
+    preview, and each change about 0.1 s. The grass verge came out rough and the road smooth. Points to look at
+    lay along the kerb edge and on the edges of road markings.
+- **Magic select by intensity** (`I`, `tools/magic.py`). Built at the user's request (2026-10-19) for labelling
+  road markings (lane dashes, arrows, text): like the magic wand of an image editor, on intensity, with a
+  tolerance. It works on an intensity picture of the ground.
+  1. **Picture:** the ground surface comes from 10 cm cells, as in ground grow. Points within `surface_tol` (4 cm)
+     of it are binned into 2 cm pixels (`pixel`), holding mean intensity and mean height. Vehicles, canopy, kerb
+     faces and drain floors are not in it.
+  2. **Gaps:** far from the scanner the points lie on scan lines several cm apart, so a dash is a row of separate
+     pieces. Empty pixels within `max_gap` / 2 (20 cm gap) of data take the nearest pixel's values, as if the
+     points were drawn larger, so the pieces touch. Stepping over gaps along 8 directions (as ground grow does)
+     missed pieces at other angles.
+  3. **Fill**, 8-connected from the clicked pixel. A neighbour joins when:
+     - its intensity is within a **factor** `tolerance` (2: half to twice) of the clicked pixel's. A factor, not
+       a difference, because the spread of paint grows with its intensity. On streets 1, road is 0.03–0.10
+       everywhere, a near dash 0.15–0.25 (12 points per pixel), a far dash 0.13–0.55 (single points). Any fixed
+       difference wide enough for the far dash takes road near the scanner.
+     - its height differs by at most `max_step` (2 cm), so it does not climb a kerb onto kerb paint.
+  4. **Options:**
+     - `follow drift` (m, 0 = off) compares with a running geometric average along the fill instead of the
+       click, for a long line that fades with range.
+     - `contiguous` off takes every pixel within tolerance on the surface the click is on (the ground reachable
+       without a height step, e.g. the road between its kerbs), connected or not: all the dashes of a line.
+       Where that ground joins pavement without a step (driveways, under trees), bright patches there come
+       too. The clip box limits it.
+  5. **Selected:** every ground point in a selected pixel. Edge pixels mix paint and road, so the edge is precise
+     to one pixel.
+  6. **Reach:** a square of ±`radius` (15 m) around the click. The picture covers 1.5 × the reach and is reused
+     by later clicks whose square fits inside it. Cells and pixels lie on fixed lattices, so a result does not
+     depend on which picture was reused.
+  - Shift+click adds (the next dash), Ctrl+click subtracts, and a changed threshold re-runs the last click.
+  - The panel shows the clicked intensity, the accepted range and the counts. "Show where it stopped" (off by
+    default) marks the refused pixels: blue intensity, red height step, green gap.
+  - The selection keeps tool, seed and parameters for the journal.
+  - **Measured** (details in ROADMAP M2):
+    - On the synthetic street (1M points) a click on a centre dash takes all of that dash (99.4 % of the
+      selection is marking), no other marking and no non-road.
+    - With `contiguous` off it also takes the other dashes and the yellow lines (88 % marking: edge pixels).
+      Nothing comes from the pavement or grass, which are as bright.
+    - streets 1, GPU:
+      - near dash: 6,766 points on 0.22 m² in 0.70 s, including building the picture (176M ground points);
+      - far dash: 175 points on scan lines about 10 cm apart, complete, in 0.40 s;
+      - a re-run on a reused picture takes 0.06–0.15 s.
 - **Ground (GPF, Zermas 2017), adapted to TLS:**
   - Split xy into cells (the paper splits along the driving direction).
   - Per cell, seeds are the points within `Th_seeds` of the mean of the `N_LPR` lowest points.
@@ -475,6 +675,95 @@ parameters.
   (boundary tracing) and refine.
 - **Export:** local-frame JSON and DXF layers. This is the bridge to the sketch plan.
 
+**Built early (2026-10-19, at the user's request): segments, curves and annotation directories**
+(`ui/annotate.py`, `store/annotations.py`, `analysis/curves.py`).
+- **Segment** (`V`): click two points of the cloud, near or far apart (navigate between the clicks). Each click takes
+  the nearest full-resolution point, as a plain click does. The segment joins the two points in 3D.
+- **Curve** (`Shift+V`): click points in order (Backspace takes the last one back, Esc drops them), then Enter.
+  1. A plane is fitted to the points, in one of two modes (chosen for new curves in the panel, and per curve in
+     edit mode; changed 2026-10-20 at the user's request):
+     - **through the ends** (the default): the plane contains the first and the last clicked point, so the curve
+       starts and ends exactly there. Its turn about the line between them is fitted to the other points (least
+       squares of their distances). With no other points off that line, it is the plane through the ends closest
+       to perpendicular to the height axis;
+     - **perpendicular to the height axis** (z, or a fitted plane): its height is the points' mean height, the
+       least-squares fit for a fixed normal. This was the only mode before.
+     - **fit all points** (added 2026-10-20 at the user's request): the least-squares plane through all the
+       clicked points at any tilt (normal: their smallest-variance direction), through their centroid. Unlike
+       "through the ends", the ends may move a little. Points on a line get the plane through it that is
+       flattest on the height axis.
+  2. Each clicked point is replaced by its closest point on the plane (a *node*). The panel reports the plane (its
+     height, or its tilt from perpendicular to the height axis) and how far the points were from it.
+  3. The curve runs through the nodes in that plane: cubic Bézier pieces between consecutive nodes. By default
+     each node's handles point along the chord from its previous to its next node, a third of the adjacent piece
+     long, which gives a smooth curve.
+  4. **Closed loops** (2026-10-20, at the user's request): Shift+Enter finishes the curve as a loop, and so does
+     Enter with "closed loop" ticked for new curves. One more piece joins the last node back to the first, and
+     the automatic handles wrap round, so the loop is smooth at the join too. A loop needs at least three points.
+     In curve edit mode the "closed loop" box opens or closes the edited curve (undoable). Every node of a loop
+     has both handles, and a point added on the closing piece goes after the last node.
+  5. **Join** (2026-10-20, at the user's request): select two open curves and press "join curves".
+     - Choose which is first and which end of each meets the other. The closest pair of ends is offered first,
+       and both ends and the joining line are drawn before you confirm.
+     - The joined curve takes the first curve's place in the tree, its name, colour, label, plane mode and height
+       axis. Its plane is fitted again to all the clicked points: with "through the ends", through the joined
+       curve's outer ends.
+     - Manual handles are kept (swapped on a reversed curve). Ends closer than 2 cm become one node. "And close
+       the loop" also joins the outer ends.
+     - Both curves are replaced; undo brings them back.
+- **Curve edit mode** follows the curve's creation, or comes from "edit curve" or a double-click in the panel. Only
+  the nodes react to the mouse; dragging elsewhere still moves the camera.
+  - Click a node to give it a gradient: its two handles appear (yellow).
+  - Drag a handle to set the gradient there. The handle follows the mouse on the curve's plane. The other handle
+    turns to stay on the same line (the curve stays smooth) and keeps its length.
+  - **Shift+click** on the cloud adds a point. Its place in the order is where the curve passes closest: between
+    the two nodes of that piece, or before the first / after the last node when it lies beyond that end.
+  - **Ctrl+click** on a node (or Del with a node active) removes it. A curve keeps at least two.
+  - After an add or a remove the plane is fitted again. In "through the ends" mode a point added beyond an end
+    becomes the new end. Manual handles keep their shape, turned into the plane if it turned; the new node's
+    handles are automatic.
+  - "Automatic" gives the node back its automatic handles. Enter, Esc or "done" ends the mode.
+  - **"Show clicked points"** (for debugging a curve that looks unexpected) draws where each point was clicked
+    (magenta) and a thin line to its node on the curve's plane. A long line means that click was far off the
+    plane: a mis-click on another surface, or a plane mode that does not suit the points.
+- **Annotations panel** (next to Height axis): a tree of **directories** and **items** (segments, curves, point
+  sets).
+  - New items stand alone at the top level, each with its own colour. `Ctrl+G` makes the current selection a point
+    set, e.g. a magic-selected marking. The point set keeps every selection operation since the last plain replace
+    (tool, seed, parameters, result), so the thresholds that made it are on record.
+  - "New directory" makes one at the top level, or inside the selected directory.
+  - Drag items or directories onto a directory to put them in it. Dropping beside an item puts them in that item's
+    directory; dropping on empty space brings them back to the top level.
+  - **Colour:** everything inside a directory is drawn in the directory's colour, so separate items can share one.
+    A directory made inside another takes its parent's colour until given its own ("colour"). An item back at the
+    top level shows its own colour again.
+  - F2 renames anything; double-click renames, or edits a curve.
+  - "Select points" makes the point sets among the selected items (and inside selected directories) the
+    selection. "Delete" asks first; a directory goes with everything in it.
+  - Selected items draw thicker.
+- **Labels** (the user's decision, 2026-10-20: labelling is done by labelling annotations, see ARCHITECTURE D-007).
+  - A directory or an item can have a label: a taxonomy class picked from the list, or any text (e.g.
+    "lane line").
+  - An item without a label of its own takes the label of the nearest enclosing directory that has one. The tree
+    shows it in grey, with where it comes from.
+  - Set it with the label box and "set label" (empty removes it), or by editing the label column (F2,
+    double-click).
+  - **"Export labels"** writes everything grouped by label instead of by directory (`pclabel.annotation-labels/1`).
+    For each label it gives its taxonomy class id (if it is a class), its items (each with its directory path and
+    where the label comes from), counts by type, and the number of distinct points. Unlabelled items are listed
+    separately, and the points shared by two labels are counted.
+- **Saved** with the project after every change (`annotations.json`, point sets in `annotations/`).
+- **Export / import:** one JSON file (`pclabel.annotations/1`, ARCHITECTURE "annotations"): "export all" or
+  "export selected".
+  - Coordinates are in the scan frame, with the offset applied. Curves carry their plane, nodes, handle positions,
+    which nodes are manual, the clicked points and a polyline about 2 cm apart. Point sets are source indices.
+  - Importing adds the file's tree at the top level as copies. Point sets from another scan (by sha256 and point
+    count) are left out with a warning; their geometry is kept.
+  - The earlier groups format (`pclabel.groups/1`) is not read any more (the user did not need it). streets 1's
+    groups were converted once: a single-member group became that item, the two-point-set group a directory.
+- Not yet: snapping, attributes (type, confidence, observed or inferred), DXF, undo. Annotations are not labels, so
+  they do not go through the label journal.
+
 ## 14. beyond labelling (speculative, low priority)
 
 - **Measurement report:** the selected measurements with method, point counts and uncertainty.
@@ -490,7 +779,15 @@ parameters.
 | `0` | erase to unassessed |
 | `L` / `P` / `R` / `B` | lasso / polygon / rectangle / brush |
 | `T` / `Shift+T` | top view (looking down) / bottom view (looking up); again: back (built) |
-| `G` | ground grow tool: click the ground (built early, from §11) |
+| `G` | grow select: click a surface; height and intensity, or geometric (normals) (built early, from §11) |
+| `I` | magic select by intensity: click a road marking (built early, from §11) |
+| `O` | lasso / rectangle: select hidden points too (*through*), or only visible ones (built) |
+| `U` | 3D select: a box or cylinder along the height axis, or a closed curve extruded; W A S D Q E move it, Z X turn it, `-` `=` pull a loop in / push it out, Enter / Shift+Enter / Ctrl+Enter select / add / subtract (built) |
+| `Shift+Enter` | finish a curve as a closed loop (built) |
+| `V` / `Shift+V` | line segment (click two points) / curve (click points, Enter: edit its gradients) (built early, §13) |
+| `Ctrl+G` | make the selection a point set (an annotation item; built early, §13) |
+| `Enter` / `Backspace` | finish the curve, or leave curve edit mode / take back the last clicked point (built) |
+| curve edit: click / Shift+click / Ctrl+click, `Del` | activate a node / add a cloud point / remove a node, remove the active node (built) |
 | `C` / `Shift+C` | next / previous colour mode |
 | `W` | height wrap on/off; `[` `]` period; `Shift+[` `Shift+]` offset |
 | `D` | diverging mode |
@@ -501,7 +798,7 @@ parameters.
 | `M` | measure |
 | `A` | toggle the ambiguous flag on the selection |
 | `S` | split view / swipe |
-| `Ctrl+Z` / `Ctrl+Y` | undo / redo |
+| `Ctrl+Z` / `Ctrl+Y` (or `Ctrl+Shift+Z`) | undo / redo (built for the selection, planes and annotations; labels with M3's journal) |
 | `Esc` | cancel the selection / tool (M1: clear the pick marker) |
 | `F7` / `F8` | front / side orthographic view (M1) |
 | `Home` | reset the view: perspective, default direction, framing the 1st–99th percentile box (M1) |
@@ -510,7 +807,7 @@ parameters.
 | `K` / `Shift+K` | clip box on/off / clip box from the view (M1) |
 | `Ctrl+E` | eye-dome lighting on/off (M1) |
 | `Ctrl+O` / `Ctrl+I` | open project / import scan (M1) |
-| right mouse + `W A S D Q E` | fly (M1; while the right button is held these keys move instead of their usual action) |
+| right drag / right mouse + `W A S D Q E` | rotate, as left drag / fly: once a key is pressed the mouse looks until the button goes up (while the right button is held these keys move instead of their usual action) |
 
 Built in M1: `T`, `C` / `Shift+C`, `W`, `[` `]`, `Shift+[` `Shift+]` and the rows marked M1.
 

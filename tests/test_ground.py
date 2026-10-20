@@ -95,3 +95,63 @@ def test_seed_without_ground_data(scene):
     with pytest.raises(ValueError):
         ground_grow(scene["xyz"], scene["inten"], scene["tiles"], scene["seed"] + (0, 0, 0), P,
                     clip=(scene["seed"] + 100, scene["seed"] + 101))  # fmt: skip
+
+
+def patch(parts, max_points=10_000_000):
+    """Store-ordered arrays from [(xyz (n, 3), intensity 0..1 (n,)), ...]."""
+    xyz = np.vstack([p[0] for p in parts]).astype(np.float32)
+    inten = (np.concatenate([p[1] for p in parts]) * 65535).astype(np.uint16)
+    tiles, order = build_tiles(xyz, TilingParams(max_points=max_points))
+    return np.ascontiguousarray(xyz[order]), inten[order], tiles
+
+
+def flat(rng, x0, x1, y0, y1, density, z=0.0, inten=0.05):
+    n = int((x1 - x0) * (y1 - y0) * density)
+    q = np.c_[rng.uniform(x0, x1, n), rng.uniform(y0, y1, n), np.full(n, z) + rng.normal(0, 0.001, n)]
+    i = np.full(n, inten) if np.isscalar(inten) else inten(q)
+    return q, np.clip(i + rng.normal(0, 0.003, n), 0, 1)
+
+
+def test_dense_tile_does_not_starve_its_sparse_part():
+    """Regression: sampling per tile left the sparse road inside a dense tile with too few points per cell."""
+    rng = np.random.default_rng(0)
+    road = flat(rng, 0, 20, 0, 2, 1000)
+    blob = flat(rng, 0, 0.7, 0, 0.7, 10_000_000)  # 5M points in half a square metre (next to the scanner)
+    xyz, inten, tiles = patch([road, blob])
+    assert len(tiles) == 1  # one tile holds both
+    r = ground_grow(xyz, inten, tiles, np.array([15.0, 1.0, 0.0]), GroundGrowParams(radius=22))
+    assert r.info["area_m2"] > 0.95 * 20 * 2
+
+
+def test_intensity_is_compared_with_the_local_road_not_the_seed():
+    """Road intensity drifts 0.05 -> 0.15 over 30 m (range falloff); a walkway beside it at the same height is
+    0.06 brighter than the road next to it. Local: the whole road and no walkway. Seed-fixed: a straight cut."""
+    rng = np.random.default_rng(1)
+    drift = lambda q: 0.05 + 0.10 * q[:, 0] / 30  # noqa: E731
+    road = flat(rng, 0, 30, 0, 3, 2000, inten=drift)
+    walk = flat(rng, 0, 30, 3, 5, 2000, inten=lambda q: drift(q) + 0.06)
+    xyz, inten, tiles = patch([road, walk], max_points=200_000)
+    seed = np.array([2.0, 1.5, 0.0])
+    sel_road = lambda r: (xyz[r.indices, 1] < 3).sum() / (xyz[:, 1] < 3).sum()  # noqa: E731
+    local = ground_grow(xyz, inten, tiles, seed, GroundGrowParams(radius=32))
+    assert sel_road(local) > 0.95 and (xyz[local.indices, 1] > 3.05).sum() == 0
+    fixed = ground_grow(xyz, inten, tiles, seed, GroundGrowParams(radius=32, intensity_memory=1e9))
+    assert sel_road(fixed) < 0.6  # stops where the road has drifted 0.04 from the seed: a line across the road
+    assert fixed.info["stopped_by"]["intensity vs local road"] >= 25  # a cut the width of the road (3 m / 10 cm)
+    assert local.info["stopped_by"]["intensity vs local road"] < 5
+
+
+def test_gaps_are_crossed_but_not_up_a_kerb():
+    rng = np.random.default_rng(2)
+    # a flat road with a 0.6 m no-point strip across it (a pole's shadow)
+    a = flat(rng, 0, 10, 0, 3, 2000)
+    b = flat(rng, 10.6, 20, 0, 3, 2000)
+    xyz, inten, tiles = patch([a, b])
+    r = ground_grow(xyz, inten, tiles, np.array([5.0, 1.5, 0.0]), GroundGrowParams(radius=25))
+    assert (xyz[r.indices, 0] > 10.6).sum() > 0.95 * len(b[0])
+    # a 15 cm kerb top behind a 0.6 m no-point strip (the strip behind a kerb that faces away)
+    c = flat(rng, 0, 10, 0, 3, 2000)
+    d = flat(rng, 10.6, 20, 0, 3, 2000, z=0.15)
+    xyz, inten, tiles = patch([c, d])
+    r = ground_grow(xyz, inten, tiles, np.array([5.0, 1.5, 0.0]), GroundGrowParams(radius=25))
+    assert (xyz[r.indices, 0] > 10.6).sum() == 0 and r.info["stopped_by"]["height step"] > 0

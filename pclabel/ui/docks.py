@@ -1,4 +1,4 @@
-"""Dock panels for M1: display, clip box, point info, scan metadata."""
+"""Dock panels: display, clip box, point info, scan metadata, height axis, seed tools."""
 
 from __future__ import annotations
 
@@ -25,6 +25,9 @@ from PySide6.QtWidgets import (
 )
 
 from pclabel.render.shaders import MODE_NAMES
+
+
+EXTRA_DECIMALS = 1  # tool panels take one more decimal than they show by default (finer thresholds, 2026-10-20)
 
 
 def _spin(lo, hi, value, step, decimals=3, suffix=""):
@@ -157,13 +160,20 @@ class ClipDock(QDockWidget):
         v = QVBoxLayout(w)
         self.on = QCheckBox("clip to the box (K)")
         v.addWidget(self.on)
+        self.volume_on = QCheckBox("clip to the 3D select volume")
+        self.volume_on.setToolTip("set with \"clip to this\" (K) in 3D select: a box, cylinder or loop")
+        self.volume_on.setEnabled(False)
+        self.volume_label = QLabel("no volume yet: use \"clip to this\" in 3D select (U)")
+        self.volume_label.setWordWrap(True)
+        v.addWidget(self.volume_on)
+        v.addWidget(self.volume_label)
         g = QGridLayout()
         g.addWidget(QLabel("min"), 0, 1)
         g.addWidget(QLabel("max"), 0, 2)
         self.lo, self.hi = [], []
         for i, a in enumerate("xyz"):
             g.addWidget(QLabel(a), i + 1, 0)
-            lo, hi = _spin(-1e7, 1e7, 0.0, 0.1, 3, " m"), _spin(-1e7, 1e7, 0.0, 0.1, 3, " m")
+            lo, hi = _spin(-1e7, 1e7, 0.0, 0.1, 4, " m"), _spin(-1e7, 1e7, 0.0, 0.1, 4, " m")
             g.addWidget(lo, i + 1, 1)
             g.addWidget(hi, i + 1, 2)
             self.lo.append(lo)
@@ -180,6 +190,7 @@ class ClipDock(QDockWidget):
         v.addStretch(1)
         self.setWidget(w)
         self.on.toggled.connect(self.changed)
+        self.volume_on.toggled.connect(self.changed)
         b1.clicked.connect(self.from_view)
         b2.clicked.connect(self.fit_scene)
 
@@ -191,6 +202,7 @@ class ClipDock(QDockWidget):
         self.changed.emit()
 
     def apply(self, d):
+        d.clip_volume_on = self.volume_on.isChecked() and d.clip_volume is not None
         d.clip_on = self.on.isChecked()
         d.clip_min = tuple(s.value() for s in self.lo)
         d.clip_max = tuple(s.value() for s in self.hi)
@@ -323,8 +335,10 @@ class FrameDock(QDockWidget):
     frame_chosen = Signal(int)
     fit_requested = Signal()
     delete_requested = Signal()
+    export_requested = Signal()
     clear_requested = Signal()
     tool_requested = Signal(object)  # "lasso" | "rect"
+    depth_mode_chosen = Signal(str)  # "visible" | "through"
 
     def __init__(self, parent=None):
         super().__init__("Height axis and selection", parent)
@@ -338,6 +352,13 @@ class FrameDock(QDockWidget):
         for b in (self.lasso, self.rect, self.clear):
             row.addWidget(b)
         f.addRow("select", row)
+        self.depth_mode = QComboBox()
+        self.depth_mode.addItem("visible: only what you see", "visible")
+        self.depth_mode.addItem("through: hidden points too", "through")
+        self.depth_mode.setToolTip("visible: points hidden behind others are left out (the drawn surface decides); "
+                                   "through: every point inside the shape, at any depth (O switches)")  # fmt: skip
+        self.depth_mode.activated.connect(lambda _: self.depth_mode_chosen.emit(self.depth_mode.currentData()))
+        f.addRow("lasso / rect", self.depth_mode)
         self.sel_label = QLabel("nothing selected. Shift adds, Ctrl subtracts.")
         self.sel_label.setWordWrap(True)
         f.addRow("", self.sel_label)
@@ -347,9 +368,12 @@ class FrameDock(QDockWidget):
         self.fit.setToolTip("robust plane through the selected points; its normal becomes the height axis")
         self.delete = QPushButton("delete plane")
         self.delete.setToolTip("remove the plane shown above from the project")
+        self.export = QPushButton("export plane...")
+        self.export.setToolTip("save the plane shown above (its equation and fit) as JSON")
         prow = QHBoxLayout()
         prow.addWidget(self.fit)
         prow.addWidget(self.delete)
+        prow.addWidget(self.export)
         f.addRow("", prow)
         self.report = QLabel("")
         self.report.setWordWrap(True)
@@ -357,7 +381,7 @@ class FrameDock(QDockWidget):
         f.addRow("", self.report)
         srow = QHBoxLayout()
         self.slice_on = QCheckBox("only")
-        self.slice_a, self.slice_b = _spin(-1e4, 1e4, -10.0, 1.0, 1, " cm"), _spin(-1e4, 1e4, 30.0, 1.0, 1, " cm")
+        self.slice_a, self.slice_b = _spin(-1e4, 1e4, -10.0, 1.0, 2, " cm"), _spin(-1e4, 1e4, 30.0, 1.0, 2, " cm")
         for x in (self.slice_on, self.slice_a, QLabel("to"), self.slice_b):
             srow.addWidget(x)
         f.addRow("slice (Shift+H)", srow)
@@ -367,6 +391,7 @@ class FrameDock(QDockWidget):
         self.clear.clicked.connect(self.clear_requested)
         self.fit.clicked.connect(self.fit_requested)
         self.delete.clicked.connect(self.delete_requested)
+        self.export.clicked.connect(self.export_requested)
         self.frame.activated.connect(self.frame_chosen)
         self.slice_on.toggled.connect(self.slice_changed)
         self.slice_a.valueChanged.connect(self.slice_changed)
@@ -401,51 +426,50 @@ def fmt_frame_report(frame) -> str:
             f"smallest useful wrap period about {r['suggested_min_period_m'] * 100:.1f} cm (4 x RMS)")  # fmt: skip
 
 
-class GrowDock(QDockWidget):
-    """Ground grow (G): its thresholds, changed live, and what the last grow found."""
+class SeedToolDock(QDockWidget):
+    """A seed tool's panel: its thresholds (changed live), a legend of where it stopped, and what the last run
+    found. Subclasses set the fields."""
 
     params_changed = Signal()
+    TITLE = OBJECT = HINT = LEGEND = ""
+    FIELDS = ()  # name, label, unit factor (shown / stored), lo, hi, step, decimals, suffix, tooltip
+    CHECKS = ()  # name, label, tooltip (boolean parameters)
+    SHOW_STOPS = True
 
-    FIELDS = (  # name, label, unit factor (shown / stored), lo, hi, step, decimals, suffix, tooltip
-        ("max_step", "height step", 100, 0.1, 50, 0.5, 1, " cm",
-         "largest height change between neighbouring cells: kerbs are bigger, road roughness smaller"),
-        ("intensity_step", "intensity step", 1, 0.0, 1.0, 0.005, 3, "",
-         "largest intensity change between neighbouring cells (intensity 0..1, as in Point info)"),
-        ("intensity_range", "intensity range", 1, 0.0, 1.0, 0.01, 3, "",
-         "largest difference from the seed's intensity; 1 switches it off"),
-        ("marking_width", "marking width", 100, 0, 300, 5, 0, " cm",
-         "strips of other intensity up to this wide (road markings) are bridged; wider areas (walkways) stop the grow"),
-        ("max_gap", "gap", 100, 0, 300, 5, 0, " cm", "empty cells (no points) the grow may step over"),
-        ("max_roughness", "roughness", 100, 0.1, 50, 0.5, 1, " cm",
-         "cells rougher than this (kerb faces, vegetation, objects) are not ground"),
-        ("surface_tol", "surface tolerance", 100, 0.5, 50, 0.5, 1, " cm",
-         "points this close to their cell's surface are selected; drains below and objects above are not"),
-        ("cell", "cell size", 100, 2, 100, 1, 0, " cm", "the grid the grow runs on"),
-        ("radius", "reach", 1, 2, 300, 5, 0, " m", "how far from the seed the grow may go"),
-    )  # fmt: skip
-
-    def __init__(self, parent=None):
-        super().__init__("Ground grow", parent)
-        self.setObjectName("grow")
-        from pclabel.tools.ground import GroundGrowParams
-
-        self._defaults = GroundGrowParams()
+    def __init__(self, defaults, parent=None):
+        super().__init__(self.TITLE, parent)
+        self.setObjectName(self.OBJECT)
+        self._defaults = defaults
         w = QWidget()
         f = QFormLayout(w)
-        hint = QLabel("With the grow tool (G), click the ground: it grows over connected surface that is smooth in "
-                      "height and similar in intensity. Shift+click adds, Ctrl+click subtracts.")  # fmt: skip
+        self.form = f
+        hint = QLabel(self.HINT)
         hint.setWordWrap(True)
         f.addRow(hint)
         self.spins = {}
         for name, label, k, lo, hi, step, dec, suffix, tip in self.FIELDS:
-            sp = _spin(lo, hi, getattr(self._defaults, name) * k, step, dec, suffix)
+            sp = _spin(lo, hi, getattr(defaults, name) * k, step, dec + EXTRA_DECIMALS, suffix)
             sp.setToolTip(tip)
             sp.valueChanged.connect(self.params_changed)
             f.addRow(label, sp)
             self.spins[name] = (sp, k)
+        self.checks = {}
+        for name, label, tip in self.CHECKS:
+            cb = QCheckBox(label)
+            cb.setChecked(bool(getattr(defaults, name)))
+            cb.setToolTip(tip)
+            cb.toggled.connect(lambda _: self.params_changed.emit())
+            f.addRow("", cb)
+            self.checks[name] = cb
         reset = QPushButton("defaults")
         reset.clicked.connect(self.reset)
         f.addRow("", reset)
+        self.show_stops = QCheckBox("show where it stopped")
+        self.show_stops.setChecked(self.SHOW_STOPS)
+        self.show_stops.setToolTip("coloured points where the tool refused to go on, by the first test that failed")
+        f.addRow("", self.show_stops)
+        self.legend = QLabel(self.LEGEND)
+        f.addRow("", self.legend)
         self.result = QLabel("")
         self.result.setWordWrap(True)
         self.result.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -455,11 +479,157 @@ class GrowDock(QDockWidget):
     def params(self):
         from dataclasses import replace
 
-        return replace(self._defaults, **{n: sp.value() / k for n, (sp, k) in self.spins.items()})
+        values = {n: sp.value() / k for n, (sp, k) in self.spins.items()}
+        values.update({n: cb.isChecked() for n, cb in self.checks.items()})
+        return replace(self._defaults, **values)
 
     def reset(self):
         for n, (sp, k) in self.spins.items():
             sp.blockSignals(True)
             sp.setValue(getattr(self._defaults, n) * k)
             sp.blockSignals(False)
+        for n, cb in self.checks.items():
+            cb.blockSignals(True)
+            cb.setChecked(bool(getattr(self._defaults, n)))
+            cb.blockSignals(False)
         self.params_changed.emit()
+
+
+def _legend(*items) -> str:
+    """HTML: a coloured square and a name per (hex colour, name), three per line."""
+    parts = [f'<span style="color:{c}">&#9632;</span> {name}' for c, name in items]
+    return "<br>".join(" &nbsp; ".join(parts[i : i + 3]) for i in range(0, len(parts), 3))
+
+
+class GrowDock(SeedToolDock):
+    """Grow select (G), in two modes: height and intensity (``tools.ground``, cells) or geometric (``tools.normals``,
+    surface normals). Each mode shows its own thresholds."""
+
+    TITLE, OBJECT = "Grow select", "grow"
+    HINT = ("With grow select (G), click a surface: it grows over what is connected to it. Height and intensity: "
+            "ground smooth in height and similar in intensity. Geometric: surfaces whose normals turn slowly "
+            "(walls, kerb faces, poles too). Shift+click adds, Ctrl+click subtracts; a changed threshold or mode "
+            "re-runs the last click.")  # fmt: skip
+    NORMAL_FIELDS = (
+        ("smoothness", "smoothness", 1, 0.1, 90, 0.5, 1, "°",
+         "largest angle between the normals of neighbouring voxels (PCL's smoothness threshold)"),
+        ("curvature", "curvature", 1, 0.0, 0.34, 0.005, 3, "",
+         "voxels at most this curved carry the growth on (0 on a plane, 1/3 for scatter; PCL's curvature threshold)"),
+        ("voxel", "voxel", 100, 1, 20, 0.5, 1, " cm", "the grid the normals are computed on"),
+        ("normal_radius", "normal radius", 100, 2, 100, 1, 0, " cm", "voxels within this give a voxel's normal"),
+        ("connect", "neighbours within", 100, 1, 50, 0.5, 1, " cm",
+         "voxels this close are neighbours for the growth (1.5 voxels: touching ones)"),
+        ("radius", "reach", 1, 1, 60, 1, 0, " m", "half-size of the cube around the click the growth may cover"),
+    )  # fmt: skip
+    LEGEND = _legend(("#ff3030", "height step"), ("#ff30ff", "roughness"), ("#20e0e0", "intensity step"),
+                     ("#4070ff", "intensity vs road"), ("#30e030", "gap too wide"))  # fmt: skip
+    FIELDS = (
+        ("max_step", "height step", 100, 0.1, 50, 0.5, 1, " cm",
+         "largest height change between neighbouring cells: kerbs are bigger, road roughness smaller"),
+        ("intensity_step", "intensity step", 1, 0.0, 1.0, 0.005, 3, "",
+         "largest intensity change between neighbouring cells (intensity 0..1, as in Point info)"),
+        ("intensity_range", "intensity vs road", 1, 0.0, 1.0, 0.01, 3, "",
+         "largest difference from the local road intensity (a running average along the grow); 1 switches it off"),
+        ("intensity_memory", "road memory", 1, 0.1, 1000, 0.5, 1, " m",
+         "how much grown road the running average remembers: short follows slow changes, long stays near the seed"),
+        ("marking_width", "marking width", 100, 0, 300, 5, 0, " cm",
+         "strips of other intensity up to this wide (road markings) are bridged; wider areas (walkways) stop the grow"),
+        ("max_gap", "gap", 100, 0, 500, 10, 0, " cm",
+         "empty cells (no points: far scan lines, pole shadows) the grow may step over"),
+        ("max_slope", "slope across gaps", 100, 0, 50, 1, 0, " %",
+         "extra height allowed per metre across a gap (road grade and crossfall); kerbs are steeper"),
+        ("max_roughness", "roughness", 100, 0.1, 50, 0.5, 1, " cm",
+         "cells rougher than this (kerb faces, vegetation, objects) are not ground"),
+        ("surface_tol", "surface tolerance", 100, 0.5, 50, 0.5, 1, " cm",
+         "points this close to their cell's surface are selected; drains below and objects above are not"),
+        ("cell", "cell size", 100, 2, 100, 1, 0, " cm", "the grid the grow runs on"),
+        ("radius", "reach", 1, 2, 300, 5, 0, " m", "how far from the seed the grow may go"),
+    )  # fmt: skip
+
+    def __init__(self, parent=None):
+        from pclabel.tools.ground import GroundGrowParams
+        from pclabel.tools.normals import NormalGrowParams
+
+        super().__init__(GroundGrowParams(), parent)
+        self._normal_defaults = NormalGrowParams()
+        self.mode = QComboBox()
+        self.mode.addItem("height and intensity", "height")
+        self.mode.addItem("geometric: surface normals", "normals")
+        self.mode.setToolTip("height and intensity: ground (cells, kerbs and walkways stop it); geometric: any "
+                             "surface, by its normals (PCL's region growing)")  # fmt: skip
+        self.form.insertRow(1, "mode", self.mode)
+        self.normal_spins = {}
+        row = 2 + len(self.FIELDS)
+        for k, (name, label, f, lo, hi, step, dec, suffix, tip) in enumerate(self.NORMAL_FIELDS):
+            sp = _spin(lo, hi, getattr(self._normal_defaults, name) * f, step, dec + EXTRA_DECIMALS, suffix)
+            sp.setToolTip(tip)
+            sp.valueChanged.connect(self.params_changed)
+            self.form.insertRow(row + k, label, sp)
+            self.normal_spins[name] = (sp, f)
+        self.mode.currentIndexChanged.connect(self._mode_changed)
+        self._mode_changed(emit=False)
+
+    def current_mode(self) -> str:
+        return self.mode.currentData()
+
+    def _mode_changed(self, _=None, emit: bool = True):
+        geometric = self.current_mode() == "normals"
+        for sp, _ in self.spins.values():
+            self.form.setRowVisible(sp, not geometric)
+        for sp, _ in self.normal_spins.values():
+            self.form.setRowVisible(sp, geometric)
+        self.form.setRowVisible(self.show_stops, not geometric)
+        self.form.setRowVisible(self.legend, not geometric)
+        if emit:
+            self.params_changed.emit()
+
+    def params(self):
+        from dataclasses import replace
+
+        if self.current_mode() == "normals":
+            return replace(self._normal_defaults, **{n: sp.value() / k for n, (sp, k) in self.normal_spins.items()})
+        return super().params()
+
+    def reset(self):
+        for n, (sp, k) in self.normal_spins.items():
+            sp.blockSignals(True)
+            sp.setValue(getattr(self._normal_defaults, n) * k)
+            sp.blockSignals(False)
+        super().reset()
+
+
+class MagicDock(SeedToolDock):
+    """Magic select by intensity (I)."""
+
+    TITLE, OBJECT = "Magic select", "magic"
+    HINT = ("With magic select (I), click a road marking: it selects the connected ground of similar intensity, "
+            "like the magic wand of an image editor, on a 2 cm intensity picture of the ground. Shift+click adds "
+            "(the next dash), Ctrl+click subtracts.")  # fmt: skip
+    LEGEND = _legend(("#4070ff", "intensity"), ("#ff3030", "height step"), ("#30e030", "gap too wide"))
+    SHOW_STOPS = False  # the outline of every marking: only on request
+    FIELDS = (
+        ("tolerance", "tolerance", 1, 1.0, 100.0, 0.1, 2, " x",
+         "a factor: intensities from the clicked one / tolerance to the clicked one x tolerance join (2: from half "
+         "to twice). The spread of paint grows with its intensity, so a factor separates paint from road"),
+        ("memory", "follow drift", 1, 0.0, 1000, 0.5, 1, " m",
+         "0: compare with the clicked pixel, as an image editor does. More: compare with a running average over "
+         "about this much of the fill, to follow a long line whose intensity fades with range"),
+        ("max_gap", "gap", 100, 0, 200, 2, 0, " cm",
+         "empty strips up to this wide are bridged: far from the scanner the points lie on scan lines several cm "
+         "apart. Lower it if two markings close together merge"),
+        ("max_step", "height step", 100, 0.1, 50, 0.5, 1, " cm",
+         "largest height change between neighbouring pixels: keeps the fill off kerbs"),
+        ("pixel", "pixel size", 100, 0.5, 10, 0.5, 1, " cm",
+         "the intensity picture's resolution: selection edges are this precise; smaller needs denser points"),
+        ("surface_tol", "surface tolerance", 100, 0.5, 50, 0.5, 1, " cm",
+         "only points this close to the ground surface are in the picture (and can be selected)"),
+        ("radius", "reach", 1, 1, 60, 1, 0, " m", "the fill stays within this distance of the click (a square)"),
+    )  # fmt: skip
+    CHECKS = (("contiguous", "contiguous",
+               "off: every pixel of similar intensity on the surface clicked (reachable without a height step, e.g. "
+               "the road between its kerbs), connected or not: all the dashes of a line, and anything as bright"),)  # fmt: skip
+
+    def __init__(self, parent=None):
+        from pclabel.tools.magic import MagicSelectParams
+
+        super().__init__(MagicSelectParams(), parent)

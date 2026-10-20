@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from pclabel.analysis.frames import Z_FRAME, HeightFrame, PlaneFitParams, fit_plane, frame_from_points
+from pclabel.analysis.frames import Z_FRAME, HeightFrame, PlaneFitParams, fit_plane, frame_from_points, plane_document
 from pclabel.synth import StreetParams, make_street
 
 
@@ -78,3 +78,17 @@ def test_warns_when_the_fit_is_not_ground(tilted_street, taxonomy):
     canopy = scan.xyz[scan.cls == taxonomy.class_id("tree_canopy")].astype(np.float64)
     leaves = frame_from_points(canopy, "leaves")
     assert "does not look like ground" in leaves.report["warning"]
+
+
+def test_plane_document_gives_the_equation():
+    rng = np.random.default_rng(3)
+    xy = rng.uniform(-10, 10, (500, 2))
+    pts = np.c_[xy, 0.01 * xy[:, 0] - 0.025 * xy[:, 1] + 1.5]
+    f = frame_from_points(pts, "plane 15")
+    doc = plane_document(f, (6.0, -20.0, 22.0), {"file": "s.e57"})
+    e = doc["equation"]
+    q = np.array([[3.0, -2.0, 4.0], [0.0, 0.0, 0.0]])
+    assert np.allclose(q @ [e["a"], e["b"], e["c"]] + e["d"], f.heights(q - (6.0, -20.0, 22.0), (6.0, -20.0, 22.0)))
+    z = doc["z_of_xy"]
+    assert np.allclose(z["p"] * xy[:, 0] + z["q"] * xy[:, 1] + z["r"], pts[:, 2], atol=1e-9)
+    assert doc["schema"] == "pclabel.plane/1" and doc["name"] == "plane 15" and doc["fit"]["points_kept"] == 500

@@ -258,6 +258,158 @@ Results (in progress):
     grown, 824 bridged as markings) in 1.4 s. It stops at both kerbs and includes the dashed lane lines;
   - a re-grow after changing the intensity step to 0.01 took 0.35 s on the cached cells (6.80M points);
   - before gap-stepping, 10 cm cells stalled on far road where scan lines are more than 10 cm apart.
+- **2026-10-19, third round (user report: speckled selection, straight cut lines across the road):**
+  - **Causes found:**
+    - The cell grid sampled per tile. Dense tiles near the scanner were read at a few percent, leaving the
+      sparse road inside them with too few points per cell: holes, and cut lines along the straight tile edges
+      (diagonal across a diagonal road).
+    - The highlight drew a random 1M of the selected points, which looked speckled.
+    - The seed-relative intensity check could cut the road where intensity drifts with range.
+    - The z axis was not a cause: neighbouring cells 10 cm apart differ by about 3 mm on a 3 % grade, against a
+      2 cm step.
+  - **Fixed:**
+    - points are capped per cell (48);
+    - selection is a GPU-side bit (exact tint);
+    - intensity is compared with a running average of the grown road (2 m memory);
+    - gaps up to 1 m are crossed with an 8 % slope allowance, so kerbs behind no-point strips still stop it;
+    - the panel counts what stopped the grow and the view marks those cells by colour.
+  - 94 tests pass (new: dense tile with a sparse part; drifting road beside a brighter walkway; pole shadow vs
+    kerb behind a gap; exact tint; pages packed after the selection).
+- **streets 1, south kerb site, same seed, GPU:**
+  - 6.98M points on 309 m² (283 m² before the per-cell cap), 2.4 s for the first grow (grid 2.1 s, reading
+    every nearby point).
+  - Stopped by: height 3,355 cells, intensity step 504, gap 479, roughness 84, intensity vs road 21.
+  - The kerb shows as a continuous red line of height stops. A shadow wedge beside the seed that had been
+    sampled away is now included.
+  - A re-grow with intensity step 0.01 took 0.36 s (6.82M points).
+- **2026-10-19, fourth round (user request: an intensity magic select for road markings):**
+  - **Built:** magic select (`I`, SPEC §11).
+  - **Why a factor:** on streets 1 the intensity of paint spreads with its level. Over 2 cm pixels of the ground
+    layer:
+    - road is 0.03–0.10 everywhere;
+    - a near dash is 0.15–0.25 (12 points per pixel);
+    - a far dash is 0.13–0.55 (1–2 points per pixel);
+    - the left dash is 0.10–0.75 (5 points per pixel).
+
+    A fixed ±0.10 around the click took 17 pixels of the far dash. ×2 takes all of it and no road.
+  - **Scan-line gaps:** stepping over empty pixels along 8 directions joined only 73 pixels of the far dash, whose
+    pieces lie at other angles. A nearest-data fill up to half the gap joins all of them.
+  - **Speed:** the cell grid and the picture now read tiles in parallel (32 threads, merged in tile order, so
+    results are unchanged).
+    - A 45 m picture of 183M points builds in 0.36 s (was 2.5 s).
+    - The ground grow's first click at the south kerb site takes 0.56 s (was 2.4 s), with the same 6,976,938
+      points.
+  - 103 tests pass (new: a dash and only it; not contiguous takes the other markings on the road only; the
+    tolerance factor; a reused picture gives the same result; scan-line gaps; a fading line; kerb paint not
+    climbed; the app's click and Shift+click).
+- **streets 1, magic select, GPU** (south kerb site; the app; defaults: ×2, gap 20 cm, 2 cm pixels, reach 15 m):
+  - near dash (world 22.85, −11.09): 6,766 points on 0.22 m² (561 pixels; about 2.0 × 0.11 m) in 0.70 s,
+    including building the picture from 176M ground points. Accepted intensity 0.10–0.40.
+  - Shift+click a far dash (world 32.41, −29.03), about 10 cm between scan lines: 175 points on 0.20 m², the
+    whole dash, in 0.40 s.
+  - `contiguous` off from that dash: 52,894 points on 16.9 m² in 0.15 s (picture reused). It takes the centre
+    dashes and the edge line pieces, and also bright patches under the trees beyond the kerb, which join the road
+    without a height step.
+  - A block of bright bars about 20 m away (between trees): one click took its two brightest bars, merged where
+    the 20 cm gap fill bridged the sparse strip between them. The dimmer bars stayed out (×2 of 0.48 starts at
+    0.24).
+  - On the 300k-point UI test scan, a dash 9 m from the scanner has 50 points up to 25 cm apart. There the fill
+    breaks it into pieces whatever the gap: such data needs a click per piece.
+- **2026-10-19, fifth round (user request):** segments, curves with editable gradients, and groups of segments,
+  curves and point sets, with export and import (SPEC §13, built early from M9).
+  - 112 tests pass in 21 s. New tests:
+    - the plane perpendicular to a tilted axis, at the mean height;
+    - the curve through its nodes, straight for collinear nodes;
+    - a dragged handle sets the gradient;
+    - group editing; the project copy; export and import (also into another scan); source-to-store mapping;
+    - in the app: segment, curve, a real mouse click on a node and a drag of its handle, Ctrl+G, merge, select
+      points, export and import, Esc.
+  - A UI test waited for two frames after switching the slice on, but the first frame is already converged and
+    the view rightly stops there. It now waits for one (30 s faster).
+- **streets 1, groups, GPU** (the app; at the magic-select site):
+  - The near dash was magic-selected and grouped with Ctrl+G (6,766 points, with its magic-select record).
+  - A 3.00 m segment across the lane.
+  - A 5-point curve beside the dash. The active axis was a fitted plane ("plane 14"); the clicked points were up
+    to 3.2 cm from the fitted curve plane. A drag of node 3's handle bent the curve, now 10.86 m long.
+  - Merged into one group; it draws in one colour, thicker when selected.
+  - Export: 250 kB in 0.01 s. Importing it back took 0.55 s and gave the same 6,766 store indices.
+  - The test groups were removed from the project afterwards.
+- **2026-10-19, sixth round (user requests):**
+  - **Curves:** points can be added (Shift+click; placed where the curve passes closest) and removed (Ctrl+click,
+    Del). The plane height is refitted after each.
+  - **Directories:** groups became directories of items. Items stand alone; a directory colours everything in it.
+    Schema `pclabel.annotations/1`, with no reading of the old groups format (the user did not need it).
+  - **Plane export** (`pclabel.plane/1`).
+  - 115 tests pass in 21 s. New tests: insert and remove order; the directory tree (colours, moves, no cycles);
+    the project copy with nested directories; export of selected entries; the plane equation; and in the app,
+    Shift+click and Ctrl+click on a curve, Ctrl+G, directories, plane export.
+- **streets 1:**
+  - The user's groups were converted once to `annotations.json`, with no loss:
+    - segment 1 (165 m) and curve 5 (9 points) became items;
+    - "points 2" became a directory of its two point sets, 17,150,184 and 21,527,293 points, identical to the
+      originals.
+
+    `groups.json` and `groups/` were left in place (the app no longer reads them).
+  - Plane 15 exported for the user to `PCLabel_projects/streets 1 plane 15.json`:
+    `0.009425881 x + 0.030288819 y + 0.999496743 z + 1.219019800 = 0`. The fit was on 1.89M of 38.7M selected
+    points, RMS 13.5 mm, tilt 1.82°, grade 0.56 %, crossfall −3.12 %.
+- **2026-10-19, later (user requests):**
+  - A bug fix: dragging into directories and deleting failed once an item followed another of its kind
+    (dataclass equality compared numpy arrays). Nodes now compare by identity, with a regression test.
+  - Right drag rotates like left drag; fly needs a W A S D Q E key while the right button is held.
+  - Undo and redo (`Ctrl+Z`, `Ctrl+Y`) for the selection, planes and annotations (SPEC §4).
+  - 121 tests pass in 22 s.
+- **2026-10-20 (user requests):**
+  - Labelling by labels on annotation directories and items, and "export labels" grouped by label (D-007).
+  - A second curve plane mode, now the default: through the start and end points, turned to fit the rest.
+  - 124 tests pass in 25 s. New tests:
+    - a tilted plane recovered through exact ends (3 mm noise);
+    - the two-point case;
+    - a new end added;
+    - switching modes, also through undo in the app;
+    - inherited labels and the by-label export with overlaps.
+  - Later the same day:
+    - 3D select (`U`): a box or cylinder along the height axis, moved with W A S D Q E, selected with Enter;
+    - locks on labels;
+    - `other` as "no class", never selected (taxonomy `selectable: false`, version 0.2).
+
+    Then lasso and rectangle's second depth mode, *through* (`O`).
+    - streets 1, GPU, a rectangle over the middle third of the overview: *visible* took 16.5M points in 1.2 s;
+      *through* took 443.6M points (70 % of the scan) in 4.5 s.
+    - At that size numpy's union1d / setdiff1d / setxor1d (they sort again) would hold the UI for tens of
+      seconds. Selections now combine with one linear merge (`tools/sets.py`), and the renderer finds the tiles a
+      change touches by tile, not by point. The UI thread is now held 1.2 s for that selection, 1.7 s to add a
+      second one, and an undo takes 0.6 s.
+    - 135 tests pass in 25 s.
+    - Then closed loops (Shift+Enter, or the box in edit mode) and extrude select (3D select's "loop" shape, with
+      an exact inset), which the user wants for taking pavement inside a kerb loop. On streets 1, a 10 m loop with
+      a 20 cm inset took 31.7M points in 0.49 s. 144 tests pass in 25 s.
+    - Then joining two curves at chosen ends (SPEC §13 step 5). 150 tests pass in 26 s.
+    - Then a third curve plane mode, "fit all points", and "show clicked points" in curve edit mode. 152 tests
+      pass in 28 s.
+    - "Select points" on the user's 38.7M-point directory took 24 s, all of it numpy's unique over the
+      concatenated sets. They are sorted already, so they are now merged (`sets.union_all`): 0.54 s.
+    - Ground grow became Grow select, with a second, geometric mode (normals, after PCL's region growing): 7.39M
+      road points in 2.3 s on streets 1, stopping at the kerb face. 156 tests pass in 29 s.
+    - Split by roughness (SPEC §11): features, a threshold (Otsu's on request), a clean-up, and points to look at
+      in magenta; then two point sets. A 4.83M-point area of streets 1 took 0.61 s. 159 tests pass in 32 s.
+    - Clipping to any 3D select volume (box, cylinder, loop) on the GPU, with "clip live", and more vertical lines
+      round the volume. A 4 m cylinder clip on streets 1: about 28 ms GPU per frame. 161 tests pass in 36 s.
+    - Clean up the selection (footprint: points just over or under the selected surface, specks out). On the user's
+      island case it would add 739k points and take out 15, in 3.3 s.
+    - Also merging point sets, the clips respected by every selecting tool, and one more decimal in the panels.
+      165 tests pass in 38 s. A loop's centre had counted the closed
+      ring's repeated point twice (1 cm off on a 2 m circle); fixed, and tested.
+    - Locks can be switched off as a whole (the choice kept), and `other` unlocked like any label. Set operations on
+      point sets (∪, ∩, A \ B, B \ A, △; directories count as all their point sets) replace "merge points"; the
+      result is a new point set or the selection. 166 tests pass.
+
+    On streets 1 (GPU) at the magic-select site:
+    - a 1 m cylinder took 107,891 points in 0.16 s;
+    - a 6 × 3 m box turned 30° took 645,293 points in 0.05 s.
+  - streets 1's current annotations (6 curves, 3 directories, 2 point sets) load unchanged. The older curves
+    read as "perpendicular to the height axis", as drawn. Curve 12's clicked points lie up to 23 cm off its
+    horizontal plane: a candidate for the new mode.
 - **Not built yet:** the remaining M2 items (rotating the view into the frame, reference surface and `hs`, local
   relief, multi-period wrap, contours, diverging, noise-guided period, split view, observation pins and
   bookmarks).
@@ -358,6 +510,10 @@ Results:
 ## M9: vector features (later)
 
 SPEC §13 (curb toe/lip polylines, pole points, local JSON + DXF).
+
+Built early (2026-10-19, see M2 results): segments; curves with gradients on a plane perpendicular to the height
+axis, with points added and removed in edit mode; point sets; a tree of directories; their JSON export and import.
+Still to do: snapping, attributes, DXF, candidates from point labels.
 
 ## M10: speculative extras
 

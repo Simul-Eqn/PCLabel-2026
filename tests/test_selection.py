@@ -148,3 +148,16 @@ def test_depth_dilation_closes_gaps_between_drawn_points():
     is_back = order[tight] < 200_000
     assert (order[leaky] < 200_000).sum() > 100  # without dilation, back points show through the gaps
     assert is_back.sum() == 0 and len(tight) > 1000
+
+
+def test_sorted_set_operations_match_numpy():
+    from pclabel.tools import sets
+
+    rng = np.random.default_rng(7)
+    for na, nb in ((0, 5), (5, 0), (1000, 800), (50_000, 70_000)):
+        a = np.unique(rng.integers(0, 3 * max(na, 1), na))
+        b = np.unique(rng.integers(0, 3 * max(nb, 1), nb))
+        assert np.array_equal(sets.union(a, b), np.union1d(a, b))
+        assert np.array_equal(sets.difference(a, b), np.setdiff1d(a, b))
+        assert np.array_equal(sets.xor(a, b), np.setxor1d(a, b))
+        assert np.array_equal(sets.intersection(a, b), np.intersect1d(a, b))

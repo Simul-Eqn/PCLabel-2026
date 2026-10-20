@@ -256,10 +256,27 @@ def test_selection_overlay_is_drawn(gl, target, taxonomy):
     r = make(gl, src, taxonomy)
     r.display.mode = MODE_FLAT
     left = src.xyz[:, 0] < 0
-    r.set_selection(src.xyz[left])
+    r.render(bev(), (W, H), target, wait=True)  # pages are resident before the selection: rewritten in place
+    r.set_selection(np.flatnonzero(left))
     r.render(bev(), (W, H), target, wait=True)
     img, _ = centre(target)
     lc, rc = img[:, 10:40].reshape(-1, 3).mean(0), img[:, W - 40 : W - 10].reshape(-1, 3).mean(0)
-    assert lc[2] < rc[2] - 40  # highlight is yellow: less blue than the flat grey on the unselected side
+    assert lc[2] < rc[2] - 40  # tinted yellow: less blue than the flat grey on the unselected side
+    # every drawn selected point is tinted, none of the others (no subsampled overlay)
+    assert (img[:, 10:40, 2] < 120).mean() > 0.95 and (img[:, W - 40 : W - 10, 2] > 150).mean() > 0.95
     r.set_selection(None)
+    r.render(bev(), (W, H), target, wait=True)
+    img, _ = centre(target)
+    assert abs(img[:, 10:40].reshape(-1, 3).mean(0)[2] - rc[2]) < 5  # cleared
+    r.close()
+
+
+def test_pages_packed_later_carry_the_selection(gl, target, taxonomy):
+    src = grid_source(lambda x: np.full_like(x, 11.0))
+    r = make(gl, src, taxonomy)
+    r.display.mode = MODE_FLAT
+    r.set_selection(np.flatnonzero(src.xyz[:, 0] < 0))  # before any page exists
+    r.render(bev(), (W, H), target, wait=True)
+    img, _ = centre(target)
+    assert (img[:, 10:40, 2] < 120).mean() > 0.95 and (img[:, W - 40 : W - 10, 2] > 150).mean() > 0.95
     r.close()

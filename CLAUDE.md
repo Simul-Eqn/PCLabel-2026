@@ -4,7 +4,9 @@ PCLabel is a desktop app for labelling very large outdoor terrestrial laser scan
 Singapore street scenes point by point, with classes such as road, curb, pavement, drain, grass, tree and lamp post.
 
 **Status:** M0 (stack spike) and M1 (import and view) are done; all five scans are imported. M2 is in progress
-(selection, ground grow, plane height axis, slice built). See the results blocks in [docs/ROADMAP.md](docs/ROADMAP.md).
+(selection, ground grow, magic select by intensity, plane height axis and its export, slice, and SPEC §13's
+segments, curves and annotation directories built). Labelling is done by labelling annotation directories and
+items (D-007, the user's decision of 2026-10-20). See the results blocks in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 **Commands** (conda env `pclabel`; set up as described at the top of `requirements.txt`):
 - `python -m pclabel ["streets 1"] [--gl software]` opens the app (optionally a project by name or path).

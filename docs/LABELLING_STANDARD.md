@@ -56,7 +56,7 @@ How this file works:
 | 41, 42, 44 | fence_railing, roof_shelter, street_furniture | proposed | structures and furniture | — |
 | 50–53 | vehicle, person, temporary_object, ghost | proposed | temporary and moving things | R-013 |
 | 60 | noise | proposed | points on no real surface | R-014 |
-| 61 | other | core | assessed, fits no class | — |
+| 61 | other | core | assessed, fits no class ("no class": its points are never selected, taxonomy `selectable: false`, user 2026-10-20) | — |
 
 Flags: `ambiguous`, `marking` (R-006), `under_cover`, `exclude`, `reviewed`.
 

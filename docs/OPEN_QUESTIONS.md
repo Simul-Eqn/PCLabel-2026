@@ -91,7 +91,7 @@ cosmetic.
   - Spacing between inlets along a kerb.
 - **Where:** along every labelled kerb; the diverging ±5 cm view shows them.
 - **Ready when:** each type seen 2 or more times, or noted as absent from the scans.
-- **Evidence:** O-0002
+- **Evidence:** O-0002, O-0010
 
 ### Q-06 How far below the road is "clearly below"? · R-003 · medium
 - **Decide:** the `hs` threshold that separates drains from ordinary unevenness, or that no single threshold
@@ -102,7 +102,7 @@ cosmetic.
   - Depths of drain inlets.
   - Depths of non-drain dips: potholes, ruts, ponding hollows, manholes.
 - **Ready when:** 10 or more drain depths and 5 or more non-drain dip depths measured.
-- **Evidence:** —
+- **Evidence:** O-0010 (depth seen may depend on range)
 
 ### Q-07 Does the curb continue across a drain inlet? · R-003 · medium
 - **Decide:**

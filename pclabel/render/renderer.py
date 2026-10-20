@@ -8,8 +8,14 @@ first) to stay within the memory budget. Pages are requested coarse-first: page 
 page 1, and so on, larger on-screen tiles first.
 
 Drawing. Points render into an offscreen colour + depth target; a full-screen pass applies eye-dome lighting
-and writes to the target framebuffer; overlays (selection, clip box, pick and pivot markers, the shape being drawn)
-go on top.
+and writes to the target framebuffer; overlays (clip box, pick and pivot markers, coloured marker points, the shape
+being drawn) go on top.
+
+Selection and highlights. The selected store indices are a GPU-side bit (SELECTED_BIT) in each page's flags byte, so
+exactly the drawn points that are selected are tinted. Two more bits mark a preview group (GROUP_BIT, orange) and
+points to look at (UNSURE_BIT, magenta), e.g. while splitting a point set. Changing any of them rewrites the label
+buffers of the resident pages of the affected tiles only; pages packed under older marks are corrected before
+upload.
 """
 
 from __future__ import annotations
@@ -26,6 +32,7 @@ import numpy as np
 from pclabel.render.camera import ORTHO, OrbitCamera
 from pclabel.render.colormaps import cyclic_oklab, sequential_oklab
 from pclabel.render.lod import LodParams, lod_counts
+from pclabel.tools import sets
 from pclabel.render.shaders import (
     EDL_FS,
     FULLSCREEN_VS,
@@ -34,8 +41,13 @@ from pclabel.render.shaders import (
     MODE_RGB,
     POINT_FS,
     POINT_VS,
-    SEL_FS,
-    SEL_VS,
+    MARK_FS,
+    MARK_VS,
+    VLINE_FS,
+    VLINE_GS,
+    VLINE_VS,
+    VPOINT_FS,
+    VPOINT_VS,
 )
 
 PAGE_FIRST = 1 << 14
@@ -57,6 +69,10 @@ def page_range(j: int) -> tuple[int, int]:
 
 GEOM_STRIDE = 20  # f32 x3, rgba u8 x4, u16 intensity, u16 pad
 LABEL_STRIDE = 2  # u8 label, u8 flags
+SELECTED_BIT = 128  # flags bit 7 on the GPU only (taxonomy flags use bits 0-4): the point is selected
+GROUP_BIT = 64  # bit 6: in a preview group (orange)
+UNSURE_BIT = 32  # bit 5: worth a look (magenta), e.g. possibly misclassified
+HIGHLIGHT_BITS = (SELECTED_BIT, GROUP_BIT, UNSURE_BIT)
 BYTES_PER_POINT = GEOM_STRIDE + LABEL_STRIDE
 
 
@@ -108,6 +124,8 @@ class Display:
     clip_on: bool = False
     clip_min: tuple = (-1e9, -1e9, -1e9)
     clip_max: tuple = (1e9, 1e9, 1e9)
+    clip_volume: object = None  # tools.volume.VolumeSpec in local coordinates (from 3D select): show only inside
+    clip_volume_on: bool = False
 
 
 @dataclass
@@ -143,7 +161,24 @@ def _pack_geometry(xyz, rgb, inten, a, b, f32, u32, has_rgb, has_int):
         u32[i, 4] = np.uint32(inten[j]) if has_int else np.uint32(0)
 
 
-def pack_page(src: PointSource, a: int, b: int) -> tuple[np.ndarray, np.ndarray]:
+def label_bytes(src: PointSource, a: int, b: int, marks) -> np.ndarray:
+    """(m, 2) uint8: label and flags of store points a..b, with the highlight bits set. ``marks`` is {bit: sorted
+    store indices}, or just the selected indices."""
+    lab = np.zeros((b - a, 2), np.uint8)
+    if src.labels is not None:
+        lab[:, 0] = src.labels[a:b]
+    if src.flags is not None:
+        lab[:, 1] = src.flags[a:b]
+    if not isinstance(marks, dict):
+        marks = {SELECTED_BIT: marks}
+    for bit, idx in marks.items():
+        if idx is not None and idx.size:
+            i0, i1 = np.searchsorted(idx, [a, b])
+            lab[idx[i0:i1] - a, 1] |= bit
+    return lab
+
+
+def pack_page(src: PointSource, a: int, b: int, marks=None) -> tuple[np.ndarray, np.ndarray]:
     """Vertex bytes for store points a..b: geometry (m, 5) uint32 and labels (m, 2) uint8."""
     m = b - a
     geom = np.empty((m, 5), np.uint32)
@@ -151,19 +186,14 @@ def pack_page(src: PointSource, a: int, b: int) -> tuple[np.ndarray, np.ndarray]
     rgb = np.asarray(src.rgb) if has_rgb else np.zeros((1, 3), np.uint8)
     inten = np.asarray(src.intensity) if has_int else np.zeros(1, np.uint16)
     _pack_geometry(np.asarray(src.xyz), rgb, inten, a, b, geom.view(np.float32), geom, has_rgb, has_int)
-    lab = np.zeros((m, 2), np.uint8)
-    if src.labels is not None:
-        lab[:, 0] = src.labels[a:b]
-    if src.flags is not None:
-        lab[:, 1] = src.flags[a:b]
-    return geom, lab
+    return geom, label_bytes(src, a, b, marks)
 
 
 class _Page:
-    __slots__ = ("geom", "lab", "vao", "n")
+    __slots__ = ("geom", "lab", "vao", "n", "a")
 
-    def __init__(self, geom, lab, vao, n):
-        self.geom, self.lab, self.vao, self.n = geom, lab, vao, n
+    def __init__(self, geom, lab, vao, n, a):
+        self.geom, self.lab, self.vao, self.n, self.a = geom, lab, vao, n, a  # a: first store index
 
     def release(self):
         self.vao.release()
@@ -206,9 +236,19 @@ class PointRenderer:
         self.prog = ctx.program(vertex_shader=POINT_VS, fragment_shader=POINT_FS)
         self.edl = ctx.program(vertex_shader=FULLSCREEN_VS, fragment_shader=EDL_FS)
         self.line = ctx.program(vertex_shader=LINE_VS, fragment_shader=LINE_FS)
-        self.sel_prog = ctx.program(vertex_shader=SEL_VS, fragment_shader=SEL_FS)
-        self._sel = None  # (buffer, vao, n) of the selection overlay
-        self.selection_color = (1.0, 0.85, 0.1, 0.55)
+        self.mark_prog = ctx.program(vertex_shader=MARK_VS, fragment_shader=MARK_FS)
+        self._marks = None  # (buffer, vao, n): coloured marker points (e.g. where a grow stopped)
+        self.vline_prog = ctx.program(vertex_shader=VLINE_VS, geometry_shader=VLINE_GS, fragment_shader=VLINE_FS)
+        self.vpoint_prog = ctx.program(vertex_shader=VPOINT_VS, fragment_shader=VPOINT_FS)
+        self._vectors: dict = {}  # layer -> ((buffer, vao, n) lines or None, (...) points or None), drawn on top
+        self._vol_tex = None  # the clip volume's loop mask, and the volume it is for
+        self._vol_tex_for = None
+        self._no_mask = ctx.texture((1, 1), 1, b"\x00", dtype="f1")
+        self.marks = {bit: np.empty(0, np.int64) for bit in HIGHLIGHT_BITS}  # bit -> sorted store indices
+        self._sel_snapshot = (dict(self.marks), 0)  # (marks, version), read by the packer thread
+        self.selection_tint = (1.0, 0.85, 0.1, 0.65)
+        self.group_tint = (1.0, 0.42, 0.05, 0.8)
+        self.unsure_tint = (1.0, 0.1, 0.85, 0.9)
         self.fsq = ctx.vertex_array(self.edl, [])
         self.tex_cyclic = self._tex1d(cyclic_oklab(256), repeat=True)
         self.tex_ramp = self._tex1d(sequential_oklab(256), repeat=False)
@@ -227,6 +267,7 @@ class PointRenderer:
         self.marker = None  # world point to mark (pick)
         self.pivot = None  # world point the camera orbits around, shown while rotating
         self.screen_shape = None  # (n, 2) NDC polyline of the shape being drawn (lasso, rectangle)
+        self.screen_shape_color = (1.0, 1.0, 1.0, 1.0)
 
     # ---- resources ----------------------------------------------------------------------------------------
 
@@ -268,9 +309,14 @@ class PointRenderer:
         if self._target is not None:
             for obj in self._target[1:]:
                 obj.release()
-        self.set_selection(None)
-        for obj in (self.prog, self.edl, self.line, self.sel_prog, self.fsq, self.tex_cyclic, self.tex_ramp,
-                    self.tex_classes):  # fmt: skip
+        self.set_markers(None)
+        for layer in list(self._vectors):
+            self.set_vectors(None, None, layer)
+        for tex in (self._vol_tex, self._no_mask):
+            if tex is not None:
+                tex.release()
+        for obj in (self.prog, self.edl, self.line, self.mark_prog, self.vline_prog, self.vpoint_prog, self.fsq,
+                    self.tex_cyclic, self.tex_ramp, self.tex_classes):  # fmt: skip
             obj.release()
         self._queries = []  # moderngl queries have no release(); freed with the context
 
@@ -285,20 +331,24 @@ class PointRenderer:
             lo, hi = page_range(j)
             a = int(self.t_start[t] + lo)
             b = int(self.t_start[t] + min(hi, self.t_count[t]))
+            marks, version = self._sel_snapshot
             try:
-                geom, lab = pack_page(self.src, a, b)
-                self._q_out.put((t, j, geom, lab))
+                geom, lab = pack_page(self.src, a, b, marks)
+                self._q_out.put((t, j, geom, (lab, version, a)))
             except Exception as e:  # surface in the render thread
                 self._q_out.put((t, j, e, None))
 
-    def _upload(self, t, j, geom, lab):
+    def _upload(self, t, j, geom, packed):
+        lab, version, a = packed
+        if version != self._sel_snapshot[1]:  # packed under older marks
+            lab = label_bytes(self.src, a, a + len(geom), self.marks)
         vg = self.ctx.buffer(geom)
         vl = self.ctx.buffer(lab)
         vao = self.ctx.vertex_array(
             self.prog,
-            [(vg, "3f 4f1 u2 x2", "in_pos", "in_rgb", "in_int"), (vl, "u1 x1", "in_label")],
+            [(vg, "3f 4f1 u2 x2", "in_pos", "in_rgb", "in_int"), (vl, "u1 u1", "in_label", "in_flags")],
         )
-        self.pages[t].append(_Page(vg, vl, vao, len(geom)))
+        self.pages[t].append(_Page(vg, vl, vao, len(geom), a))
         self.resident_bytes += len(geom) * BYTES_PER_POINT
 
     def _evict_one(self, want_pages, protect_tile) -> bool:
@@ -416,9 +466,12 @@ class PointRenderer:
             "u_h_normal": tuple(float(v) for v in d.height_normal),
             "u_h_origin": tuple(float(v) for v in np.asarray(d.height_origin, np.float64) - off),
             "u_band_on": int(d.band_on), "u_band": tuple(float(v) for v in d.band),
+            "u_sel_tint": tuple(self.selection_tint), "u_group_tint": tuple(self.group_tint),
+            "u_unsure_tint": tuple(self.unsure_tint),
             "u_hrange": tuple(float(v) for v in d.height_range), "u_flat": tuple(d.flat_color),
             "u_period": float(d.period), "u_h0": float(d.h0),
             "u_cyclic": 0, "u_ramp": 1, "u_classes": 2,
+            **self._volume_uniforms(d),
             "u_clip_on": int(d.clip_on),
             "u_clip_min": tuple(float(v) for v in np.asarray(d.clip_min) - off),
             "u_clip_max": tuple(float(v) for v in np.asarray(d.clip_max) - off),
@@ -428,6 +481,8 @@ class PointRenderer:
         self.tex_cyclic.use(0)
         self.tex_ramp.use(1)
         self.tex_classes.use(2)
+        vm = d.clip_volume.mask if d.clip_volume is not None else None
+        (self._vol_tex if self._vol_tex is not None and vm is not None and self._vol_tex_for is vm else self._no_mask).use(3)
         q = self._queries[self._qi]
         drawn = 0
         with q:
@@ -476,6 +531,24 @@ class PointRenderer:
             converged=bool(np.all(have >= want_pages)), memory_full=self.memory_full,
         )  # fmt: skip
 
+    def _volume_uniforms(self, d) -> dict:
+        """The clip volume's uniforms (and its mask texture for a loop)."""
+        v = d.clip_volume if d.clip_volume_on else None
+        kind = 0 if v is None else {"box": 1, "cylinder": 2, "loop": 3}[v.kind]
+        if kind == 3 and self._vol_tex_for is not v.mask:  # moving a loop keeps its mask: no upload
+            if self._vol_tex is not None:
+                self._vol_tex.release()
+            m = np.ascontiguousarray(v.mask, np.uint8) * 255
+            self._vol_tex = self.ctx.texture((m.shape[1], m.shape[0]), 1, m.tobytes(), dtype="f1", alignment=1)
+            self._vol_tex.filter = (moderngl.NEAREST, moderngl.NEAREST)
+            self._vol_tex_for = v.mask
+        f3 = lambda a: tuple(float(x) for x in a)  # noqa: E731
+        if v is None:
+            return {"u_vol_on": 0, "u_vol_mask": 3}
+        return {"u_vol_on": kind, "u_vol_origin": f3(v.origin), "u_vol_n": f3(v.n), "u_vol_u": f3(v.u),
+                "u_vol_v": f3(v.v), "u_vol_h": (float(v.bottom), float(v.top)),
+                "u_vol_half": (float(v.half[0]), float(v.half[1])), "u_vol_grid": f3(v.grid), "u_vol_mask": 3}  # fmt: skip
+
     def _uniforms(self, prog, values):
         found = {}
         for name, v in values.items():
@@ -489,28 +562,107 @@ class PointRenderer:
                 found[name] = prog[name]
         return found
 
-    def set_selection(self, xyz_local: np.ndarray | None):
-        """Points to highlight (local coordinates; a subsample of a large selection is enough), or None."""
-        if self._sel is not None:
-            self._sel[1].release()
-            self._sel[0].release()
-            self._sel = None
+    @property
+    def selection(self) -> np.ndarray:
+        return self.marks[SELECTED_BIT]
+
+    def set_selection(self, indices: np.ndarray | None):
+        """Tint these store indices (sorted) as selected."""
+        self.set_marks(SELECTED_BIT, indices)
+
+    def set_marks(self, bit: int, indices: np.ndarray | None):
+        """Set one highlight bit on these store indices (sorted). Rewrites the label buffers of resident pages of
+        the affected tiles only."""
+        new = np.empty(0, np.int64) if indices is None else np.asarray(indices, np.int64)
+        changed = sets.xor(self.marks[bit], new)  # one linear merge: these can hold hundreds of millions of points
+        self.marks = {**self.marks, bit: new}
+        self._sel_snapshot = (dict(self.marks), self._sel_snapshot[1] + 1)
+        if changed.size == 0:
+            return
+        first = np.searchsorted(changed, self.t_start)  # tiles are consecutive store ranges
+        tiles = np.flatnonzero(np.r_[first[1:], changed.size] > first)
+        for t in tiles:
+            for pg in self.pages[t]:
+                pg.lab.write(label_bytes(self.src, pg.a, pg.a + pg.n, self.marks))
+
+    def set_markers(self, xyz_local: np.ndarray | None, rgb: np.ndarray | None = None):
+        """Coloured points drawn on top of everything (local coordinates, uint8 colours), or None."""
+        if self._marks is not None:
+            self._marks[1].release()
+            self._marks[0].release()
+            self._marks = None
         if xyz_local is not None and len(xyz_local):
-            buf = self.ctx.buffer(np.ascontiguousarray(xyz_local, np.float32))
-            self._sel = (buf, self.ctx.vertex_array(self.sel_prog, [(buf, "3f", "in_pos")]), len(xyz_local))
+            data = np.zeros(len(xyz_local), [("p", "<f4", 3), ("c", "u1", 4)])
+            data["p"] = xyz_local
+            data["c"][:, :3] = rgb
+            data["c"][:, 3] = 255
+            buf = self.ctx.buffer(data.tobytes())
+            vao = self.ctx.vertex_array(self.mark_prog, [(buf, "3f 4f1", "in_pos", "in_color")])
+            self._marks = (buf, vao, len(xyz_local))
+
+    @property
+    def _vlines(self):
+        """The annotation layer's lines (tests look at it)."""
+        return self._vectors.get("annotations", (None, None))[0]
+
+    def set_vectors(self, lines, points, layer: str = "annotations"):
+        """Vector drawings on top of everything, in named layers (each call replaces one layer; None clears it).
+        - ``lines``: [(polyline (n, 3) local, rgba floats 0..1, width in pixels), ...]
+        - ``points``: [(xyz (n, 3) local, rgba floats 0..1, size in pixels), ...]"""
+        for v in self._vectors.pop(layer, ()):
+            if v is not None:
+                v[1].release()
+                v[0].release()
+        vlines = vpoints = None
+        segs = [(np.asarray(p, np.float32), c, w) for p, c, w in (lines or []) if len(p) >= 2]
+        if segs:
+            n = sum(2 * (len(p) - 1) for p, _, _ in segs)
+            data = np.zeros(n, [("p", "<f4", 3), ("c", "<f4", 4), ("w", "<f4")])
+            k = 0
+            for p, c, w in segs:
+                m = 2 * (len(p) - 1)
+                data["p"][k : k + m : 2] = p[:-1]
+                data["p"][k + 1 : k + m : 2] = p[1:]
+                data["c"][k : k + m] = c
+                data["w"][k : k + m] = w
+                k += m
+            buf = self.ctx.buffer(data.tobytes())
+            vao = self.ctx.vertex_array(self.vline_prog, [(buf, "3f 4f 1f", "in_pos", "in_color", "in_width")])
+            vlines = (buf, vao, n)
+        pts = [(np.asarray(p, np.float32).reshape(-1, 3), c, s) for p, c, s in (points or []) if len(p)]
+        if pts:
+            n = sum(len(p) for p, _, _ in pts)
+            data = np.zeros(n, [("p", "<f4", 3), ("c", "<f4", 4), ("s", "<f4")])
+            k = 0
+            for p, c, s in pts:
+                data["p"][k : k + len(p)] = p
+                data["c"][k : k + len(p)] = c
+                data["s"][k : k + len(p)] = s
+                k += len(p)
+            buf = self.ctx.buffer(data.tobytes())
+            vao = self.ctx.vertex_array(self.vpoint_prog, [(buf, "3f 4f 1f", "in_pos", "in_color", "in_size")])
+            vpoints = (buf, vao, n)
+        if vlines is not None or vpoints is not None:
+            self._vectors[layer] = (vlines, vpoints)
 
     def _draw_overlays(self, mvp):
         lines = []
         d = self.display
         off = np.asarray(self.src.offset, np.float64)
-        if self._sel is not None:
-            self.ctx.enable(moderngl.BLEND)
-            self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
-            self.sel_prog["u_mvp"].write(np.ascontiguousarray(mvp.T, np.float32).tobytes())
-            self.sel_prog["u_size"].value = float(max(d.point_size + 1.0, 3.0))  # sparse selections stay visible
-            self.sel_prog["u_color"].value = self.selection_color
-            self._sel[1].render(moderngl.POINTS, vertices=self._sel[2])
-            self.ctx.disable(moderngl.BLEND)
+        if self._marks is not None:
+            self.ctx.enable(moderngl.PROGRAM_POINT_SIZE)
+            self.mark_prog["u_mvp"].write(np.ascontiguousarray(mvp.T, np.float32).tobytes())
+            self.mark_prog["u_size"].value = 5.0
+            self._marks[1].render(moderngl.POINTS, vertices=self._marks[2])
+        for vlines, vpoints in self._vectors.values():
+            if vlines is not None:
+                self.vline_prog["u_mvp"].write(np.ascontiguousarray(mvp.T, np.float32).tobytes())
+                self.vline_prog["u_viewport"].value = tuple(float(v) for v in self._target[0])
+                vlines[1].render(moderngl.LINES, vertices=vlines[2])
+            if vpoints is not None:
+                self.ctx.enable(moderngl.PROGRAM_POINT_SIZE)
+                self.vpoint_prog["u_mvp"].write(np.ascontiguousarray(mvp.T, np.float32).tobytes())
+                vpoints[1].render(moderngl.POINTS, vertices=vpoints[2])
         if d.clip_on:
             lo = np.maximum(np.asarray(d.clip_min) - off, self.scene_lo - 1)
             hi = np.minimum(np.asarray(d.clip_max) - off, self.scene_hi + 1)
@@ -530,7 +682,7 @@ class PointRenderer:
             self._lines(mvp, m, (0.2, 0.9, 1.0, 1.0))
         if self.screen_shape is not None and len(self.screen_shape) >= 2:
             pts = np.c_[np.asarray(self.screen_shape, np.float32), np.zeros(len(self.screen_shape), np.float32)]
-            self._lines(np.eye(4), pts, (1.0, 1.0, 1.0, 1.0), moderngl.LINE_LOOP)
+            self._lines(np.eye(4), pts, self.screen_shape_color, moderngl.LINE_LOOP)
 
     def _lines(self, mvp, pts, rgba, mode=moderngl.LINES):
         buf = self.ctx.buffer(np.asarray(pts, np.float32).tobytes())

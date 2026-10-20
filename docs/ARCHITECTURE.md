@@ -110,6 +110,8 @@ compare with the expected source indices.
   journal/ops.jsonl       one line per operation (below)
   journal/data/<op>.npz   indices and previous values per operation
   frames.json             height frames, schema pclabel.frames/1 (below)
+  annotations.json        segments, curves and point sets in directories, schema pclabel.annotations/1 (below)
+  annotations/<id>.npy    a point set's store indices (int64, sorted)
   surfaces/<name>.npz     reference / relief surfaces (grid origin, cell, heights, mask, parameters)
   regions.json            assessed regions (polygon, z range, per-class status) and patrol records
   observations/observations.jsonl   observations/img/*.png
@@ -147,6 +149,43 @@ relative to the offset), `size` f8 (quadtree node edge, m), `start count` u8 (st
   the fit does not look like ground.
 
 Frames never change stored coordinates (D-006). Algorithms can read this file to use the same "height above road".
+
+**`annotations.json` and exported annotations, schema `pclabel.annotations/1`** (written atomically; it replaced
+`pclabel.groups/1`, which is no longer read):
+- **Header:** `{schema, coordinates, source: {file, sha256, n_valid}, offset, counter, locks, unlocked, locks_on,
+  tree: [...]}`. `locks` lists the labels whose points cannot be selected. Classes with `selectable: false` in the
+  taxonomy are locked as well, except those listed in `unlocked`. `locks_on: false` switches all of them off
+  (missing: true).
+- **Coordinates:** every coordinate is in the scan frame (world = stored + offset), metres, float64.
+- **Tree:** a list of nodes in display order, each `{id, type, name, color, label, ...}`. `label` is a taxonomy
+  class name or any text; empty means "the enclosing directory's".
+  - `directory`: `children` (nodes). `color` may be null: the parent's colour.
+  - Items draw in the colour of the nearest enclosing directory that has one, else in their own `color`.
+- **Items** by `type`:
+  - `segment`: `a`, `b`, `length_m`, `picked_source_indices` (the two clicked points; −1 if unknown).
+  - `curve`:
+    - `plane`: `{mode, normal, point, tilt_deg, height_axis: {name, normal, origin}, height (mode "axis" only)}`.
+      The plane is `dot(p − point, normal) = 0`. Its mode is `ends` (through the first and last clicked points,
+      turned to fit the others), `axis` (perpendicular to the height axis at the points' mean height) or `fit`
+      (the least-squares plane through all the clicked points). A curve
+      document without `mode` (drawn before modes existed) is read as `axis`.
+    - `nodes`; `handles_in` and `handles_out` (positions, not offsets); `manual` (per node: handles set by the
+      labeller); `closed` (a loop: one more piece from the last node back to the first); `picked` (the clicked
+      points before projection); `picked_source_indices`; `length_m`.
+    - `polyline`: points about 2 cm apart along the curve. Piece k is the cubic Bézier `nodes[k]`,
+      `handles_out[k]`, `handles_in[k+1]`, `nodes[k+1]`.
+  - `points`: `count`, `provenance` (the selection operations), and either `file` (the project's copy: store
+    indices in `annotations/<id>.npy`) or `source_indices` (an export: sorted source indices, the export order).
+- **Labels export, schema `pclabel.annotation-labels/1`:** `{schema, coordinates, source, offset, labels: [...],
+  unlabelled, overlaps}`.
+  - Each label is `{label, class_id (null if not a taxonomy class), counts {segment, curve, points}, points
+    (distinct), items}`.
+  - Items are as in the tree, plus `path` (enclosing directory names) and `label_from` (the name of the node that
+    carries the label).
+  - Labels are ordered taxonomy classes first (by id), then other labels by name.
+  - `overlaps` lists `{labels: [a, b], points}` for labels whose point sets share points.
+- **Import:** source indices are mapped back to store indices with one parallel pass over `source_index`
+  (0.55 s on streets 1). Point sets are only imported into a project of the same source (`sha256` and `n_valid`).
 
 ## rendering and LOD
 
@@ -231,10 +270,48 @@ As built in M1 (`pclabel/render/`). `renderer.py` uses moderngl only and runs in
     tile.
   - Clip box and height slice are applied to the hits (numpy).
   - Output: sorted int64 store indices.
-  - It runs in a worker thread. The app keeps the selection as an index array; the renderer draws up to 1M of the
-    selected points as a highlight overlay. Labelling it goes through the journal (M3).
+  - It runs in a worker thread. The app keeps the selection as a sorted index array.
+  - The renderer marks selected points with bit 7 of the flags byte in the GPU label buffers only (the taxonomy
+    uses bits 0–4). The point shader tints them. Bits 6 and 5, also GPU-only, mark a preview group (orange) and
+    points to look at (magenta). The split tool uses them; the tint priority is bit 5, then 6, then 7.
+  - A selection change rewrites the label buffers of the resident pages of affected tiles. Pages packed under an
+    older selection are corrected before upload. Labelling goes through the journal (M3).
+- **3D select** (`tools/volume.py`): tiles whose bounds meet the volume's bounding box are tested point by point
+  (numba, parallel). The test: height along the axis within [bottom, top]; across it, inside the turned rectangle
+  or the circle. The clip box and the slice are applied afterwards, as for shapes.
+- **Volumes** (`tools/volume.py: VolumeSpec`): one description of a 3D select volume. It has an origin, an axis n
+  with two directions across it, bottom and top, and box half-sizes, a radius, or a loop mask on a grid.
+  - `contains()` tests points (numba).
+  - `SelectFilters.volume` uses it for "what is hidden is not selected"; seed-tool results are filtered by it too.
+  - The point shader clips to it with the same arithmetic: `u_vol_*` uniforms, and the loop mask as an R8 texture
+    on unit 3. The texture is uploaded again only when the mask changes, not when the loop moves.
+- **Extrude select** (`tools/volume.py: select_loop`): the loop (the curve's polyline, scaled, turned, moved) is
+  rasterised in its plane at 1 cm (coarser above 16M cells). It is shrunk or grown by the inset with an exact
+  distance transform (scipy). Points within the height range along the normal are tested by a cell lookup
+  (numba, parallel), only in tiles meeting the extruded box.
+- **Combining selections:** `tools/sets.py` merges sorted index arrays in one pass (union, intersection,
+  difference, xor). Point set operations (`Annotations.set_operation`) use the same merges. The renderer finds the
+  tiles a selection change touches with one search per tile, not per point.
+- **Locks:** the window keeps the sorted store indices of locked points, recomputed when the annotations or the
+  locks change. Every selection result except a subtraction is filtered against them with a parallel
+  binary-search membership test (`store.annotations.isin_sorted`).
+- **Seed tools** (`tools/ground.py`, `tools/magic.py`): grids over xy around the click.
+  - Each tile in reach is read by a worker thread into its own block of the grid. Blocks are merged in tile order,
+    so the result equals one pass over the tiles in that order.
+  - Ground grow keeps the first 48 points per 10 cm cell. Magic select sums intensity and height per 2 cm pixel
+    over the ground layer.
+  - Magic select keeps its picture (1.5 × the reach) for later clicks. Grids lie on fixed lattices, so results do
+    not depend on which picture is reused.
 
 ## journal, undo, crash safety
+
+**Built so far (2026-10-19): session undo** (`ui/undo.py`).
+- Before the selection, the height frames or the annotation tree change, the window pushes a snapshot of that
+  state. Undo restores it and keeps the current state for redo.
+- Index arrays are never changed in place, so snapshots share them. Annotation snapshots copy segment and curve
+  geometry but share point-set indices.
+- The history is in memory only. Restored annotations and frames are saved to the project at once.
+- The label journal below is still to come (M3).
 
 - **One operation** is one `ops.jsonl` line, schema `pclabel.op/1`:
   ```
@@ -271,6 +348,8 @@ As built in M1 (`pclabel/render/`). `renderer.py` uses moderngl only and runs in
 | observations | JSONL as stored, plus markdown in the OBSERVATIONS.md template |
 | threshold / statistics reports | JSON, CSV, markdown (SPEC §10) |
 | frames / surfaces | JSON / npz, so algorithms can use the same "height above road" |
+| annotations | JSON, schema `pclabel.annotations/1` (above): segments, curves and point sets (source indices) in directories; all, or the selected entries |
+| a plane | JSON, schema `pclabel.plane/1`: `name`, `equation {a, b, c, d}` (`a x + b y + c z + d = 0`, unit normal up, scan coordinates: the left side is the height above the plane), `z_of_xy {p, q, r}`, `normal`, `origin`, `along`, `fit` (the frame's report), `source`, `offset` |
 
 Every export writes its sidecar and never overwrites without asking.
 
@@ -328,3 +407,4 @@ Every export writes its sidecar and never overwrites without asking.
 | D-004 | Journal-first label operations with npz deltas and snapshots | planning |
 | D-005 | Selection always on full-resolution columns with an optional depth test | planning |
 | D-006 | Reference frames and surfaces are view/analysis transforms, never applied to stored data | planning |
+| D-007 | Labelling is done by labelling annotations: a label on a directory or item (inherited by what it holds) covers its point sets, segments and curves; "export labels" groups them by label | decided by the user, 2026-10-20. It stands in for M3's per-point label column for now; changes are recorded in `annotations.json` (point sets keep how they were selected) and undoable in the session, but there is no persistent operation journal |

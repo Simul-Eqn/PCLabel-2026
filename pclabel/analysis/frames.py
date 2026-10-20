@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, field
 import numpy as np
 
 
+PLANE_SCHEMA = "pclabel.plane/1"
 GROUND_TILT_DEG = 10.0  # a fit steeper or rougher than this gets a warning in its report
 GROUND_RMS_M = 0.05
 
@@ -123,3 +124,26 @@ def frame_from_points(points_world: np.ndarray, name: str, params: PlaneFitParam
         report["warning"] = (f"does not look like ground (tilt {tilt:.1f}°, RMS {rms * 100:.1f} cm): the selection "
                              "may include vegetation, kerbs or objects")  # fmt: skip
     return HeightFrame(name, tuple(map(float, n)), tuple(map(float, f["centroid"])), tuple(map(float, a)), report)
+
+
+def plane_document(frame: HeightFrame, offset, source: dict | None = None) -> dict:
+    """A plane frame as a JSON document (schema pclabel.plane/1): its equation in world coordinates, the frame and
+    its fit report."""
+    n = np.asarray(frame.normal, np.float64)
+    d = -float(n @ np.asarray(frame.origin, np.float64))
+    a, b, c = (float(v) for v in n)
+    return {
+        "schema": PLANE_SCHEMA,
+        "name": frame.name,
+        "coordinates": "scan frame (world), metres; store/local = world - offset",
+        "equation": {"a": a, "b": b, "c": c, "d": d,
+                     "form": "a*x + b*y + c*z + d = 0, (a, b, c) the unit normal, pointing up"},
+        "height": "a*x + b*y + c*z + d is the signed distance above the plane: the app's h on this height axis",
+        "z_of_xy": {"p": -a / c, "q": -b / c, "r": -d / c, "form": "z = p*x + q*y + r"},
+        "normal": [a, b, c],
+        "origin": [float(v) for v in frame.origin],
+        "along": [float(v) for v in frame.along],
+        "fit": frame.report,
+        "source": source or {},
+        "offset": [float(v) for v in np.asarray(offset, np.float64)],
+    }

@@ -56,6 +56,31 @@ Things noticed in the scans while labelling. Observations are the main output of
   - **Check in other scans:** newroad 2, ExchangeGreen (RTC360 and BLK ARC).
 - status: open
 
+### O-0010 Drain inlets only sometimes have points below the road level
+- date / who: 2026-10-19, user
+- scan: not recorded                           · where: not recorded
+- tags: drain, curb, below-road, visibility, Q-05, Q-06
+- seen: drains at the kerbs sometimes have points lower than the road surface, where the inlet goes down, but only
+  sometimes. The labeller's explanation, not yet checked: the scanner has to be close enough to see into the inlet.
+- evidence: not recorded
+- seen elsewhere: not checked
+- implications:
+  - **Refines O-0002:** below-road points mean a drain (as far as seen), but a drain need not have below-road
+    points. Whether its inside is seen may depend on the geometry (range and incidence from the scanner).
+  - **Rule:** R-003 (proposed) labels drains by their below-road points. Proposed addition: an inlet with no
+    points below the road is still `drain` where it can be identified otherwise (kerb gap, grating). As
+    `proposed`; for the user to decide.
+  - **Lint:** R-003's check still applies. A second check would list drain instances whose lowest `hs` is above
+    −3 cm (drains seen without depth), with their range from the scanner.
+  - **Measurement:** for each kerb inlet, its range from the scanner (Point info shows it) and the depth of its
+    lowest points below the road. Plotting depth seen against range would show whether there is a range beyond
+    which inlets look flat. Then check newroad 2 and ExchangeGreen.
+  - **Algorithm:** a below-road detector would find only the drains seen from close by. Far drains need other cues
+    (the kerb gap, grating intensity). Threshold studies on drains should be split by range.
+  - **View:** the diverging ±5 cm view (M2, not built) would show below-road points. A "range from the scanner"
+    colour mode would show where the depth stops being visible.
+- status: open
+
 ### Prior observations from earlier work in this workspace (status `to verify`)
 
 These come from `../Roadrun/docs/experiments.md` and `../Roadrun/docs/project_brief.md`, made on a 5 cm voxel

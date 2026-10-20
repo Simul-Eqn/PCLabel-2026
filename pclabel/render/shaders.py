@@ -38,23 +38,51 @@ uniform sampler2D u_classes;  // rgb = class colour, a = visible
 uniform int u_clip_on;
 uniform vec3 u_clip_min;
 uniform vec3 u_clip_max;
+uniform int u_vol_on;          // clip volume: 0 off, 1 box, 2 cylinder, 3 loop (a mask) - local coordinates
+uniform vec3 u_vol_origin;
+uniform vec3 u_vol_n;          // its axis: from u_vol_h.x to u_vol_h.y along it
+uniform vec3 u_vol_u;          // across it: x along u, y along v
+uniform vec3 u_vol_v;
+uniform vec2 u_vol_h;
+uniform vec2 u_vol_half;       // box half-sizes, or (radius, radius)
+uniform vec3 u_vol_grid;       // loop mask: x0, y0, cell
+uniform sampler2D u_vol_mask;
 uniform int u_size_mode;       // 0 fixed, 1 adaptive
 uniform float u_point_size;    // fixed size, or the minimum when adaptive
 uniform float u_max_size;
 uniform float u_spacing;       // world spacing of the drawn subset of this tile (adaptive)
 uniform float u_px_per_unit;   // perspective: pixels per world unit at eye depth 1; ortho: per world unit
 uniform int u_ortho;
+uniform vec4 u_sel_tint;       // rgb tint and strength for selected points (flags bit 7, GPU only)
+uniform vec4 u_group_tint;     // a preview group (bit 6)
+uniform vec4 u_unsure_tint;    // points worth a look (bit 5)
 in vec3 in_pos;
 in vec4 in_rgb;
 in uint in_int;
 in uint in_label;
+in uint in_flags;
 out vec3 v_color;
 const vec4 CULLED = vec4(2.0, 2.0, 2.0, 1.0);
+
+bool outside_volume(vec3 p) {
+    vec3 d = p - u_vol_origin;
+    float h = dot(d, u_vol_n);
+    if (h < u_vol_h.x || h > u_vol_h.y) return true;
+    float x = dot(d, u_vol_u);
+    float y = dot(d, u_vol_v);
+    if (u_vol_on == 1) return abs(x) > u_vol_half.x || abs(y) > u_vol_half.y;
+    if (u_vol_on == 2) return x * x + y * y > u_vol_half.x * u_vol_half.x;
+    ivec2 size = textureSize(u_vol_mask, 0);
+    ivec2 ij = ivec2(floor((x - u_vol_grid.x) / u_vol_grid.z), floor((y - u_vol_grid.y) / u_vol_grid.z));
+    if (ij.x < 0 || ij.y < 0 || ij.x >= size.x || ij.y >= size.y) return true;
+    return texelFetch(u_vol_mask, ij, 0).r < 0.5;
+}
 
 void main() {
     vec4 cls = texelFetch(u_classes, ivec2(int(in_label), 0), 0);
     float h = dot(in_pos - u_h_origin, u_h_normal);
-    bool clipped = u_clip_on == 1 && (any(lessThan(in_pos, u_clip_min)) || any(greaterThan(in_pos, u_clip_max)));
+    bool clipped = (u_clip_on == 1 && (any(lessThan(in_pos, u_clip_min)) || any(greaterThan(in_pos, u_clip_max))))
+                   || (u_vol_on > 0 && outside_volume(in_pos));
     bool sliced = u_band_on == 1 && (h < u_band.x || h > u_band.y);
     if (clipped || sliced || cls.a < 0.5) {
         gl_Position = CULLED;
@@ -87,6 +115,9 @@ void main() {
         c = texture(u_cyclic, vec2(phi, 0.5)).rgb;
         if (u_mode == 6) c *= 0.35 + 0.65 * inten;
     }
+    if ((in_flags & 32u) != 0u) c = mix(c, u_unsure_tint.rgb, u_unsure_tint.a);
+    else if ((in_flags & 64u) != 0u) c = mix(c, u_group_tint.rgb, u_group_tint.a);
+    else if ((in_flags & 128u) != 0u) c = mix(c, u_sel_tint.rgb, u_sel_tint.a);
     v_color = c;
 }
 """
@@ -174,21 +205,101 @@ out vec4 f_color;
 void main() { f_color = u_color; }
 """
 
-# selected points, drawn over the picture (after EDL) with blending
-SEL_VS = """
+# coloured marker points (e.g. where a grow stopped), drawn over the picture after EDL
+MARK_VS = """
 #version 430
 uniform mat4 u_mvp;
 uniform float u_size;
 in vec3 in_pos;
+in vec4 in_color;
+out vec3 v_color;
 void main() {
     gl_Position = u_mvp * vec4(in_pos, 1.0);
     gl_PointSize = u_size;
+    v_color = in_color.rgb;
 }
 """
 
-SEL_FS = """
+MARK_FS = """
 #version 430
-uniform vec4 u_color;
+in vec3 v_color;
 out vec4 f_color;
-void main() { f_color = u_color; }
+void main() { f_color = vec4(v_color, 1.0); }
+"""
+
+# vector annotations (segments, curves): lines of any width, as screen-space quads made by a geometry shader
+VLINE_VS = """
+#version 430
+uniform mat4 u_mvp;
+in vec3 in_pos;
+in vec4 in_color;
+in float in_width;
+out vec4 v_color;
+out float v_width;
+void main() {
+    gl_Position = u_mvp * vec4(in_pos, 1.0);
+    v_color = in_color;
+    v_width = in_width;
+}
+"""
+
+VLINE_GS = """
+#version 430
+layout(lines) in;
+layout(triangle_strip, max_vertices = 4) out;
+uniform vec2 u_viewport;  // pixels
+in vec4 v_color[];
+in float v_width[];
+out vec4 g_color;
+void main() {
+    vec4 a = gl_in[0].gl_Position;
+    vec4 b = gl_in[1].gl_Position;
+    const float EPS = 1e-4;
+    if (a.w < EPS && b.w < EPS) return;
+    if (a.w < EPS) a = mix(a, b, (EPS - a.w) / (b.w - a.w));  // clip at the eye plane
+    else if (b.w < EPS) b = mix(b, a, (EPS - b.w) / (a.w - b.w));
+    vec2 half_vp = 0.5 * u_viewport;
+    vec2 d = b.xy / b.w * half_vp - a.xy / a.w * half_vp;
+    float len = length(d);
+    d = len > 1e-6 ? d / len : vec2(1.0, 0.0);
+    vec2 n = vec2(-d.y, d.x) * (0.5 * v_width[0]) / half_vp;
+    g_color = v_color[0]; gl_Position = vec4(a.xy + n * a.w, a.zw); EmitVertex();
+    g_color = v_color[0]; gl_Position = vec4(a.xy - n * a.w, a.zw); EmitVertex();
+    g_color = v_color[1]; gl_Position = vec4(b.xy + n * b.w, b.zw); EmitVertex();
+    g_color = v_color[1]; gl_Position = vec4(b.xy - n * b.w, b.zw); EmitVertex();
+    EndPrimitive();
+}
+"""
+
+VLINE_FS = """
+#version 430
+in vec4 g_color;
+out vec4 f_color;
+void main() { f_color = g_color; }
+"""
+
+# vector annotation nodes and handles: round points with a dark rim
+VPOINT_VS = """
+#version 430
+uniform mat4 u_mvp;
+in vec3 in_pos;
+in vec4 in_color;
+in float in_size;
+out vec4 v_color;
+void main() {
+    gl_Position = u_mvp * vec4(in_pos, 1.0);
+    gl_PointSize = in_size;
+    v_color = in_color;
+}
+"""
+
+VPOINT_FS = """
+#version 430
+in vec4 v_color;
+out vec4 f_color;
+void main() {
+    float r = length(gl_PointCoord - 0.5);
+    if (r > 0.5) discard;
+    f_color = r > 0.34 ? vec4(0.0, 0.0, 0.0, 1.0) : v_color;
+}
 """
