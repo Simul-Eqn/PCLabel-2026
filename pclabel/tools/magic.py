@@ -39,6 +39,7 @@ from dataclasses import asdict, dataclass
 import numba as nb
 import numpy as np
 
+from pclabel.tools import sets
 from pclabel.tools.ground import (
     R_GAP,
     R_HEIGHT,
@@ -102,17 +103,21 @@ class MagicResult:
     info: dict
 
 
-def picture_key(params: MagicSelectParams, clip=None) -> tuple:
+def picture_key(params: MagicSelectParams, clip=None, inside=None) -> tuple:
     p = params
     c = None if clip is None else (tuple(np.asarray(clip[0], float)), tuple(np.asarray(clip[1], float)))
-    return (p.radius, p.pixel, p.surface_tol, p.ground_cell, p.surface_band, p.cell_points, c)
+    return (p.radius, p.pixel, p.surface_tol, p.ground_cell, p.surface_band, p.cell_points, c,
+            None if inside is None else inside.token)  # fmt: skip
 
 
 @nb.njit(nogil=True, cache=True)
 def _bin_ground(xyz, inten, has_int, a, b, gx0, gy0, gcell, gnx, gny, surf, tol, x0, y0, pixel, ox, oy, w, h, clip_on,
-                lo, hi, s_i, s_z, cnt):  # fmt: skip
-    """Sum the ground points of store points a..b into the block (ox, oy, w, h) of the picture at (x0, y0)."""
+                lo, hi, in_on, inside, s_i, s_z, cnt):  # fmt: skip
+    """Sum the ground points of store points a..b (only those in ``inside`` when ``in_on``) into the block
+    (ox, oy, w, h) of the picture at (x0, y0)."""
     for i in range(a, b):
+        if in_on and not inside[i]:
+            continue
         x, y, z = xyz[i, 0], xyz[i, 1], xyz[i, 2]
         if clip_on and (x < lo[0] or x > hi[0] or y < lo[1] or y > hi[1] or z < lo[2] or z > hi[2]):
             continue
@@ -169,8 +174,10 @@ def _classify(xyz, a, b, gx0, gy0, gcell, gnx, gny, surf, tol, x0, y0, pixel, nx
         out[k] = ok
 
 
-def intensity_image(xyz, intensity, tiles, centre, params: MagicSelectParams, clip=None) -> IntensityImage:
-    """The ground's intensity picture around ``centre`` (local coordinates), PICTURE_SCALE x the reach."""
+def intensity_image(xyz, intensity, tiles, centre, params: MagicSelectParams, clip=None,
+                    inside=None) -> IntensityImage:  # fmt: skip
+    """The ground's intensity picture around ``centre`` (local coordinates), PICTURE_SCALE x the reach, from the
+    points within the clip box and ``inside`` (a PointMask)."""
     p = params
     centre = np.asarray(centre, np.float64)
     half = PICTURE_SCALE * p.radius
@@ -185,7 +192,8 @@ def intensity_image(xyz, intensity, tiles, centre, params: MagicSelectParams, cl
     gy0 = np.floor(y0 / g) * g
     gn = int(np.ceil((x0 + n * p.pixel - gx0) / g)) + 1
     gp = GroundGrowParams(cell=g, surface_band=p.surface_band, cell_points=p.cell_points)
-    grid = cell_grid(xyz, intensity, tiles, centre, gp, clip, extent=(gx0, gy0, gn, gn))
+    grid = cell_grid(xyz, intensity, tiles, centre, gp, clip, extent=(gx0, gy0, gn, gn), inside=inside)
+    in_on, in_mask = sets.mask_args(inside)
     s_i = np.zeros((n, n))
     s_z = np.zeros((n, n))
     cnt = np.zeros((n, n), np.int32)
@@ -203,11 +211,11 @@ def intensity_image(xyz, intensity, tiles, centre, params: MagicSelectParams, cl
         a, m = int(tiles["start"][t]), int(tiles["count"][t])
         b_i, b_z, b_n = np.zeros(w * h), np.zeros(w * h), np.zeros(w * h, np.int32)
         _bin_ground(arr, iarr, has_int, a, a + m, grid.x0, grid.y0, g, grid.nx, grid.ny, grid.surf, p.surface_tol,
-                    x0, y0, p.pixel, ox, oy, w, h, clip is not None, lo, hi, b_i, b_z, b_n)  # fmt: skip
+                    x0, y0, p.pixel, ox, oy, w, h, clip is not None, lo, hi, in_on, in_mask, b_i, b_z, b_n)  # fmt: skip
         return ox, oy, w, h, b_i, b_z, b_n
 
     with ThreadPoolExecutor(THREADS) as ex:
-        for b in ex.map(block, _roi_tiles(tiles, mid, 0.5 * n * p.pixel, clip)):  # summed in tile order
+        for b in ex.map(block, _roi_tiles(tiles, mid, 0.5 * n * p.pixel, clip, inside)):  # summed in tile order
             if b is not None:
                 ox, oy, w, h, b_i, b_z, b_n = b
                 s_i[oy : oy + h, ox : ox + w] += b_i.reshape(h, w)
@@ -218,7 +226,7 @@ def intensity_image(xyz, intensity, tiles, centre, params: MagicSelectParams, cl
     z = np.full((n, n), np.nan)
     inten[has] = s_i[has] / cnt[has]
     z[has] = s_z[has] / cnt[has]
-    return IntensityImage(float(x0), float(y0), p.pixel, n, n, inten, z, cnt, grid, picture_key(p, clip),
+    return IntensityImage(float(x0), float(y0), p.pixel, n, n, inten, z, cnt, grid, picture_key(p, clip, inside),
                           int(cnt.sum()))  # fmt: skip
 
 
@@ -311,7 +319,7 @@ def _seed_offsets(k: int = 3):
 
 
 def select_region_points(xyz, tiles, img: IntensityImage, region: np.ndarray, params: MagicSelectParams,
-                         clip=None) -> np.ndarray:  # fmt: skip
+                         clip=None, inside=None) -> np.ndarray:  # fmt: skip
     """Full-resolution store indices of the ground points in the selected pixels."""
     if not region.any():
         return np.empty(0, np.int64)
@@ -320,6 +328,8 @@ def select_region_points(xyz, tiles, img: IntensityImage, region: np.ndarray, pa
     hi = np.array([img.x0 + (xs.max() + 1) * img.pixel, img.y0 + (ys.max() + 1) * img.pixel])
     t = tiles
     cand = np.flatnonzero((t["x1"] >= lo[0]) & (t["x0"] <= hi[0]) & (t["y1"] >= lo[1]) & (t["y0"] <= hi[1]))
+    if inside is not None:
+        cand = inside.keep_tiles(t, cand)
     arr = np.asarray(xyz)
     g = img.grid
     parts = []
@@ -329,6 +339,8 @@ def select_region_points(xyz, tiles, img: IntensityImage, region: np.ndarray, pa
         _classify(arr, a, b, g.x0, g.y0, g.cell, g.nx, g.ny, g.surf, params.surface_tol, img.x0, img.y0, img.pixel,
                   img.nx, img.ny, region, out)  # fmt: skip
         idx = np.flatnonzero(out) + a
+        if inside is not None and idx.size:
+            idx = idx[inside.mask[idx]]
         if clip is not None and idx.size:
             q = arr[idx]
             idx = idx[np.all((q >= clip[0]) & (q <= clip[1]), axis=1)]
@@ -337,15 +349,15 @@ def select_region_points(xyz, tiles, img: IntensityImage, region: np.ndarray, pa
 
 
 def magic_select(xyz, intensity, tiles, seed, params: MagicSelectParams = MagicSelectParams(), *, image=None,
-                 clip=None) -> MagicResult:  # fmt: skip
+                 clip=None, inside=None) -> MagicResult:  # fmt: skip
     """Run the whole tool. Pass the ``image`` of an earlier run: it is reused when it was built with the same
     settings and covers this click's reach, so later clicks and threshold changes do not re-read the points."""
     seed = np.asarray(seed, np.float64)
-    reused = image is not None and image.key == picture_key(params, clip) and image.covers(seed, params.radius)
+    reused = image is not None and image.key == picture_key(params, clip, inside) and image.covers(seed, params.radius)
     if not reused:
-        image = intensity_image(xyz, intensity, tiles, seed, params, clip)
+        image = intensity_image(xyz, intensity, tiles, seed, params, clip, inside)
     region, info = magic_region(image, seed, params)
-    idx = select_region_points(xyz, tiles, image, region, params, clip)
+    idx = select_region_points(xyz, tiles, image, region, params, clip, inside)
     info["points"] = int(idx.size)
     info["picture_reused"] = bool(reused)
     info["picture_points"] = image.points

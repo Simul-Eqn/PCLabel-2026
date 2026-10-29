@@ -37,11 +37,20 @@ from pclabel.render.camera import ORTHO, PERSPECTIVE, OrbitCamera
 from pclabel.render.renderer import FrameStats, PointRenderer, PointSource
 from pclabel.tools.pick import nearest_point
 
-SEED_TOOLS = ("grow", "magic")  # a click sets a seed
+SEED_TOOLS = ("grow", "magic", "piece", "tree")  # a click sets a seed (piece: picks a piece of the selection; tree: the ground at a trunk)
 VOLUME_KEYS = {Qt.Key.Key_W, Qt.Key.Key_A, Qt.Key.Key_S, Qt.Key.Key_D, Qt.Key.Key_Q, Qt.Key.Key_E, Qt.Key.Key_Z,
                Qt.Key.Key_X, Qt.Key.Key_Minus, Qt.Key.Key_Equal, Qt.Key.Key_Plus, Qt.Key.Key_Underscore,
                Qt.Key.Key_K, Qt.Key.Key_Return, Qt.Key.Key_Enter}  # fmt: skip
 FLY_KEYS = {Qt.Key.Key_W, Qt.Key.Key_A, Qt.Key.Key_S, Qt.Key.Key_D, Qt.Key.Key_Q, Qt.Key.Key_E}
+_CTRL_ALT = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier
+
+
+def is_volume_key(e) -> bool:
+    """A key 3D select takes in the view: VOLUME_KEYS, plain or with Shift; with Ctrl only Enter (subtract). Ctrl+Z,
+    Ctrl+K, Ctrl+D ... stay the window's shortcuts (Ctrl+Z used to arrive as Z: fewer vertical lines, no undo)."""
+    if e.key() not in VOLUME_KEYS:
+        return False
+    return not (e.modifiers() & _CTRL_ALT) or e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
 
 
 class Viewport(QOpenGLWidget):
@@ -84,6 +93,7 @@ class Viewport(QOpenGLWidget):
         self.edit_targets = None
         self._edit_drag = None  # (node, side) of the handle being dragged
         self.select_through = False  # lasso / rectangle take hidden points too (the outline is orange)
+        self.pick_inside = None  # tools.sets.PointMask: clicks pick only its points (the clip to a point set)
         self._shape = None  # widget-coordinate points of the shape being drawn
         self._shape_op = "replace"
         self._fly_keys: set = set()
@@ -317,7 +327,8 @@ class Viewport(QOpenGLWidget):
         else:
             depth = float(np.dot(p - self.camera.eye(), self.camera.axes()[2]))
             footprint = max(depth, 0.0) / self.camera.pixels_per_unit(self.physical_size()[1])
-        res = nearest_point(self.source.xyz, self.source.tiles, p, search=float(np.clip(3 * footprint, 0.05, 5.0)))
+        res = nearest_point(self.source.xyz, self.source.tiles, p, search=float(np.clip(3 * footprint, 0.05, 5.0)),
+                            inside=self.pick_inside)  # fmt: skip
         if res is None:
             self.picked.emit(None)
             return
@@ -514,7 +525,7 @@ class Viewport(QOpenGLWidget):
     def event(self, e):
         # while flying, W A S D Q E move the camera instead of triggering the window's shortcuts
         if e.type() == QEvent.Type.ShortcutOverride and (
-                (self._fly_timer.isActive() and e.key() in FLY_KEYS) or (self.tool == "volume" and e.key() in VOLUME_KEYS)):  # fmt: skip
+                (self._fly_timer.isActive() and e.key() in FLY_KEYS) or (self.tool == "volume" and is_volume_key(e))):  # fmt: skip
             e.accept()
             return True
         return super().event(e)
@@ -527,7 +538,7 @@ class Viewport(QOpenGLWidget):
                 if self.renderer is not None:
                     self.renderer.pivot = None
             return
-        if self.tool == "volume" and e.key() in VOLUME_KEYS:
+        if self.tool == "volume" and is_volume_key(e):
             self.volume_key.emit(int(e.key()), e.modifiers())
             return
         if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self.tool in ("segment", "curve", "curve_edit"):

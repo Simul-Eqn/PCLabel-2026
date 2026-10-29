@@ -147,14 +147,17 @@ class DisplayDock(QDockWidget):
 
 
 class ClipDock(QDockWidget):
-    """Axis-aligned clip box in world coordinates (scan frame)."""
+    """The clips: an axis-aligned box in world coordinates (scan frame), the 3D select volume and point sets."""
 
     changed = Signal()
     from_view = Signal()
     fit_scene = Signal()
+    use_set = Signal()
+
+    NO_SET = "no point set yet: select point sets or directories in the Annotations panel, then \"use the selected\""
 
     def __init__(self, parent=None):
-        super().__init__("Clip box", parent)
+        super().__init__("Clips", parent)
         self.setObjectName("clip")
         w = QWidget()
         v = QVBoxLayout(w)
@@ -167,6 +170,17 @@ class ClipDock(QDockWidget):
         self.volume_label.setWordWrap(True)
         v.addWidget(self.volume_on)
         v.addWidget(self.volume_label)
+        self.set_on = QCheckBox("clip to point sets (Ctrl+Shift+K)")
+        self.set_on.setToolTip("show only the points of the chosen point sets; every tool reads and selects only them")
+        self.set_on.setEnabled(False)
+        self.set_label = QLabel(self.NO_SET)
+        self.set_label.setWordWrap(True)
+        self.set_use = QPushButton("use the selected point sets (Ctrl+K)")
+        self.set_use.setToolTip("the point sets selected in the Annotations panel; a directory: all its point sets")
+        v.addWidget(self.set_on)
+        v.addWidget(self.set_label)
+        v.addWidget(self.set_use)
+        v.addWidget(QLabel("box (scan frame):"))
         g = QGridLayout()
         g.addWidget(QLabel("min"), 0, 1)
         g.addWidget(QLabel("max"), 0, 2)
@@ -191,6 +205,8 @@ class ClipDock(QDockWidget):
         self.setWidget(w)
         self.on.toggled.connect(self.changed)
         self.volume_on.toggled.connect(self.changed)
+        self.set_on.toggled.connect(self.changed)
+        self.set_use.clicked.connect(self.use_set)
         b1.clicked.connect(self.from_view)
         b2.clicked.connect(self.fit_scene)
 
@@ -203,6 +219,7 @@ class ClipDock(QDockWidget):
 
     def apply(self, d):
         d.clip_volume_on = self.volume_on.isChecked() and d.clip_volume is not None
+        d.clip_set_on = self.set_on.isChecked() and self.set_on.isEnabled()
         d.clip_on = self.on.isChecked()
         d.clip_min = tuple(s.value() for s in self.lo)
         d.clip_max = tuple(s.value() for s in self.hi)
@@ -335,6 +352,7 @@ class FrameDock(QDockWidget):
     frame_chosen = Signal(int)
     fit_requested = Signal()
     delete_requested = Signal()
+    rename_requested = Signal()
     export_requested = Signal()
     clear_requested = Signal()
     tool_requested = Signal(object)  # "lasso" | "rect"
@@ -368,11 +386,14 @@ class FrameDock(QDockWidget):
         self.fit.setToolTip("robust plane through the selected points; its normal becomes the height axis")
         self.delete = QPushButton("delete plane")
         self.delete.setToolTip("remove the plane shown above from the project")
+        self.rename = QPushButton("rename...")
+        self.rename.setToolTip("give the plane shown above another name")
         self.export = QPushButton("export plane...")
         self.export.setToolTip("save the plane shown above (its equation and fit) as JSON")
         prow = QHBoxLayout()
         prow.addWidget(self.fit)
         prow.addWidget(self.delete)
+        prow.addWidget(self.rename)
         prow.addWidget(self.export)
         f.addRow("", prow)
         self.report = QLabel("")
@@ -391,6 +412,7 @@ class FrameDock(QDockWidget):
         self.clear.clicked.connect(self.clear_requested)
         self.fit.clicked.connect(self.fit_requested)
         self.delete.clicked.connect(self.delete_requested)
+        self.rename.clicked.connect(self.rename_requested)
         self.export.clicked.connect(self.export_requested)
         self.frame.activated.connect(self.frame_chosen)
         self.slice_on.toggled.connect(self.slice_changed)

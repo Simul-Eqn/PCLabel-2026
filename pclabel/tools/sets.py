@@ -6,6 +6,8 @@ millions of indices a "through" selection can hold. These run in about a second 
 
 from __future__ import annotations
 
+import itertools
+
 import numba as nb
 import numpy as np
 
@@ -84,6 +86,45 @@ def intersection(a, b) -> np.ndarray:
     if a.size == 0 or b.size == 0:
         return np.empty(0, np.int64)
     return _op(a, b, False, False, True)
+
+
+@nb.njit(parallel=True, nogil=True, cache=True)
+def _scatter(idx, mask):
+    for k in nb.prange(idx.shape[0]):
+        mask[idx[k]] = True
+
+
+_tokens = itertools.count(1)
+_NO_MASK = np.zeros(1, np.bool_)
+
+
+class PointMask:
+    """A set of store points (e.g. the clip to a point set) as a dense mask, one byte per store point, for kernels
+    that test every point they read. ``token`` tells masks apart in cache keys (unlike ``id``, never reused)."""
+
+    def __init__(self, indices, n: int, label: str = ""):
+        self.indices = np.asarray(indices, np.int64)
+        self.mask = np.zeros(n, np.bool_)
+        if self.indices.size:
+            _scatter(self.indices, self.mask)
+        self.label = label
+        self.token = next(_tokens)
+
+    def tile_counts(self, tiles) -> np.ndarray:
+        """How many of the set's points each tile holds (tiles are consecutive store ranges)."""
+        s = np.asarray(tiles["start"], np.int64)
+        e = s + np.asarray(tiles["count"], np.int64)
+        return np.searchsorted(self.indices, e) - np.searchsorted(self.indices, s)
+
+    def keep_tiles(self, tiles, cand) -> np.ndarray:
+        """The candidate tiles that hold any of the set's points."""
+        cand = np.asarray(cand)
+        return cand[self.tile_counts(tiles)[cand] > 0] if cand.size else cand
+
+
+def mask_args(inside: PointMask | None):
+    """(on, mask) for kernels: a PointMask's dense mask, or a placeholder when there is none."""
+    return (False, _NO_MASK) if inside is None else (True, inside.mask)
 
 
 def xor(a, b) -> np.ndarray:

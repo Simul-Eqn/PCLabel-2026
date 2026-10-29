@@ -13,8 +13,9 @@ being drawn) go on top.
 
 Selection and highlights. The selected store indices are a GPU-side bit (SELECTED_BIT) in each page's flags byte, so
 exactly the drawn points that are selected are tinted. Two more bits mark a preview group (GROUP_BIT, orange) and
-points to look at (UNSURE_BIT, magenta), e.g. while splitting a point set. Changing any of them rewrites the label
-buffers of the resident pages of the affected tiles only; pages packed under older marks are corrected before
+points to look at (UNSURE_BIT, magenta), e.g. while splitting a point set. A third byte marks the points of the clip
+to a point set (INSIDE_BIT); with ``Display.clip_set_on`` only those are drawn. Changing any of them rewrites the
+label buffers of the resident pages of the affected tiles only; pages packed under older marks are corrected before
 upload.
 """
 
@@ -68,11 +69,13 @@ def page_range(j: int) -> tuple[int, int]:
     return (int(PAGE_ENDS[j - 1]) if j > 0 else 0), int(PAGE_ENDS[j])
 
 GEOM_STRIDE = 20  # f32 x3, rgba u8 x4, u16 intensity, u16 pad
-LABEL_STRIDE = 2  # u8 label, u8 flags
+LABEL_STRIDE = 4  # u8 label, u8 flags, u8 extra bits (GPU only), u8 annotation label code (GPU only, labels view)
 SELECTED_BIT = 128  # flags bit 7 on the GPU only (taxonomy flags use bits 0-4): the point is selected
 GROUP_BIT = 64  # bit 6: in a preview group (orange)
 UNSURE_BIT = 32  # bit 5: worth a look (magenta), e.g. possibly misclassified
+INSIDE_BIT = 1 << 8  # extra byte, bit 0: in the clip to a point set
 HIGHLIGHT_BITS = (SELECTED_BIT, GROUP_BIT, UNSURE_BIT)
+MARK_BITS = HIGHLIGHT_BITS + (INSIDE_BIT,)
 BYTES_PER_POINT = GEOM_STRIDE + LABEL_STRIDE
 
 
@@ -126,6 +129,7 @@ class Display:
     clip_max: tuple = (1e9, 1e9, 1e9)
     clip_volume: object = None  # tools.volume.VolumeSpec in local coordinates (from 3D select): show only inside
     clip_volume_on: bool = False
+    clip_set_on: bool = False  # show only the points marked INSIDE_BIT (the clip to a point set)
 
 
 @dataclass
@@ -161,10 +165,12 @@ def _pack_geometry(xyz, rgb, inten, a, b, f32, u32, has_rgb, has_int):
         u32[i, 4] = np.uint32(inten[j]) if has_int else np.uint32(0)
 
 
-def label_bytes(src: PointSource, a: int, b: int, marks) -> np.ndarray:
-    """(m, 2) uint8: label and flags of store points a..b, with the highlight bits set. ``marks`` is {bit: sorted
-    store indices}, or just the selected indices."""
-    lab = np.zeros((b - a, 2), np.uint8)
+def label_bytes(src: PointSource, a: int, b: int, marks, layers=()) -> np.ndarray:
+    """(m, 4) uint8: label, flags and extra bits of store points a..b, with the mark bits set (flags bits 5-7, or
+    INSIDE_BIT in the extra byte), and the annotation label code of each point (fourth byte, the labels view).
+    ``marks`` is {bit: sorted store indices}, or just the selected indices; ``layers`` is [(sorted store indices,
+    code)], later layers over earlier ones."""
+    lab = np.zeros((b - a, LABEL_STRIDE), np.uint8)
     if src.labels is not None:
         lab[:, 0] = src.labels[a:b]
     if src.flags is not None:
@@ -174,11 +180,16 @@ def label_bytes(src: PointSource, a: int, b: int, marks) -> np.ndarray:
     for bit, idx in marks.items():
         if idx is not None and idx.size:
             i0, i1 = np.searchsorted(idx, [a, b])
-            lab[idx[i0:i1] - a, 1] |= bit
+            col, value = (1, bit) if bit < 256 else (2, bit >> 8)
+            lab[idx[i0:i1] - a, col] |= value
+    for idx, code in layers:
+        i0, i1 = np.searchsorted(idx, [a, b])
+        if i1 > i0:
+            lab[idx[i0:i1] - a, 3] = code
     return lab
 
 
-def pack_page(src: PointSource, a: int, b: int, marks=None) -> tuple[np.ndarray, np.ndarray]:
+def pack_page(src: PointSource, a: int, b: int, marks=None, layers=()) -> tuple[np.ndarray, np.ndarray]:
     """Vertex bytes for store points a..b: geometry (m, 5) uint32 and labels (m, 2) uint8."""
     m = b - a
     geom = np.empty((m, 5), np.uint32)
@@ -186,7 +197,7 @@ def pack_page(src: PointSource, a: int, b: int, marks=None) -> tuple[np.ndarray,
     rgb = np.asarray(src.rgb) if has_rgb else np.zeros((1, 3), np.uint8)
     inten = np.asarray(src.intensity) if has_int else np.zeros(1, np.uint16)
     _pack_geometry(np.asarray(src.xyz), rgb, inten, a, b, geom.view(np.float32), geom, has_rgb, has_int)
-    return geom, label_bytes(src, a, b, marks)
+    return geom, label_bytes(src, a, b, marks, layers)
 
 
 class _Page:
@@ -244,8 +255,9 @@ class PointRenderer:
         self._vol_tex = None  # the clip volume's loop mask, and the volume it is for
         self._vol_tex_for = None
         self._no_mask = ctx.texture((1, 1), 1, b"\x00", dtype="f1")
-        self.marks = {bit: np.empty(0, np.int64) for bit in HIGHLIGHT_BITS}  # bit -> sorted store indices
-        self._sel_snapshot = (dict(self.marks), 0)  # (marks, version), read by the packer thread
+        self.marks = {bit: np.empty(0, np.int64) for bit in MARK_BITS}  # bit -> sorted store indices
+        self.label_layers: tuple = ()  # ((sorted store indices, code), ...): annotation labels for the labels view
+        self._sel_snapshot = (dict(self.marks), 0, ())  # (marks, version, layers), read by the packer thread
         self.selection_tint = (1.0, 0.85, 0.1, 0.65)
         self.group_tint = (1.0, 0.42, 0.05, 0.8)
         self.unsure_tint = (1.0, 0.1, 0.85, 0.9)
@@ -257,6 +269,9 @@ class PointRenderer:
         table[:, 3] = 255
         self.tex_classes = ctx.texture((256, 1), 4, table.tobytes())
         self.tex_classes.filter = (moderngl.NEAREST, moderngl.NEAREST)
+        self.tex_labels = ctx.texture((256, 1), 4, np.zeros((256, 4), np.uint8).tobytes())  # code -> rgb, a: shown
+        self.tex_labels.filter = (moderngl.NEAREST, moderngl.NEAREST)
+        self.labels_only = False  # the labels view: hide the points that show no label (else they are dim grey)
         self._target = None  # (size, fbo, color, depth)
         self._queries = [ctx.query(time=True), ctx.query(time=True)]
         self._q_used = [False, False]
@@ -282,6 +297,25 @@ class PointRenderer:
         table[:, :3] = np.asarray(colors, np.uint8)
         table[:, 3] = 255 if visible is None else np.where(np.asarray(visible, bool), 255, 0)
         self.tex_classes.write(table.tobytes())
+
+    def set_label_colors(self, table):
+        """(256, 4) uint8 RGBA per annotation label code, for the labels view; alpha 0 hides the code."""
+        self.tex_labels.write(np.ascontiguousarray(table, np.uint8).tobytes())
+
+    def set_label_layers(self, layers):
+        """The annotation label code of the points: [(sorted store indices, code)], later layers over earlier
+        ones. Rewrites the label buffers of resident pages in the tiles the old or new layers touch."""
+        layers = tuple((np.asarray(i, np.int64), int(c)) for i, c in layers)
+        touched = np.zeros(self.n_tiles, bool)
+        for idx, _ in self.label_layers + layers:
+            if idx.size:
+                touched |= np.searchsorted(idx, self.t_start + self.t_count) > np.searchsorted(idx, self.t_start)
+        self.label_layers = layers
+        marks, version, _ = self._sel_snapshot
+        self._sel_snapshot = (marks, version + 1, layers)
+        for t in np.flatnonzero(touched):
+            for pg in self.pages[t]:
+                pg.lab.write(label_bytes(self.src, pg.a, pg.a + pg.n, self.marks, layers))
 
     def _ensure_target(self, w, h):
         if self._target is not None and self._target[0] == (w, h):
@@ -331,9 +365,9 @@ class PointRenderer:
             lo, hi = page_range(j)
             a = int(self.t_start[t] + lo)
             b = int(self.t_start[t] + min(hi, self.t_count[t]))
-            marks, version = self._sel_snapshot
+            marks, version, layers = self._sel_snapshot
             try:
-                geom, lab = pack_page(self.src, a, b, marks)
+                geom, lab = pack_page(self.src, a, b, marks, layers)
                 self._q_out.put((t, j, geom, (lab, version, a)))
             except Exception as e:  # surface in the render thread
                 self._q_out.put((t, j, e, None))
@@ -341,12 +375,12 @@ class PointRenderer:
     def _upload(self, t, j, geom, packed):
         lab, version, a = packed
         if version != self._sel_snapshot[1]:  # packed under older marks
-            lab = label_bytes(self.src, a, a + len(geom), self.marks)
+            lab = label_bytes(self.src, a, a + len(geom), self.marks, self.label_layers)
         vg = self.ctx.buffer(geom)
         vl = self.ctx.buffer(lab)
         vao = self.ctx.vertex_array(
             self.prog,
-            [(vg, "3f 4f1 u2 x2", "in_pos", "in_rgb", "in_int"), (vl, "u1 u1", "in_label", "in_flags")],
+            [(vg, "3f 4f1 u2 x2", "in_pos", "in_rgb", "in_int"), (vl, "u1 u1 u1 u1", "in_label", "in_flags", "in_extra", "in_ann")],
         )
         self.pages[t].append(_Page(vg, vl, vao, len(geom), a))
         self.resident_bytes += len(geom) * BYTES_PER_POINT
@@ -470,9 +504,9 @@ class PointRenderer:
             "u_unsure_tint": tuple(self.unsure_tint),
             "u_hrange": tuple(float(v) for v in d.height_range), "u_flat": tuple(d.flat_color),
             "u_period": float(d.period), "u_h0": float(d.h0),
-            "u_cyclic": 0, "u_ramp": 1, "u_classes": 2,
+            "u_cyclic": 0, "u_ramp": 1, "u_classes": 2, "u_labels": 4, "u_labels_only": int(self.labels_only),
             **self._volume_uniforms(d),
-            "u_clip_on": int(d.clip_on),
+            "u_clip_on": int(d.clip_on), "u_set_on": int(d.clip_set_on),
             "u_clip_min": tuple(float(v) for v in np.asarray(d.clip_min) - off),
             "u_clip_max": tuple(float(v) for v in np.asarray(d.clip_max) - off),
             "u_size_mode": int(d.adaptive), "u_point_size": float(d.point_size), "u_max_size": float(d.max_size),
@@ -481,6 +515,7 @@ class PointRenderer:
         self.tex_cyclic.use(0)
         self.tex_ramp.use(1)
         self.tex_classes.use(2)
+        self.tex_labels.use(4)
         vm = d.clip_volume.mask if d.clip_volume is not None else None
         (self._vol_tex if self._vol_tex is not None and vm is not None and self._vol_tex_for is vm else self._no_mask).use(3)
         q = self._queries[self._qi]
@@ -576,14 +611,14 @@ class PointRenderer:
         new = np.empty(0, np.int64) if indices is None else np.asarray(indices, np.int64)
         changed = sets.xor(self.marks[bit], new)  # one linear merge: these can hold hundreds of millions of points
         self.marks = {**self.marks, bit: new}
-        self._sel_snapshot = (dict(self.marks), self._sel_snapshot[1] + 1)
+        self._sel_snapshot = (dict(self.marks), self._sel_snapshot[1] + 1, self.label_layers)
         if changed.size == 0:
             return
         first = np.searchsorted(changed, self.t_start)  # tiles are consecutive store ranges
         tiles = np.flatnonzero(np.r_[first[1:], changed.size] > first)
         for t in tiles:
             for pg in self.pages[t]:
-                pg.lab.write(label_bytes(self.src, pg.a, pg.a + pg.n, self.marks))
+                pg.lab.write(label_bytes(self.src, pg.a, pg.a + pg.n, self.marks, self.label_layers))
 
     def set_markers(self, xyz_local: np.ndarray | None, rgb: np.ndarray | None = None):
         """Coloured points drawn on top of everything (local coordinates, uint8 colours), or None."""

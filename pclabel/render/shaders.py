@@ -7,7 +7,7 @@ is normal (0, 0, 1) through world z = 0; a plane frame comes from a plane fit (a
 ``HeightFrame.heights`` is the numpy mirror.
 """
 
-MODE_RGB, MODE_INTENSITY, MODE_HEIGHT, MODE_FLAT, MODE_CLASS, MODE_WRAP, MODE_WRAP_SHADED = range(7)
+MODE_RGB, MODE_INTENSITY, MODE_HEIGHT, MODE_FLAT, MODE_CLASS, MODE_WRAP, MODE_WRAP_SHADED, MODE_LABELS = range(8)
 MODE_NAMES = {
     MODE_RGB: "rgb",
     MODE_INTENSITY: "intensity",
@@ -16,6 +16,7 @@ MODE_NAMES = {
     MODE_CLASS: "class",
     MODE_WRAP: "wrap",
     MODE_WRAP_SHADED: "wrap x intensity",
+    MODE_LABELS: "labels",  # annotation labels (D-007): each label in its colour, the rest dim grey (or hidden)
 }
 
 POINT_VS = """
@@ -35,7 +36,10 @@ uniform float u_h0;
 uniform sampler2D u_cyclic;
 uniform sampler2D u_ramp;
 uniform sampler2D u_classes;  // rgb = class colour, a = visible
+uniform sampler2D u_labels;   // annotation label code -> rgb, a = shown (the labels view)
+uniform int u_labels_only;     // the labels view: hide points that show no label
 uniform int u_clip_on;
+uniform int u_set_on;          // clip to a point set: only points with extra bit 0
 uniform vec3 u_clip_min;
 uniform vec3 u_clip_max;
 uniform int u_vol_on;          // clip volume: 0 off, 1 box, 2 cylinder, 3 loop (a mask) - local coordinates
@@ -61,6 +65,8 @@ in vec4 in_rgb;
 in uint in_int;
 in uint in_label;
 in uint in_flags;
+in uint in_extra;              // GPU-only bits: 1 = in the clip to a point set
+in uint in_ann;                // annotation label code (0: in no labelled point set), the labels view
 out vec3 v_color;
 const vec4 CULLED = vec4(2.0, 2.0, 2.0, 1.0);
 
@@ -82,9 +88,12 @@ void main() {
     vec4 cls = texelFetch(u_classes, ivec2(int(in_label), 0), 0);
     float h = dot(in_pos - u_h_origin, u_h_normal);
     bool clipped = (u_clip_on == 1 && (any(lessThan(in_pos, u_clip_min)) || any(greaterThan(in_pos, u_clip_max))))
-                   || (u_vol_on > 0 && outside_volume(in_pos));
+                   || (u_vol_on > 0 && outside_volume(in_pos))
+                   || (u_set_on == 1 && (in_extra & 1u) == 0u);
     bool sliced = u_band_on == 1 && (h < u_band.x || h > u_band.y);
-    if (clipped || sliced || cls.a < 0.5) {
+    vec4 lab = texelFetch(u_labels, ivec2(int(in_ann), 0), 0);
+    bool labelled = in_ann != 0u && lab.a > 0.5;
+    if (clipped || sliced || cls.a < 0.5 || (u_mode == 7 && u_labels_only == 1 && !labelled)) {
         gl_Position = CULLED;
         gl_PointSize = 1.0;
         v_color = vec3(0.0);
@@ -110,6 +119,8 @@ void main() {
         c = u_flat;
     } else if (u_mode == 4) {
         c = cls.rgb;
+    } else if (u_mode == 7) {
+        c = labelled ? lab.rgb : vec3(0.16 + 0.3 * dot(in_rgb.rgb, vec3(0.299, 0.587, 0.114)));
     } else {
         float phi = fract((h - u_h0) / u_period);
         c = texture(u_cyclic, vec2(phi, 0.5)).rgb;

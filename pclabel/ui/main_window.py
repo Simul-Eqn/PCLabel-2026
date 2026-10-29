@@ -4,16 +4,26 @@ from __future__ import annotations
 
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QKeySequence
-from PySide6.QtWidgets import QFileDialog, QLabel, QMainWindow, QMessageBox, QToolBar
+from PySide6.QtWidgets import (
+    QAbstractSpinBox,
+    QApplication,
+    QFileDialog,
+    QInputDialog,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QToolBar,
+)
 
 from pclabel.analysis.frames import Z_FRAME, HeightFrame, PlaneFitParams, frame_from_points, plane_document
 from pclabel.render.camera import ORTHO
-from pclabel.render.renderer import PointSource
+from pclabel.render.renderer import INSIDE_BIT, PointSource
 from pclabel.render.shaders import MODE_INTENSITY, MODE_NAMES, MODE_WRAP, MODE_WRAP_SHADED
 from pclabel.render.viewport import Viewport
 from pclabel.settings import Settings
@@ -39,6 +49,10 @@ from pclabel.ui.docks import (
 )
 from pclabel.ui.annotate import AnnotationController
 from pclabel.ui.cleanup import CleanController
+from pclabel.ui.density import DensityController
+from pclabel.ui.labels import LabelsController
+from pclabel.ui.pieces import PiecesController
+from pclabel.ui.trees import TreeController
 from pclabel.ui.split import SplitController
 from pclabel.ui.volume import VolumeController
 from pclabel.ui.import_dialog import ImportDialog, run_import
@@ -53,6 +67,23 @@ class _SelectionResult(QObject):
 
 class _GrowResult(QObject):
     done = Signal(object, object, float, object)  # seed tool state, result, seconds, error
+
+
+class _UndoKeysToTheApp(QObject):
+    """Ctrl+Z / Ctrl+Y in a number field undo the app, not the field. A spin box keeps the focus after a change, and
+    Qt's own text undo then claims the keys: each press stepped the number back (e.g. 3D select's vertical lines)
+    instead of undoing the app. Text fields keep their own undo while typing."""
+
+    def eventFilter(self, obj, ev):
+        if ev.type() == QEvent.Type.ShortcutOverride and (
+            ev.matches(QKeySequence.StandardKey.Undo) or ev.matches(QKeySequence.StandardKey.Redo)
+            or (ev.key() == Qt.Key.Key_Y and ev.modifiers() == Qt.KeyboardModifier.ControlModifier)
+        ):  # fmt: skip
+            spin = isinstance(obj, QAbstractSpinBox) or isinstance(getattr(obj, "parent", lambda: None)(), QAbstractSpinBox)
+            if spin:
+                ev.ignore()  # not claimed: the window's Undo / Redo shortcut runs
+                return True
+        return False
 
 
 class MainWindow(QMainWindow):
@@ -92,13 +123,24 @@ class MainWindow(QMainWindow):
         self.volume = VolumeController(self)  # 3D select
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.volume.dock)
         self.tabifyDockWidget(self.display, self.volume.dock)
+        self.trees = TreeController(self)  # identify trees by a band of their trunk (in the 3D select panel)
         self.split = SplitController(self)  # split a point set by roughness
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.split.dock)
         self.tabifyDockWidget(self.display, self.split.dock)
         self.cleanup = CleanController(self)  # clean up the selection by its footprint
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.cleanup.dock)
         self.tabifyDockWidget(self.display, self.cleanup.dock)
+        self.density = DensityController(self)  # the parts of a point set dense enough to work on
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.density.dock)
+        self.tabifyDockWidget(self.display, self.density.dock)
+        self.pieces = PiecesController(self)  # keep the connected pieces of the selection that matter
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.pieces.dock)
+        self.tabifyDockWidget(self.display, self.pieces.dock)
+        self.labels = LabelsController(self)  # the labels view and the label map
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.labels.dock)
+        self.tabifyDockWidget(self.display, self.labels.dock)
         self._locked = (None, np.empty(0, np.int64))  # (annotations version, store indices that cannot be selected)
+        self.clip_set = None  # tools.sets.PointMask: the clip to point sets (drawn, picked and worked on alone)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.annot.dock)
         self.tabifyDockWidget(self.frames_dock, self.annot.dock)
         self.frames_dock.raise_()
@@ -126,6 +168,8 @@ class MainWindow(QMainWindow):
         self.selection_def = None  # how the current selection was made (tool, parameters): recorded by M3
         self.selection_ops: list[dict] = []  # every operation since the last plain replace (for groups)
         self.history = UndoStack()  # Ctrl+Z / Ctrl+Y: the selection, planes and annotations (this session)
+        self._undo_keys = _UndoKeysToTheApp(self)
+        QApplication.instance().installEventFilter(self._undo_keys)
 
         self.s_cursor, self.s_range, self.s_frame, self.s_gl = QLabel(), QLabel(), QLabel(), QLabel()
         self.s_view = QLabel()
@@ -136,6 +180,7 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self.s_gl)
 
         self.display.changed.connect(self._apply_display)
+        self.display.changed.connect(lambda: self.labels.sync())
         self.display.budget_changed.connect(self.viewport.set_point_budget)
         self.display.auto_height.connect(self.auto_height)
         self.display.auto_intensity.connect(self.auto_intensity)
@@ -143,6 +188,7 @@ class MainWindow(QMainWindow):
         self.clip.changed.connect(lambda: self.volume.draw_clip())
         self.clip.from_view.connect(self.clip_from_view)
         self.clip.fit_scene.connect(self.clip_scene)
+        self.clip.use_set.connect(lambda: self.clip_to_selected_sets())
         self.viewport.picked.connect(self._on_pick)
         self.viewport.hovered.connect(self._on_hover)
         self.viewport.frame.connect(self._on_frame)
@@ -156,6 +202,7 @@ class MainWindow(QMainWindow):
         self.frames_dock.tool_requested.connect(self.viewport.set_tool)
         self.frames_dock.depth_mode_chosen.connect(lambda m: self.set_select_through(m == "through"))
         self.frames_dock.delete_requested.connect(self.delete_frame)
+        self.frames_dock.rename_requested.connect(lambda: self.rename_frame())
         self.frames_dock.export_requested.connect(lambda: self.export_plane())
         self.viewport.seed_picked.connect(self._on_seed)
         self.viewport.view_changed.connect(self.s_view.setText)
@@ -210,7 +257,14 @@ class MainWindow(QMainWindow):
         self._action(m, "Height slice on/off", "Shift+H", lambda: self.frames_dock.slice_on.toggle())
         self._action(m, "Clip box on/off", "K", lambda: self.clip.on.toggle())
         self._action(m, "Clip box from view", "Shift+K", self.clip_from_view)
+        self._action(m, "Clip to the point sets selected in Annotations", "Ctrl+K", lambda: self.clip_to_selected_sets())
+        self._action(m, "Point set clip on/off", "Ctrl+Shift+K", self.toggle_point_set_clip)
         self._action(m, "Eye-dome lighting on/off", "Ctrl+E", lambda: self.display.edl.toggle())
+        m.addSeparator()
+        self._action(m, "Labels view on/off (points, segments and curves in their labels' colours)", "B",
+                     lambda: self.labels.set_view())  # fmt: skip
+        self._action(m, "Label map: the labels projected onto a plane, as PNG and JSON...", "Shift+B",
+                     lambda: self.labels.export_map())  # fmt: skip
         m = self.menuBar().addMenu("&Select")
         lasso = self._action(m, "Lasso", "L", lambda: self.toggle_tool("lasso"))
         rect = self._action(m, "Rectangle", "R", lambda: self.toggle_tool("rect"))
@@ -220,12 +274,24 @@ class MainWindow(QMainWindow):
         magic = self._action(m, "Magic select by intensity (click a marking)", "I", lambda: self.toggle_tool("magic"))
         volume = self._action(m, "3D select: box or cylinder (click to place, Enter selects)", "U",
                               lambda: self.toggle_tool("volume"))  # fmt: skip
+        self._action(m, "Keep a piece of the selection (click it; Shift adds, Ctrl takes away)", "P",
+                     lambda: self.toggle_tool("piece"))  # fmt: skip
+        self._action(m, "Tree: click the ground at a trunk, 3D select a band of it, save it as a tree", "Shift+U",
+                     lambda: self.trees.begin())  # fmt: skip
         fit = self._action(m, "Fit plane to selection (height axis)", "F", self.fit_plane)
         m.addSeparator()
         seg = self._action(m, "Line segment (click two points)", "V", lambda: self.toggle_tool("segment"))
         curve = self._action(m, "Curve (click points in order, Enter)", "Shift+V", lambda: self.toggle_tool("curve"))
-        group = self._action(m, "Point set from the selection", "Ctrl+G", lambda: self.annot.points_from_selection())
+        group = self._action(m, "Point set from the selection (in the directory selected in Annotations)", "Ctrl+G",
+                             lambda: self.annot.points_from_selection())  # fmt: skip
+        self._action(m, "Point set from the selection, at the top level", "Ctrl+Shift+G",
+                     lambda: self.annot.points_from_selection(top_level=True))  # fmt: skip
+        self._action(m, "Rename the directory or item selected in Annotations", "F2", lambda: self.annot.rename_selected())
+        self._action(m, "Duplicate the directories and items selected in Annotations", "Ctrl+D",
+                     lambda: self.annot.duplicate_selected())  # fmt: skip
         self._action(m, "Clean up the selection (footprint)...", None, lambda: self.cleanup.open())
+        self._action(m, "Density: the parts of a point set dense enough to work on...", None,
+                     lambda: self.density.start())  # fmt: skip
         self._locks_action = self._action(m, "Locks on (locked labels cannot be selected)", None,
                                           lambda on: self.annot.set_locks_on(on), checkable=True)  # fmt: skip
         self._locks_action.setChecked(True)
@@ -233,7 +299,7 @@ class MainWindow(QMainWindow):
         self._action(m, "Clear selection / tool / pick marker", "Esc", self.escape)
         m = self.menuBar().addMenu("&Window")
         for d in (self.frames_dock, self.annot.dock, self.grow, self.magic, self.volume.dock, self.split.dock,
-                  self.cleanup.dock,
+                  self.cleanup.dock, self.density.dock, self.pieces.dock, self.labels.dock,
                   self.display, self.info,
                   self.clip,
                   self.meta):
@@ -294,6 +360,8 @@ class MainWindow(QMainWindow):
         self._grow_state = None
         self._magic_image = None
         self._normal_voxels = None
+        self.clip_set = None
+        self._show_set_clip(False)
         self.history.clear()
         self._update_undo_actions()
         self._show_selection_count()
@@ -301,8 +369,11 @@ class MainWindow(QMainWindow):
         self.selection_ops = []
         self.annot.set_project(p)
         self.volume.set_project()
+        self.trees.cancel()
         self.split.cancel()
         self.cleanup.cancel()
+        self.density.cancel()
+        self.pieces.cancel()
         self.auto_height()
         self.auto_intensity()
         self.clip_scene()
@@ -322,6 +393,7 @@ class MainWindow(QMainWindow):
         self.clip_scene()
         self.annot.refresh()
         self._apply_display()
+        self.labels.sync(force=True)
 
     def _apply_display(self):
         r = self.viewport.renderer
@@ -329,6 +401,7 @@ class MainWindow(QMainWindow):
             return
         self.display.apply(r.display)
         self.clip.apply(r.display)
+        self.viewport.pick_inside = self._inside()
         self.frames_dock.apply(r.display)
         f = self.frames[self.active_frame]
         r.display.height_normal, r.display.height_origin = f.normal, f.origin
@@ -518,7 +591,59 @@ class MainWindow(QMainWindow):
                       band=tuple(d.band))  # fmt: skip
         if d.clip_volume_on and d.clip_volume is not None:
             kw.update(volume=d.clip_volume)
+        if d.clip_set_on and self.clip_set is not None:
+            kw.update(inside=self.clip_set)
         return SelectFilters(**kw)
+
+    # ---- the clip to point sets: only their points are drawn, picked, read and selected ---------------------
+
+    def _inside(self):
+        """The clip to point sets while it is on (a tools.sets.PointMask), else None."""
+        r = self.viewport.renderer
+        return self.clip_set if r is not None and r.display.clip_set_on else None
+
+    def set_point_set_clip(self, indices, label: str = "", on: bool = True):
+        """Clip to these store indices (sorted): only they are drawn, picked and worked on. None: no point set."""
+        r = self.viewport.renderer
+        if r is None or self.project is None:
+            return
+        self.clip_set = None if indices is None else sets.PointMask(indices, self.project.n, label)
+        vp = self.viewport
+        vp.makeCurrent()
+        try:
+            r.set_marks(INSIDE_BIT, None if self.clip_set is None else self.clip_set.indices)
+        finally:
+            vp.doneCurrent()
+        self._show_set_clip(on)
+        self._apply_display()
+
+    def _show_set_clip(self, on: bool):
+        c, s = self.clip, self.clip_set
+        c.set_on.blockSignals(True)
+        c.set_on.setEnabled(s is not None)
+        c.set_on.setChecked(bool(on and s is not None))
+        c.set_on.blockSignals(False)
+        c.set_label.setText(c.NO_SET if s is None else f"{s.label}: {s.indices.size:,} points")
+
+    def clip_to_selected_sets(self):
+        """Ctrl+K: clip to the point sets selected in the Annotations panel (a directory: all its point sets)."""
+        a = self.annot
+        items = [m for m in a._selected_items() if m.kind == "points"]
+        if not items or self.project is None:
+            self.statusBar().showMessage("select point sets or directories in the Annotations panel first", 4000)
+            return
+        names = [a.model.node(i).name for i in a.selected_ids()]
+        label = ", ".join(names[:3]) + (f" and {len(names) - 3} more" if len(names) > 3 else "")
+        idx = sets.union_all([m.indices for m in items])
+        self.set_point_set_clip(idx, label)
+        self.statusBar().showMessage(f"clipped to {label}: {idx.size:,} points", 4000)
+
+    def toggle_point_set_clip(self):
+        """Ctrl+Shift+K: the clip to point sets off or on again (the first time: the selected point sets)."""
+        if self.clip_set is None:
+            self.clip_to_selected_sets()
+        else:
+            self.clip.set_on.toggle()
 
     def _visible(self, idx):
         """What the clips (box and 3D select volume) and the slice hide is not selected."""
@@ -651,6 +776,12 @@ class MainWindow(QMainWindow):
 
     def _on_seed(self, p_local, op):
         tool = self.viewport.tool
+        if self.project is not None and tool == "piece":
+            self.pieces.click(p_local, op)
+            return
+        if self.project is not None and tool == "tree":
+            self.trees.place(p_local)
+            return
         if self.project is None or tool not in ("grow", "magic"):
             return
         base = self.selection.copy() if op in ("add", "subtract") else np.empty(0, np.int64)
@@ -715,6 +846,7 @@ class MainWindow(QMainWindow):
             self._grow_pending = True
             return
         clip = self._clip_local()
+        inside = self._inside()
         dock = self._seed_dock(st["tool"])
         params = dock.params()
         pr = self.project
@@ -723,20 +855,22 @@ class MainWindow(QMainWindow):
             image = self._magic_image
 
             def run():
-                return magic_select(pr.xyz, pr.intensity, pr.tiles, st["seed"], params, image=image, clip=clip)
+                return magic_select(pr.xyz, pr.intensity, pr.tiles, st["seed"], params, image=image, clip=clip,
+                                    inside=inside)  # fmt: skip
         elif st["mode"] == "normals":
             voxels = self._normal_voxels
 
             def run():
-                return normal_grow(pr.xyz, pr.tiles, st["seed"], params, voxels=voxels, clip=clip)
+                return normal_grow(pr.xyz, pr.tiles, st["seed"], params, voxels=voxels, clip=clip, inside=inside)
         else:
             key = (tuple(st["seed"]), params.cell, params.radius, params.surface_band, params.cell_points,
-                   None if clip is None else (tuple(clip[0]), tuple(clip[1])))  # fmt: skip
+                   None if clip is None else (tuple(clip[0]), tuple(clip[1])), None if inside is None else inside.token)  # fmt: skip
             grid = st["grid"] if st["grid_key"] == key else None
             st["want_key"] = key
 
             def run():
-                return ground_grow(pr.xyz, pr.intensity, pr.tiles, st["seed"], params, grid=grid, clip=clip)
+                return ground_grow(pr.xyz, pr.intensity, pr.tiles, st["seed"], params, grid=grid, clip=clip,
+                                   inside=inside)  # fmt: skip
 
         self._grow_busy = True
         dock.result.setText("working...")
@@ -833,6 +967,8 @@ class MainWindow(QMainWindow):
 
     def _show_frames(self):
         self.frames_dock.set_frames([f.name for f in self.frames], self.active_frame)
+        if hasattr(self, "labels"):
+            self.labels.fill_planes()
         self.frames_dock.report.setText(fmt_frame_report(self.frames[self.active_frame]))
 
     def _save_frames(self):
@@ -883,6 +1019,29 @@ class MainWindow(QMainWindow):
         self._last_plane = (len(self.frames) - 1) or None
         self.activate_frame(0)
         self.statusBar().showMessage(f"deleted {name}", 4000)
+
+    def rename_frame(self, name: str | None = None):
+        """Rename the plane shown in the Height axis panel (None: ask). Names stay unique; undoable."""
+        i = self.active_frame
+        if self.project is None or i == 0:
+            self.statusBar().showMessage("choose a fitted plane first (z is the scan frame)", 4000)
+            return
+        f = self.frames[i]
+        if name is None:
+            name, ok = QInputDialog.getText(self, "Rename plane", "name:", text=f.name)
+            if not ok:
+                return
+        name = name.strip()
+        if not name or name == f.name:
+            return
+        if name in {g.name for g in self.frames}:
+            self.statusBar().showMessage(f"there is already a {name!r}", 5000)
+            return
+        self.checkpoint("frames", f"rename {f.name}")
+        self.frames[i] = replace(f, name=name)  # a new frame: the undo snapshot keeps the old one
+        self._show_frames()
+        self._save_frames()
+        self.statusBar().showMessage(f"{f.name} renamed {name}", 4000)
 
     def toggle_frame(self):
         if self.active_frame > 0:

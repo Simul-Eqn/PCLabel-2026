@@ -403,6 +403,39 @@ Results (in progress):
     - Locks can be switched off as a whole (the choice kept), and `other` unlocked like any label. Set operations on
       point sets (∪, ∩, A \ B, B \ A, △; directories count as all their point sets) replace "merge points"; the
       result is a new point set or the selection. 166 tests pass.
+    - Clip to point sets (`Ctrl+K`): only the set is drawn and picked, and every tool reads only its points. On
+      streets 1 (GPU) clipping to `bti_pavement` (26.0M points) took 28 ms and left the frame at 1.5 ms GPU; grow
+      select from a seed on it took 25.4M points (all in the set) in 0.58 s, against 190.6M in 3.33 s
+      unclipped. 175 tests pass.
+    - Density (2026-10-21): the parts of a point set dense enough to work on, default 2,000 points/m² from
+      O-0011 (thinned lane dashes and the user's own clicks; figure `docs/figures/density_threshold.png`). On
+      `bottom_road_cleaned` (121.1M points) counting took 1.09 s and each threshold change 0.61 s, in a worker:
+      the dense part holds 99.5 % of the points but only 1,168 of 2,250 m² of the road. Also flags as labels
+      (`marking` for road lines, R-006; label export schema 2) and Ctrl+Z in number fields undoing the app.
+    - Pieces (`P`): keep the clicked connected piece of the selection, the largest, or drop the small ones (stray
+      points of a 3D select). On streets 1: 9.8M points in 0.24 s, 121.1M in 2.01 s (327 small pieces in
+      `bottom_road_cleaned`).
+    - A `ramp` class (taxonomy 0.3) and uncertain labels (the tree's "unsure" box and an "uncertain" button;
+      annotations schema 2, label export schema 3; schema 1 annotations still read). Since 2026-10-26 only items,
+      not directories, can be uncertain (annotations schema 3, label export schema 4).
+    - The tree tool (`Shift+U`, R-015 proposed): click the ground at a trunk; a cylinder 1.00–1.10 m above it;
+      Enter; "save the selection as a tree" makes `tree NN` (in `trees`, or a chosen directory) with the band and
+      its circle fit (position at
+      the ground height, girth). 3D select's keys now also work while one of its number fields has the focus.
+      On `tree_example` (streets 1) the band's fit: 47,527 points, girth 1.20 m, 0.9 cm rms.
+    - Annotations (2026-10-26 to 28): Ctrl+G into the selected directory (Ctrl+Shift+G: the top level); duplicate
+      (Ctrl+D); F2 renames anything wherever it is; planes can be renamed; Ctrl+Z, Ctrl+K, Ctrl+D no longer go to
+      3D select's Z, K, D keys while it is the tool.
+    - Labels view (`B`) and label map (`Shift+B`, 2026-10-28): point sets, segments and curves in their labels'
+      colours, a legend with colours saved per project (annotations schema 4), and the labels projected onto a
+      plane as PNG and JSON (`pclabel.label-map/1`). On streets 1 the map of the labelled sets (15M points, 6
+      lines) took 0.97 s at 5 cm (4,860 x 5,242 px), 1.90 s at 2 cm, 8.1 s with every point as grey context.
+      201 tests pass.
+    - `road_line` class (2026-10-28, taxonomy 0.4, id 10): part of `road` through the new taxonomy key
+      `subset_of`; label export schema 5 counts the road with its lines and reports line points outside the road.
+      R-006 rewritten, still proposed.
+    - Export annotations by label (2026-10-29, the Labels panel): the items with the ticked labels, in their
+      directories, as an annotations file (schema 5 adds `labels_exported`). 203 tests pass.
 
     On streets 1 (GPU) at the magic-select site:
     - a 1 m cylinder took 107,891 points in 0.16 s;

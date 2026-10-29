@@ -24,7 +24,7 @@ and the panel.
 from __future__ import annotations
 
 import numpy as np
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -68,9 +68,12 @@ class AnnotationTree(QTreeWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setHeaderLabels(["name", "label", "contents"])
+        self.setHeaderLabels(["name", "label", "unsure", "contents"])
         self.setColumnWidth(0, 160)
         self.setColumnWidth(1, 90)
+        self.setColumnWidth(2, 52)
+        self.headerItem().setToolTip(2, "the item's label is uncertain (tick it here, or \"uncertain\" below); only "
+                                        "point sets, segments and curves, not directories")  # fmt: skip
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.setEditTriggers(QAbstractItemView.EditTrigger.EditKeyPressed)
@@ -98,7 +101,9 @@ class AnnotationDock(QDockWidget):
         w = QWidget()
         v = QVBoxLayout(w)
         hint = QLabel("Segment (V): two clicks. Curve (Shift+V): clicks in order, then Enter. Ctrl+G: the selection "
-                      "as a point set. Drag onto a directory to put things in it. F2 renames.")  # fmt: skip
+                      "as a point set, in the selected directory (or beside the selected item); Ctrl+Shift+G: at the "
+                      "top level. Drag onto a directory to put things in it. F2 renames the selected entry, inside a "
+                      "directory too.")  # fmt: skip
         hint.setWordWrap(True)
         v.addWidget(hint)
         row = QHBoxLayout()
@@ -204,6 +209,9 @@ class AnnotationDock(QDockWidget):
         self.label = QComboBox()
         self.label.setEditable(True)
         self.label.setToolTip("a taxonomy class, or any text; empty clears the label")
+        self.uncertain = QPushButton("uncertain")
+        self.uncertain.setToolTip("mark the labels of the selected point sets, segments and curves as uncertain (again: "
+                                  "sure); directories cannot be; exported with the labels")  # fmt: skip
         self.set_label = QPushButton("set label")
         self.set_label.setToolTip("give the selected directories or items this label (empty: remove theirs)")
         self.locks = QToolButton()
@@ -214,19 +222,27 @@ class AnnotationDock(QDockWidget):
         self.locks.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         lrow.addWidget(self.label, 1)
         lrow.addWidget(self.set_label)
+        lrow.addWidget(self.uncertain)
         lrow.addWidget(self.locks)
         v.addLayout(lrow)
         grid = QGridLayout()
         self.new_dir = QPushButton("new directory")
         self.new_dir.setToolTip("at the top level, or inside the selected directory")
         self.points = QPushButton("points (Ctrl+G)")
-        self.points.setToolTip("make the current selection a point set")
+        self.points.setToolTip("make the current selection a point set: inside the directory selected here, or beside "
+                               "the item selected here; at the top level if nothing is (Ctrl+Shift+G: always at the top "
+                               "level)")  # fmt: skip
         self.color = QPushButton("colour")
         self.color.setToolTip("the colour of the selected directory (everything in it) or top-level item")
         self.select = QPushButton("select points")
         self.select.setToolTip("make the point sets among the selected items (and in selected directories) the selection")
         self.edit = QPushButton("edit curve")
         self.delete = QPushButton("delete")
+        self.rename = QPushButton("rename (F2)")
+        self.rename.setToolTip("type a new name for the selected directory, point set, segment or curve (wherever it is)")
+        self.duplicate = QPushButton("duplicate (Ctrl+D)")
+        self.duplicate.setToolTip("copy the selected directories (with everything in them) and items; each copy goes "
+                                  "right after its original, named \"... copy\"")  # fmt: skip
         self.export_sel = QPushButton("export selected")
         self.export_all = QPushButton("export all")
         self.import_ = QPushButton("import")
@@ -239,9 +255,15 @@ class AnnotationDock(QDockWidget):
         self.join.setToolTip("join the two selected curves into one, choosing which ends meet")
         self.export_labels = QPushButton("export labels")
         self.export_labels.setToolTip("everything grouped by label (not by directory), as JSON")
+        self.density = QPushButton("density...")
+        self.density.setToolTip("the parts of the selected point set dense enough to work on, e.g. to magic select "
+                                "road lines (the Density panel)")  # fmt: skip
+        self.clip_to = QPushButton("clip to")
+        self.clip_to.setToolTip("show and work on only the selected point sets (and those in selected directories); "
+                                "Ctrl+Shift+K turns it off and on")  # fmt: skip
         for i, b in enumerate((self.new_dir, self.points, self.color, self.select, self.edit, self.delete,
-                               self.export_sel, self.export_all, self.import_, self.export_labels,
-                               self.join, self.split, self.set_ops)):  # fmt: skip
+                               self.rename, self.duplicate, self.export_sel, self.export_all, self.import_, self.export_labels,
+                               self.join, self.split, self.set_ops, self.clip_to, self.density)):  # fmt: skip
             grid.addWidget(b, i // 4, i % 4)
         v.addLayout(grid)
         self.status = QLabel("")
@@ -294,12 +316,16 @@ class AnnotationController(QObject):
         d.select.clicked.connect(self.select_points)
         d.edit.clicked.connect(self.edit_selected)
         d.delete.clicked.connect(lambda: self.delete_selected())
+        d.duplicate.clicked.connect(lambda: self.duplicate_selected())
+        d.rename.clicked.connect(lambda: self.rename_selected())
         d.export_sel.clicked.connect(lambda: self.export(selected=True))
         d.export_all.clicked.connect(lambda: self.export())
         d.import_.clicked.connect(lambda: self.import_())
         d.export_labels.clicked.connect(lambda: self.export_labels())
         d.join.clicked.connect(lambda: self.start_join())
         d.split.clicked.connect(lambda: self.w.split.start())
+        d.clip_to.clicked.connect(lambda: self.w.clip_to_selected_sets())
+        d.density.clicked.connect(lambda: self.w.density.start())
         d.set_ops.clicked.connect(lambda: self.start_set_ops())
         d.ops_new.clicked.connect(lambda: self.set_op_result("new"))
         d.ops_select.clicked.connect(lambda: self.set_op_result("select"))
@@ -313,6 +339,7 @@ class AnnotationController(QObject):
             c.activated.connect(lambda _: self.refresh())
         d.join_close.toggled.connect(lambda _: self.refresh())
         d.set_label.clicked.connect(lambda: self.set_label())
+        d.uncertain.clicked.connect(lambda: self.set_uncertain())
         d.locks_menu.aboutToShow.connect(self._fill_locks)
         d.edit_mode.activated.connect(lambda _: self.set_curve_mode(d.edit_mode.currentData()))
         d.edit_closed.clicked.connect(lambda on: self.set_closed(on))
@@ -659,18 +686,33 @@ class AnnotationController(QObject):
 
     # ---- the tree -----------------------------------------------------------------------------------------------
 
-    def points_from_selection(self):
+    def points_from_selection(self, top_level: bool = False):
+        """The selection as a new point set (Ctrl+G): inside the directory selected in the tree, or in the directory of
+        the one item selected there; at the top level when nothing (or more than one thing) is selected, or with
+        ``top_level`` (Ctrl+Shift+G)."""
         if self.project is None:
             return
         sel = self.w.selection
         if sel.size == 0:
             self.dock.status.setText("nothing selected")
             return
+        into = None if top_level else self._directory_for_new()
         self._checkpoint("new point set")
         ps = self.model.add(PointSet(sel.copy(), [dict(op) for op in self.w.selection_ops]))
-        self._changed(f"{ps.name}: {sel.size:,} points")
+        if into is not None:
+            self.model.move([ps.id], into.id)
+        self._changed(f"{ps.name}: {sel.size:,} points" + (f", in {into.name}" if into is not None else ", at the top level"))
         self.dock.show()
         self.dock.raise_()
+
+    def _directory_for_new(self):
+        """Where a new point set goes: the one directory selected in the tree, or the directory of the one item
+        selected (None: the top level)."""
+        ids = self.selected_ids()
+        if len(ids) != 1:
+            return None
+        x = self.model.node(ids[0])
+        return x if x.kind == "directory" else self.model.parent(x.id)
 
     def selected_ids(self) -> list:
         return [it.data(0, ROLE)[1] for it in self.dock.tree.selectedItems()]
@@ -751,6 +793,21 @@ class AnnotationController(QObject):
         self.model.locks_on = bool(on)
         self._changed("locks on: locked labels cannot be selected" if on else "locks off: everything can be selected")
 
+    def set_uncertain(self, on: bool | None = None):
+        """Mark the selected items uncertain (None: uncertain, or sure if all already are). Directories cannot be."""
+        picked = [self.model.node(i) for i in self.selected_ids()]
+        nodes = [n for n in picked if n.kind != "directory"]
+        if not nodes:
+            self.dock.status.setText("select point sets, segments or curves: directories cannot be uncertain"
+                                     if picked else "select point sets, segments or curves first")  # fmt: skip
+            return
+        on = not all(n.uncertain for n in nodes) if on is None else bool(on)
+        self._checkpoint("uncertain" if on else "sure")
+        for n in nodes:
+            n.uncertain = on
+        names = ", ".join(n.name for n in nodes[:3]) + (f" and {len(nodes) - 3} more" if len(nodes) > 3 else "")
+        self._changed(f"{names}: label {'uncertain' if on else 'sure'}")
+
     def _class_ids(self) -> dict:
         return {c["name"]: int(c["id"]) for c in self.w.taxonomy.classes if int(c["id"]) != 0}
 
@@ -762,21 +819,28 @@ class AnnotationController(QObject):
                                                   "Labels (*.json)")  # fmt: skip
             if not path:
                 return None
-        summary = self.model.export_labels(path, self.project, self._class_ids())
+        flags = {f["name"]: int(f["bit"]) for f in self.w.taxonomy.flags}
+        summary = self.model.export_labels(path, self.project, self._class_ids(), flags, self.w.taxonomy.subset_of())
         parts = [f"{k or 'unlabelled'}: {n} item{'s' * (n != 1)}" + (f", {pts:,} points" if pts else "")
                  for k, (n, pts) in sorted(summary.items(), key=lambda kv: (kv[0] == "", kv[0]))]  # fmt: skip
         self.dock.status.setText(f"exported labels to {path}\n" + "; ".join(parts))
         return path
 
     def _fill_labels(self):
-        """The label box: the enabled taxonomy classes, then labels in use that are not classes."""
+        """The label box: the enabled taxonomy classes, then the flags (e.g. ``marking``: paint keeps the class of the
+        surface it is on, R-006, so a ``marking`` point set overlaps the road's), then other labels in use."""
         box = self.dock.label
         text = box.currentText()
         names = [c["name"] for c in self.w.taxonomy.classes if int(c["id"]) != 0 and c.get("enabled", True)]
-        used = sorted({x.label for x, _ in self.model.walk() if x.label} - set(names))
+        flags = [f["name"] for f in self.w.taxonomy.flags]
+        used = sorted({x.label for x, _ in self.model.walk() if x.label} - set(names) - set(flags))
         box.blockSignals(True)
         box.clear()
-        box.addItems(names + used)
+        box.addItems(names)
+        for f in self.w.taxonomy.flags:
+            box.addItem(f["name"])
+            box.setItemData(box.count() - 1, f"flag: {f.get('def', '')}", Qt.ItemDataRole.ToolTipRole)
+        box.addItems(used)
         box.setCurrentText(text)
         box.blockSignals(False)
 
@@ -909,6 +973,44 @@ class AnnotationController(QObject):
             self.done()
         self._changed()
 
+    def rename_selected(self):
+        """Type a new name for the one entry selected in the tree (F2, from anywhere in the window): a directory or an
+        item, at the top level or inside directories. Always the name column, whichever column was clicked."""
+        ids = self.selected_ids()
+        if len(ids) != 1:
+            self.dock.status.setText("select one directory or item to rename")
+            return
+        self.dock.show()
+        self.dock.raise_()  # it may be a tab behind another panel: edit once it is laid out
+
+        def start():
+            item = self._item_of(ids[0])
+            if item is None:
+                return
+            t = self.dock.tree
+            t.setCurrentItem(item, 0)
+            t.scrollToItem(item)
+            t.setFocus()
+            t.editItem(item, 0)
+
+        QTimer.singleShot(0, start)
+
+    def duplicate_selected(self):
+        """Copy the directories and items selected in the tree (Ctrl+D); the copies are selected afterwards."""
+        ids = self.selected_ids()
+        if not ids:
+            self.dock.status.setText("select directories or items to duplicate first")
+            return
+        self._checkpoint(f"duplicate {len(ids)} entr{'y' if len(ids) == 1 else 'ies'}")
+        copies = self.model.duplicate(ids)
+        self.dock.tree.clearSelection()  # the copies are selected instead, e.g. to drag them elsewhere
+        self._changed(", ".join(c.name for c in copies[:3]) + (f" and {len(copies) - 3} more" if len(copies) > 3 else ""))
+        for c in copies:
+            item = self._item_of(c.id)
+            if item is not None:
+                item.setSelected(True)
+        return copies
+
     def export(self, path=None, selected: bool = False):
         if self.project is None:
             return
@@ -959,7 +1061,7 @@ class AnnotationController(QObject):
 
         def add(x, parent_item):
             label, giver = self.model.label_of(x.id)
-            it = QTreeWidgetItem([x.name, label, x.describe()])
+            it = QTreeWidgetItem([x.name, label, "", x.describe()])
             it.setData(0, ROLE, (x.kind, x.id))
             if label and giver != x.id:  # inherited from a directory
                 it.setForeground(1, Qt.GlobalColor.gray)
@@ -969,10 +1071,20 @@ class AnnotationController(QObject):
                 it.setToolTip(1, ("from " + self.model.node(giver).name + "; " if giver != x.id else "")
                               + "locked: cannot be selected")  # fmt: skip
             it.setFlags(it.flags() | Qt.ItemFlag.ItemIsEditable)
+            if x.kind != "directory":  # only items can be uncertain
+                it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                it.setCheckState(2, Qt.CheckState.Checked if x.uncertain else Qt.CheckState.Unchecked)
+            else:
+                it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)  # Qt's default has it: no box at all
+            if x.kind != "directory" and x.uncertain:
+                f = it.font(1)
+                f.setItalic(True)
+                it.setFont(1, f)
+                it.setToolTip(1, (it.toolTip(1) + "; " if it.toolTip(1) else "") + "uncertain")
             c = QColor(self.model.color_of(x.id))
             c.setAlpha(110 if x.kind == "directory" else 60)
             it.setBackground(0, c)
-            it.setForeground(2, Qt.GlobalColor.gray)
+            it.setForeground(3, Qt.GlobalColor.gray)
             if x.kind != "directory":
                 it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsDropEnabled)
             if parent_item is None:
@@ -999,6 +1111,16 @@ class AnnotationController(QObject):
 
     def on_item_changed(self, item, col):
         x = self.model.node(item.data(0, ROLE)[1])
+        if col == 2:  # the uncertain box (items only)
+            if x.kind == "directory":
+                return
+            on = item.checkState(2) == Qt.CheckState.Checked
+            if on != x.uncertain:
+                self._checkpoint(f"{x.name}: {'uncertain' if on else 'sure'}")
+                x.uncertain = on
+                # rebuilt once Qt is done with this item (rebuilding now would delete it under the signal)
+                QTimer.singleShot(0, lambda: self._changed(f"{x.name}: label {'uncertain' if on else 'sure'}"))
+            return
         if col == 1:  # the label typed in the tree
             label = item.text(1).strip()
             if label != x.label:
@@ -1038,9 +1160,17 @@ class AnnotationController(QObject):
             return
         off = self.project.offset
         lines, points = [], []
+        labels = getattr(self.w, "labels", None)
+        by_label = labels is not None and labels.active()  # the labels view: segments and curves in label colours
+        if labels is not None:
+            labels.sync()
         for m in self.model.items():
             hl = m.id in self.highlight or m is self.editing
             col = rgba(self.model.color_of(m.id))
+            if by_label and m.kind != "points":
+                col = labels.vector_rgba(m)
+                if col is None:  # its label is unticked in the Labels panel
+                    continue
             width = 4.5 if hl else 2.5
             if m.kind == "segment":
                 ends = np.array([m.a, m.b]) - off

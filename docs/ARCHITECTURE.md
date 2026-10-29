@@ -110,7 +110,7 @@ compare with the expected source indices.
   journal/ops.jsonl       one line per operation (below)
   journal/data/<op>.npz   indices and previous values per operation
   frames.json             height frames, schema pclabel.frames/1 (below)
-  annotations.json        segments, curves and point sets in directories, schema pclabel.annotations/1 (below)
+  annotations.json        segments, curves and point sets in directories, schema pclabel.annotations/5 (below)
   annotations/<id>.npy    a point set's store indices (int64, sorted)
   surfaces/<name>.npz     reference / relief surfaces (grid origin, cell, heights, mask, parameters)
   regions.json            assessed regions (polygon, z range, per-class status) and patrol records
@@ -150,14 +150,21 @@ relative to the offset), `size` f8 (quadtree node edge, m), `start count` u8 (st
 
 Frames never change stored coordinates (D-006). Algorithms can read this file to use the same "height above road".
 
-**`annotations.json` and exported annotations, schema `pclabel.annotations/1`** (written atomically; it replaced
-`pclabel.groups/1`, which is no longer read):
+**`annotations.json` and exported annotations, schema `pclabel.annotations/5`** (2 added `uncertain` on nodes,
+2026-10-22; 3 keeps it on items only, 2026-10-26; 4 added `label_colors`, 2026-10-28; 5 added `labels_exported`,
+2026-10-29. Schema 1 files still read,
+with nothing uncertain; in schema 2 files an uncertain directory passes its mark to the items that take its label;
+schema 3 files read with no label colours. Written atomically; it replaced `pclabel.groups/1`, which is no longer
+read):
 - **Header:** `{schema, coordinates, source: {file, sha256, n_valid}, offset, counter, locks, unlocked, locks_on,
-  tree: [...]}`. `locks` lists the labels whose points cannot be selected. Classes with `selectable: false` in the
+  label_colors, tree: [...]}`, and `labels_exported` in an export by label (below). `label_colors` maps a label to `#rrggbb` for the labels view and the label map (a
+  label not listed takes its taxonomy class colour); importing a file adds the colours of labels new to the
+  project. `locks` lists the labels whose points cannot be selected. Classes with `selectable: false` in the
   taxonomy are locked as well, except those listed in `unlocked`. `locks_on: false` switches all of them off
   (missing: true).
 - **Coordinates:** every coordinate is in the scan frame (world = stored + offset), metres, float64.
-- **Tree:** a list of nodes in display order, each `{id, type, name, color, label, ...}`. `label` is a taxonomy
+- **Tree:** a list of nodes in display order, each `{id, type, name, color, label, ...}`; items (not directories)
+  also have `uncertain` (true/false: the item's label is uncertain). `label` is a taxonomy
   class name or any text; empty means "the enclosing directory's".
   - `directory`: `children` (nodes). `color` may be null: the parent's colour.
   - Items draw in the colour of the nearest enclosing directory that has one, else in their own `color`.
@@ -176,14 +183,22 @@ Frames never change stored coordinates (D-006). Algorithms can read this file to
       `handles_out[k]`, `handles_in[k+1]`, `nodes[k+1]`.
   - `points`: `count`, `provenance` (the selection operations), and either `file` (the project's copy: store
     indices in `annotations/<id>.npy`) or `source_indices` (an export: sorted source indices, the export order).
-- **Labels export, schema `pclabel.annotation-labels/1`:** `{schema, coordinates, source, offset, labels: [...],
-  unlabelled, overlaps}`.
-  - Each label is `{label, class_id (null if not a taxonomy class), counts {segment, curve, points}, points
-    (distinct), items}`.
+- **Labels export, schema `pclabel.annotation-labels/5`** (2 added `kind` and `flag_bit`, 2026-10-21; 3 added the
+  uncertain counts and marks, 2026-10-22; 4 dropped `uncertain_from`, 2026-10-26; 5 added the subsets, 2026-10-28):
+  `{schema, coordinates, source, offset, labels: [...], unlabelled, overlaps}`.
+  - A class that is part of another (taxonomy `subset_of`, e.g. `road_line` of `road`) also has `subset_of` and
+    `outside_parent` (its distinct points in no point set of the parent). A class with subsets in use also has
+    `subsets` (their names) and `points_with_subsets` (its distinct points with theirs).
+  - Each label is `{label, kind ("class", "flag" or "text"), class_id (null if not a taxonomy class), flag_bit
+    (null if not a taxonomy flag), counts {segment, curve, points}, points (distinct), uncertain_items,
+    uncertain_points (distinct points in uncertain point sets), items}`. A flag label (e.g. `marking`, R-006) is
+    meant to overlap a class's points.
+  - Each item has its own `uncertain` (true/false).
   - Items are as in the tree, plus `path` (enclosing directory names) and `label_from` (the name of the node that
     carries the label).
-  - Labels are ordered taxonomy classes first (by id), then other labels by name.
-  - `overlaps` lists `{labels: [a, b], points}` for labels whose point sets share points.
+  - Labels are ordered taxonomy classes first (by id), then flags (by bit), then other labels by name.
+  - `overlaps` lists `{labels: [a, b], points, subset}` for labels whose point sets share points; `subset` is true
+    when one is part of the other (expected).
 - **Import:** source indices are mapped back to store indices with one parallel pass over `source_index`
   (0.55 s on streets 1). Point sets are only imported into a project of the same source (`sha256` and `n_valid`).
 
@@ -206,7 +221,9 @@ As built in M1 (`pclabel/render/`). `renderer.py` uses moderngl only and runs in
   256k points each), always a prefix of the tile. A distant tile that needs a few hundred points costs one
   350 KB page.
   - Each page has a geometry buffer (20 B/point: position f32 × 3 relative to the offset, rgba u8 × 4, intensity
-    u16, pad) and a label buffer (2 B/point: label u8, flags u8), so label edits re-upload only label bytes.
+    u16, pad) and a label buffer (4 B/point: label u8, flags u8, GPU-only extra bits u8, GPU-only annotation
+    label code u8 for the labels view), so label edits re-upload only label bytes. Extra bit 0 marks the clip to
+    point sets.
   - Memory budget: `gpu_memory_gb` (8 GB) in hardware mode, `software_memory_gb` (2 GB) in software mode.
   - Eviction drops the last page of a tile (prefixes stay intact): unwanted tiles first, then the least recently
     used. Wanted pages are never evicted. If the budget cannot hold everything wanted, the frame reports
@@ -273,7 +290,9 @@ As built in M1 (`pclabel/render/`). `renderer.py` uses moderngl only and runs in
   - It runs in a worker thread. The app keeps the selection as a sorted index array.
   - The renderer marks selected points with bit 7 of the flags byte in the GPU label buffers only (the taxonomy
     uses bits 0–4). The point shader tints them. Bits 6 and 5, also GPU-only, mark a preview group (orange) and
-    points to look at (magenta). The split tool uses them; the tint priority is bit 5, then 6, then 7.
+    points to look at (magenta). The split tool uses them; the tint priority is bit 5, then 6, then 7. The flags
+    byte is then full, so the clip to point sets uses bit 0 of a third, GPU-only byte (`INSIDE_BIT`); the shader
+    drops unmarked points while `u_set_on` is set.
   - A selection change rewrites the label buffers of the resident pages of affected tiles. Pages packed under an
     older selection are corrected before upload. Labelling goes through the journal (M3).
 - **3D select** (`tools/volume.py`): tiles whose bounds meet the volume's bounding box are tested point by point
@@ -295,6 +314,20 @@ As built in M1 (`pclabel/render/`). `renderer.py` uses moderngl only and runs in
 - **Locks:** the window keeps the sorted store indices of locked points, recomputed when the annotations or the
   locks change. Every selection result except a subtraction is filtered against them with a parallel
   binary-search membership test (`store.annotations.isin_sorted`).
+- **Clip to point sets** (`tools/sets.py: PointMask`): the chosen point sets' store indices, plus a dense boolean
+  mask over the store (1 B/point: 634 MB for streets 1, built in about 10 ms by a parallel scatter).
+  - Every kernel that reads points takes it (`inside=`): the ground grid, the magic picture, the geometric voxels,
+    picking and the clean-up's columns. They skip tiles that hold none of the set's points (two binary searches
+    per tile) and test `mask[i]` for the rest. `SelectFilters.inside` does the same for shapes and 3D select.
+  - Cached grids, pictures and voxels carry the mask's `token` in their keys, so a new clip never reuses a cache
+    built from other points.
+- **Pieces** (`tools/pieces.py`): the selected points' voxel keys (numba, parallel) go into the open-addressing
+  table of `tools/normals.py` (doubled when half full); a union-find over the occupied voxels joins each with its
+  13 forward neighbours, and pieces are numbered by size. A click looks for the nearest occupied voxel within
+  30 cm. Memory: 8 B per selected point for its key and 8 B for its slot, plus the table.
+- **Density** (`tools/density.py`): the set's points projected across the height axis (numba, parallel) into
+  int32 column numbers, counted with `bincount`; the density is two disk convolutions (points, occupied columns).
+  Thresholds and the smallest piece are cheap to change (labels on the column grid, one gather per point).
 - **Seed tools** (`tools/ground.py`, `tools/magic.py`): grids over xy around the click.
   - Each tile in reach is read by a worker thread into its own block of the grid. Blocks are merged in tile order,
     so the result equals one pass over the tiles in that order.
@@ -348,7 +381,8 @@ As built in M1 (`pclabel/render/`). `renderer.py` uses moderngl only and runs in
 | observations | JSONL as stored, plus markdown in the OBSERVATIONS.md template |
 | threshold / statistics reports | JSON, CSV, markdown (SPEC §10) |
 | frames / surfaces | JSON / npz, so algorithms can use the same "height above road" |
-| annotations | JSON, schema `pclabel.annotations/1` (above): segments, curves and point sets (source indices) in directories; all, or the selected entries |
+| annotations | JSON, schema `pclabel.annotations/5` (above): segments, curves and point sets (source indices) in directories; all, the selected entries, or by label: only the items whose label (own or inherited; "" for none) is in `labels_exported`, each in its directories (which keep their names and labels but only those items), so the file imports with the same labels |
+| label map | PNG (the map, then a 240 px legend strip on the right) and a JSON sidecar, schema `pclabel.label-map/1`: `source`, `offset`, `plane` (the frame), `transform {plane_normal, plane_origin (world), map_x, map_y, pixel, width, height (the map's columns and rows, without the strip), top_left (map metres), pixel_to_world}` (world = plane_origin + (top_left[0] + (col + 0.5) pixel) map_x + (top_left[1] − (row + 0.5) pixel) map_y), `image {png, map_columns, legend_strip}`, `params {pixel, dot, line_width, margin, h_min, h_max (null: none), max_side, context}`, `overlaps` (the drawing order), `legend [{label, color, code, class_id, flag_bit, pixels, points_drawn}]`, `vectors [{name, kind, label, closed, uncertain, map_xy}]` (map metres), `seconds`, `created` |
 | a plane | JSON, schema `pclabel.plane/1`: `name`, `equation {a, b, c, d}` (`a x + b y + c z + d = 0`, unit normal up, scan coordinates: the left side is the height above the plane), `z_of_xy {p, q, r}`, `normal`, `origin`, `along`, `fit` (the frame's report), `source`, `offset` |
 
 Every export writes its sidecar and never overwrites without asking.

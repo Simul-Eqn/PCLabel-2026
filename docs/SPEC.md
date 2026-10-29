@@ -50,8 +50,9 @@ internals are in [ARCHITECTURE.md](ARCHITECTURE.md).
   settings. Intensity and RGB depend on these, and observations show them.
 
 **As built in M1** (`python -m pclabel [project] [--gl hardware|software]`):
-- **Docks:** Display, Point info, Clip box and Scan metadata (the Window menu shows or hides them). The other
-  docks arrive with their milestones.
+- **Docks:** Display, Point info, Clips (the clip box, the 3D select clip and the clip to point sets; it was "Clip
+  box" in M1) and Scan metadata (the Window menu shows or hides them). The other docks arrive with their
+  milestones.
 - **Mouse, the same in every view** (changed 2026-10-19 after the first use: rotating around the point under the
   cursor made the view jump when a drag started, and the result depended on where the drag started):
   - left drag rotates, and so does right drag (changed 2026-10-19 at the user's request). In perspective the
@@ -117,6 +118,7 @@ is instant: no CPU pass over points.
 | **local relief** | h − smoothed h | depressions, ruts, small steps anywhere |
 | class | label colours, per-class show/hide/solo | labelling |
 | class over context | labels over a dimmed greyscale | labelling against context |
+| **labels** (built 2026-10-28) | annotation labels (D-007): every point set in its label's colour, the rest dim grey or hidden; segments and curves in their labels' colours (below) | seeing what is labelled, and how |
 | flags | ambiguous / marking / … | review |
 | density | points per area (cells) | occlusion shadows, no-point strips, scanner blind spot |
 | range / incidence | distance and angle from the scanner origin | why a surface looks different; off for mobile scans |
@@ -164,6 +166,42 @@ Let `h` be a point's height in the active reference frame, or above the referenc
   of the k nearest neighbours, for a region only.
 - **Test:** a numpy mirror of the shader formula is unit-tested on synthetic heights, including band edges at
   multiples of P.
+
+### labels view and label map (built 2026-10-28, the user's request)
+
+- **Labels view:** `B` (or the "labels" colour mode, or the Labels panel's button) colours every point set's points
+  by its label, its own or its directory's (D-007); segments and curves take their labels' colours too. Points in
+  no shown labelled set are dim grey, or hidden with "only labelled points". `B` again goes back to the colour mode
+  before.
+  - Where point sets overlap, the smaller set shows: a `marking` set over the `road` set it lies in (R-006).
+  - Done on the GPU: each point's label code is a fourth byte in the label buffer, so switching modes costs
+    nothing; an annotation change rewrites the resident pages of the tiles its sets touch.
+- **Legend** (the Labels panel): the labels in use (taxonomy classes in order, then flags, then other labels, then
+  "(no label)"), with colour, items and points.
+  - A label's colour is its taxonomy class colour; a flag or free-text label gets a palette colour once. Double-click
+    a colour to change it. Colours are saved with the annotations (`label_colors`).
+  - Untick a label to leave it out of the view and the map. "(no label)" starts unticked: on streets 1, the 32
+    unlabelled point sets hold 848M point references and would make a map slow (22 s instead of 1 s). "tick all" and
+    "tick none" set every label at once.
+- **Export annotations by label** ("export annotations...", 2026-10-29, the user's request): the point sets,
+  segments and curves whose labels are ticked, as an annotations file (the "export all" format, schema 5 with
+  `labels_exported`).
+  - Each item stays in its directories, which keep their names and labels but only the items exported, so the file
+    imports with the same labels (an item that takes its label from its directory still has it).
+  - "(no label)" ticked exports the unlabelled items too; an item with its own label in a directory of another
+    label goes by its own.
+- **Label map** (`Shift+B`, "label map..."): everything shown, projected straight onto a plane (the "map plane": z,
+  seen from above, or a fitted plane), as a PNG with a legend strip on the right and a JSON sidecar
+  (`pclabel.label-map/1`, ARCHITECTURE).
+  - Map x runs along the plane's `along` direction, y across it (for z: x and y as stored). Parameters: pixel
+    (5 cm), points grow by (0 px), line width (3 px); optionally only points within the height slice above the map
+    plane, and every other point in light grey underneath for context.
+  - Smaller point sets are drawn over larger ones, and segments and curves over the points (closed loops closed).
+  - The JSON has the pixel-to-world transform, the legend (colour, class id or flag bit, pixels and points drawn per
+    label) and the segments and curves as 2D lines in map metres. It runs in a worker thread (cancel stops it).
+  - Measured on streets 1 (634M points; your labelled sets: 15M points, plus 6 labelled lines): 4,860 x 5,242 px
+    at 5 cm in 0.97 s, 12,150 x 13,104 px at 2 cm in 1.90 s, and 8.1 s with every other point as grey context
+    (`tools/labelmap.py` alone, without writing the PNG).
 
 ## 3. reference frames and surfaces: "make this area flat" [M2]
 
@@ -216,7 +254,8 @@ Let `h` be a point's height in the active reference frame, or above the referenc
   - a warning when the fit does not look like ground (tilt > 10° or RMS > 5 cm).
 - Frames are named `plane 1`, `plane 2`, …, saved in `frames.json` and listed in the Height axis dock. `H`
   switches between z and the last plane. `F` on the same selection again reuses that plane instead of adding a
-  copy. "delete plane" removes the plane shown. "export plane" saves it as JSON (`pclabel.plane/1`): the
+  copy. "delete plane" removes the plane shown; "rename..." renames it (names stay unique; undoable; records made
+  with the plane keep the name it had then). "export plane" saves it as JSON (`pclabel.plane/1`): the
   equation `a x + b y + c z + d = 0` in scan coordinates with (a, b, c) the unit normal (so the left side is the
   height above the plane), the same as `z = p x + q y + r`, and the frame and its fit report.
 - Not yet:
@@ -545,6 +584,72 @@ parameters.
   - On streets 1 the user's case was curve 11 as a loop, inset 5 cm, −0.10 to +0.05 m, giving 27.3M points. The
     preview would add 739k (the grass at the island's tip, and the feet of people and poles) and take out 15
     specks, in 3.3 s in a worker.
+- **Tree tool** (2026-10-26, the user's design; R-015, proposed): `Shift+U` (Select ▸ "Tree"), then click the
+  ground at the foot of a trunk.
+  - The clicked point's height along the height axis is the tree's ground height. A cylinder appears 1.00–1.10 m
+    above it: the "Tree" box in the 3D select panel sets the band and the starting radius (0.5 m).
+  - 3D select takes over: W A S D move the cylinder onto the trunk, and the radius field sizes it. A click on the
+    trunk only slides the cylinder sideways in tree mode, so the band keeps its height. Enter selects.
+  - "Save the selection as a tree" makes a directory `tree NN` inside the directory chosen in "save into" (default
+    `trees` at the top level, made when missing; the choice stays for the next tree; the user's request of
+    2026-10-26), numbered on from the trees already there. In it goes a point set `trunk 1.00 to 1.10 m`
+    labelled `tree_trunk`. It fits a circle to the band across the height axis, leaving out points more than
+    3 cm off it.
+  - The circle's centre at the ground height is the tree's position. The position, radius, girth, rms, the share
+    of the circumference covered and the ground point go into the point set's provenance (`"tool": "tree"`) and
+    are shown in the box. Undoable.
+- **3D select's keys in its number fields** (2026-10-26, the user's request): after typing a radius (or any field
+  of the 3D select panel), W A S D Q E Z X and K still move, turn and clip the volume. Enter in a field takes its
+  value and gives the keys back to the view, so the next Enter selects.
+- **Uncertain labels** (2026-10-22, the user's request): the "unsure" box in the Annotations tree, or the
+  "uncertain" button beside "set label" (on the selected items; again: sure), marks a label as uncertain: the
+  taxonomy's `ambiguous` flag (R-001: kept out of scoring by default).
+  - Only items (point sets, segments, curves) can be uncertain, not directories (the user, 2026-10-26).
+    Directories have no box, and the button leaves selected directories alone.
+  - Uncertain labels are in italics in the tree. Undoable; saved; "export labels" gives each item's mark and each
+    label's uncertain points.
+- **`ramp` class** (2026-10-22, the user's request): taxonomy 0.3, id 9, the sloped walking surface between the
+  pavement and the road (R-007, proposed change; its extent is open).
+- **`road_line` class** (2026-10-28, the user's request: "a road lines class, which is going to be a subset of the
+  road class"): taxonomy 0.4, id 10, with the new taxonomy key `subset_of: road` (R-006, proposed).
+  - Label the road's set `road` with its lines in it, and the lines' own sets `road_line`.
+  - "Export labels" (schema 5) gives the parent its `subsets` and `points_with_subsets`, the subset its
+    `subset_of` and `outside_parent` (its points in no set of the parent: to check), and marks parent ∩ subset
+    overlaps `subset: true`.
+  - The labels view and the label map draw the smaller set on top, so the lines show over the road.
+  - The taxonomy loader refuses a `subset_of` that names no class or goes round in a circle.
+- **Pieces: keep part of the selection** (2026-10-21, the user's request: a 3D select gives an object plus a few
+  random points elsewhere, "contiguous subselect the object"): the selection falls into connected pieces, points
+  joined through selected points closer than the gap (10 cm voxels, 26 neighbours: closer than 10 cm always join,
+  up to about 35 cm may).
+  - `P`: the pieces are found (a worker) and the small ones (under 200 points, the panel's setting) are tinted
+    magenta. A click keeps the piece under it (the nearest within 30 cm); Shift+click adds a piece, Ctrl+click
+    takes one away. All clicks work on the selection the tool started with; each is one undo step.
+  - The Pieces panel: "keep the largest piece" and "drop small pieces", on the current selection.
+  - Only selected points count: a part of an object the selection left out can split it in two.
+  - Recorded: `{tool: pieces, action, params {gap, min_points}, pieces, kept (sizes)}`.
+  - On streets 1: `bti_pavement` (9.8M points) took 0.24 s, 2 pieces (one lone point); `bli_outermask` (34.5M)
+    0.67 s, 3,043 pieces, of which 2,961 small (34,637 points); `bottom_road_cleaned` (121.1M) 2.01 s, 327 small
+    pieces (6,946 points).
+- **Density** (2026-10-21, the user's request: "select the parts that are dense enough that it has reasonable
+  quality to e.g. magic select road lines out"): "density..." in the Annotations panel (or Select ▸ Density) on a
+  point set, the sets in a directory, or the selection.
+  - Points per m² across the height axis, in 25 cm columns averaged over the occupied columns within 50 cm (road
+    edges and car shadows do not pull a column down). Dense pieces under 1 m² are dropped.
+  - The set becomes the selection; the sparse part is tinted magenta and follows the settings live (a worker).
+    "Select the dense part" or "save as a point set" (`<name> dense ≥2000/m²`, the set kept); both record the
+    parameters.
+  - **Default 2,000 points/m²** (points about 2.2 cm apart), from O-0011: on streets 1 one magic select click got a
+    whole lane dash at this density and above, in 90 % or more of thinned trials and for every real dash the user
+    clicked; below 500, one click rarely did. The figure is `docs/figures/density_threshold.png`.
+  - On streets 1 that is about 43 m from the scanner on the bottom road.
+- **Flags as labels** (2026-10-21): the label box offers the taxonomy's flags after its classes. A `marking` point
+  set overlapping the road set gave the road lines (R-006; since 2026-10-28 they are the `road_line` class, and
+  `marking` is for paint off the road); "export labels" marks each label's `kind` (class, flag or text) and lists
+  the overlap.
+- **Undo keys in number fields** (2026-10-21, a bug the user found in 3D select): Ctrl+Z / Ctrl+Y in a spin box
+  undo the app. Before, a spin box that kept the focus took them for its own text undo, stepping its number back
+  (the vertical lines changed and nothing was undone). Text fields keep their own undo while typing.
 - **Set operations on point sets** (2026-10-20, the user's request; replaced "merge points"): "set operations..." in
   the Annotations panel opens a box with A, B and the result:
   - A ∪ B (in A or B), A ∩ B (in both), A \ B (in A but not in B), B \ A, and A △ B (in one of them only).
@@ -556,9 +661,26 @@ parameters.
     Merging is a union saved this way (delete A and B afterwards if they are no longer wanted).
   - "As the selection" makes the result the selection instead (clips, slice and locks apply, as for "select
     points").
-- **The clips everywhere** (2026-10-20): what the clip box, the 3D select clip and the slice hide is not selected.
-  This applies to shapes, grow select (both modes), magic select, 3D select, "select points" from the Annotations
-  panel and the clean-up.
+- **The clips everywhere** (2026-10-20): what the clip box, the 3D select clip, the clip to point sets and the slice
+  hide is not selected. This applies to shapes, grow select (both modes), magic select, 3D select, "select points"
+  and set operations from the Annotations panel, and the clean-up.
+- **Clip to point sets** (2026-10-20, the user's request: "only show points inside the set and algorithms only run
+  within these points, nothing outside"):
+  - Select point sets or directories in the Annotations panel and press "clip to" there, or `Ctrl+K`, or "use the
+    selected point sets" in the Clips panel. A directory stands for all the point sets in it.
+  - Only those points are drawn. Clicks pick only them, so seeds and curve points land on the set.
+  - The tools read only the set's points, not just trim their results:
+    - grow select (both modes) and magic select build their grids, pictures and voxels from the set alone. A grow
+      therefore cannot leave the set and come back in through points outside it;
+    - the clean-up's surface and footprint come from the set alone;
+    - shapes, 3D select, "select points" and set operations "as the selection" keep only the set's points.
+  - `Ctrl+Shift+K` (or the checkbox in the Clips panel) turns the clip off and on again; the set is kept.
+  - The clip holds the points of the chosen sets when it was made: later edits to those point sets do not change
+    it until "clip to" is pressed again. It is not saved with the project, like the other clips.
+  - On streets 1 (GPU), clipping to `bti_pavement` (26.0M points) took 28 ms, and the frame cost stayed at 1.5 ms
+    GPU. From a seed on that pavement, grow select took 25.4M points, all in the set, in 0.58 s; unclipped it
+    took 190.6M points (13 % in the set) in 3.33 s. Geometric grow: 20.1M points in 0.70 s, against 36.5M (54 %
+    in the set) in 2.53 s.
 - **Inputs** take one more decimal than before in the tool panels (grow select, magic select, 3D select, split,
   slice, clip box).
 - **Split by roughness** ("split..." in the Annotations panel, the Split panel; `tools/split.py`; built
@@ -728,8 +850,15 @@ parameters.
     plane: a mis-click on another surface, or a plane mode that does not suit the points.
 - **Annotations panel** (next to Height axis): a tree of **directories** and **items** (segments, curves, point
   sets).
-  - New items stand alone at the top level, each with its own colour. `Ctrl+G` makes the current selection a point
-    set, e.g. a magic-selected marking. The point set keeps every selection operation since the last plain replace
+  - New segments and curves stand alone at the top level, each with its own colour. `Ctrl+G` makes the current
+    selection a point set, e.g. a magic-selected marking.
+    - It goes inside the directory selected in the tree, or beside the one item selected there (into that item's
+      directory); with nothing or several things selected, at the top level (2026-10-26, the user's request).
+    - `Ctrl+Shift+G` always puts it at the top level, outside every directory.
+  - "Duplicate" (`Ctrl+D`) copies the selected directories (with everything in them) and items. Each copy goes right
+    after its original, named "<name> copy", with the same labels and uncertain marks; point sets add a `duplicate`
+    record to their provenance. The copies are selected afterwards, e.g. to drag them elsewhere. Undoable
+    (2026-10-26, the user's request). The point set keeps every selection operation since the last plain replace
     (tool, seed, parameters, result), so the thresholds that made it are on record.
   - "New directory" makes one at the top level, or inside the selected directory.
   - Drag items or directories onto a directory to put them in it. Dropping beside an item puts them in that item's
@@ -737,7 +866,9 @@ parameters.
   - **Colour:** everything inside a directory is drawn in the directory's colour, so separate items can share one.
     A directory made inside another takes its parent's colour until given its own ("colour"). An item back at the
     top level shows its own colour again.
-  - F2 renames anything; double-click renames, or edits a curve.
+  - F2 (or "rename") renames the selected directory or item, wherever it is in the tree: it always edits the name,
+    whichever column was clicked, and works while the 3D view has the keyboard (2026-10-26). Double-click renames,
+    or edits a curve.
   - "Select points" makes the point sets among the selected items (and inside selected directories) the
     selection. "Delete" asks first; a directory goes with everything in it.
   - Selected items draw thicker.
@@ -746,9 +877,8 @@ parameters.
     "lane line").
   - An item without a label of its own takes the label of the nearest enclosing directory that has one. The tree
     shows it in grey, with where it comes from.
-  - Set it with the label box and "set label" (empty removes it), or by editing the label column (F2,
-    double-click).
-  - **"Export labels"** writes everything grouped by label instead of by directory (`pclabel.annotation-labels/1`).
+  - Set it with the label box and "set label" (empty removes it), or by double-clicking the label column.
+  - **"Export labels"** writes everything grouped by label instead of by directory (`pclabel.annotation-labels/4`).
     For each label it gives its taxonomy class id (if it is a class), its items (each with its directory path and
     where the label comes from), counts by type, and the number of distinct points. Unlabelled items are listed
     separately, and the points shared by two labels are counted.
@@ -785,7 +915,11 @@ parameters.
 | `U` | 3D select: a box or cylinder along the height axis, or a closed curve extruded; W A S D Q E move it, Z X turn it, `-` `=` pull a loop in / push it out, Enter / Shift+Enter / Ctrl+Enter select / add / subtract (built) |
 | `Shift+Enter` | finish a curve as a closed loop (built) |
 | `V` / `Shift+V` | line segment (click two points) / curve (click points, Enter: edit its gradients) (built early, §13) |
-| `Ctrl+G` | make the selection a point set (an annotation item; built early, §13) |
+| `Ctrl+G` | make the selection a point set (an annotation item; built early, §13), in the directory selected in Annotations |
+| `Ctrl+Shift+G` | the same, at the top level |
+| `Ctrl+D` | duplicate the directories and items selected in Annotations |
+| `F2` | rename the directory or item selected in Annotations |
+| `B` / `Shift+B` | labels view on and off / label map (PNG and JSON) |
 | `Enter` / `Backspace` | finish the curve, or leave curve edit mode / take back the last clicked point (built) |
 | curve edit: click / Shift+click / Ctrl+click, `Del` | activate a node / add a cloud point / remove a node, remove the active node (built) |
 | `C` / `Shift+C` | next / previous colour mode |
@@ -805,6 +939,9 @@ parameters.
 | `L` / `R` / `F` / `Esc` | lasso / rectangle / fit plane to the selection / drop tool, then selection (M2, built) |
 | `H` / `Shift+H` | height axis z ↔ last fitted plane / height slice on and off (M2, built; `hs` comes later) |
 | `K` / `Shift+K` | clip box on/off / clip box from the view (M1) |
+| `P` | keep a piece of the selection: click it (Shift adds a piece, Ctrl takes one away) |
+| `Shift+U` | tree: click the ground at a trunk; a cylinder 1.00–1.10 m above it (3D select); Enter, then "save the selection as a tree" |
+| `Ctrl+K` / `Ctrl+Shift+K` | clip to the point sets selected in the Annotations panel / that clip off and on |
 | `Ctrl+E` | eye-dome lighting on/off (M1) |
 | `Ctrl+O` / `Ctrl+I` | open project / import scan (M1) |
 | right drag / right mouse + `W A S D Q E` | rotate, as left drag / fly: once a key is pressed the mouse looks until the button goes up (while the right button is held these keys move instead of their usual action) |

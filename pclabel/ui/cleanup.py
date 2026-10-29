@@ -125,7 +125,7 @@ class CleanController(QObject):
         p = self.dock.params()
         allowed = w.allowed_mask
         origin = np.asarray(f.origin, np.float64) - w.project.offset
-        args = (w.project.xyz, w.project.tiles, sel, f.normal, f.along, origin, p, allowed)
+        args = (w.project.xyz, w.project.tiles, sel, f.normal, f.along, origin, p, allowed, w._inside())
         self._busy = True
         self.dock.result.setText("working...")
 

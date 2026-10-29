@@ -170,8 +170,8 @@ def project_boxes(lo: np.ndarray, hi: np.ndarray, mvp: np.ndarray, viewport):
 
 @dataclass(frozen=True)
 class SelectFilters:
-    """What is hidden on screen is not selected: clip box, clip volume and height slice, in local (store)
-    coordinates."""
+    """What is hidden on screen is not selected: clip box, clip volume, height slice (in local (store) coordinates)
+    and the clip to a point set."""
 
     clip_min: tuple | None = None
     clip_max: tuple | None = None
@@ -179,8 +179,15 @@ class SelectFilters:
     band_origin: tuple | None = None  # local point where h = 0
     band: tuple | None = None  # (a, b) in metres
     volume: object = None  # tools.volume.VolumeSpec: only points inside it
+    inside: object = None  # tools.sets.PointMask: only its points
+
+    def tiles(self, tiles, cand) -> np.ndarray:
+        """The candidate tiles that can hold points these filters keep (the clip to a point set skips the rest)."""
+        return cand if self.inside is None else self.inside.keep_tiles(tiles, cand)
 
     def apply(self, xyz: np.ndarray, idx: np.ndarray) -> np.ndarray:
+        if self.inside is not None and idx.size:
+            idx = idx[self.inside.mask[idx]]
         if idx.size == 0 or (self.clip_min is None and self.band is None and self.volume is None):
             return idx
         q = np.asarray(xyz[idx], np.float64)
@@ -230,6 +237,8 @@ def select_visible(
 
     cand = np.flatnonzero(boxes_visible(frustum_planes(mvp), lo, hi) & (x1 >= bx0) & (x0 <= bx1) & (y1 >= by0)
                           & (y0 <= by1))  # fmt: skip
+    if filters is not None:
+        cand = filters.tiles(tiles, cand)
     arr = np.asarray(xyz)
     parts = []
     for t in cand:

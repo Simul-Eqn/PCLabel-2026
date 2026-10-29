@@ -81,6 +81,75 @@ Things noticed in the scans while labelling. Observations are the main output of
     colour mode would show where the depth stops being visible.
 - status: open
 
+### O-0011 Lane lines can be magic selected in one click down to about 2,000 points/m² of road
+- date / who: 2026-10-21, measured by Claude from the user's lane-line clicks and a thinning experiment
+- scan: `streets 1.e57` (one scan position) · where: the bottom road, point sets `bottom_road_cleaned` and
+  `br_middle_laneline`
+- tags: marking, density, range, magic select, R-006, Q-14
+- seen:
+  - The road's density falls from about 70,000 points/m² at 20 m to 2,040 at 40–45 m, 856 at 50–55 m and 124 at
+    70–75 m. Beyond about 25 m it falls roughly with the cube of range (grazing angle).
+  - Intensity contrast is not the limit: the lane line stays 4.5 to 19 times the road's intensity noise (MAD)
+    above the road at every range out to 60 m.
+  - The user's magic select clicks on the lane line, per dash: one click wherever the road around the dash had
+    more than 1,936 points/m² (out to 39–46 m); one to three from about 1,250 down to 417; 12 clicks at 159
+    points/m² (74 m).
+  - Seven dashes at 14–33 m thinned at random, three times each, then one click (2 cm pixels, gap 0.28 m,
+    tolerance 2.0): the click got the dash (recall and precision ≥ 90 % against full density) in 100 % of trials
+    at ≥ 3,000 points/m², 90–95 % at 1,500–2,000, 81–86 % at 500–1,000, 38 % at 350, 19 % at 250, none at 150.
+    Thinning is optimistic: it removes points but does not widen the laser footprint or steepen the angle.
+- evidence: [docs/figures/density_threshold.png](figures/density_threshold.png) (the three measurements on one
+  page; the same charts as the session's dashboard).
+- seen elsewhere: not checked (newroad 2, ExchangeGreen)
+- implications:
+  - **Tool:** the Density panel keeps the parts of a point set at ≥ 2,000 points/m² by default: where one click
+    gets a dash. 500 points/m² is the floor below which one click rarely does.
+  - **Rule:** markings (R-006, Q-14) labelled where the road is sparser than about 2,000 points/m² take extra
+    clicks and are less complete. Whether such stretches are labelled at all, or flagged, is for the user to
+    decide.
+  - **Algorithm:** a marking detector tuned on dense road will meet sparse road beyond about 45 m in a single
+    scan. Its scores should be split by local density (or range).
+- status: open
+
+### O-0012 A street tree leans 18.5°: its trunk at 1.3 m is 0.42 m from where it stands
+- date / who: 2026-10-23, measured by Claude on the user's point set
+- scan: `streets 1.e57` · where: point set `tree_example` (27,958,604 points), trunk base at about x 15.92,
+  y 18.30, z −22.74
+- tags: tree_trunk, tree_canopy, instance, lean, ground contact, R-015, Q-16, O-0008
+- seen (circles fitted to 10 cm slices of the trunk, followed upward from the base):
+  - **Ground contact:** the ground ring 5–30 cm outside the trunk (225,170 points) has a median height G of
+    z −22.741, with p10 and p90 within 5 cm of it. The ground falls away from the tree: 0.3 m lower 2.5 m out.
+    The point set stops 3.5 cm above G, so the foot of the trunk was left out of the selection.
+  - **Shape:**
+    - 0–0.1 m above G: radius 0.27 m (the flare).
+    - 0.1–1.3 m: 0.21 to 0.19 m. Measured at right angles to the stem: girth 1.33 m at 0.5 m, 1.25 m at 1.0 m
+      above G (Singapore's measure since 2017), diameter 0.38 m at 1.3 m (DBH). Those circle fits leave 0.3–0.4 cm
+      rms, against 0.9–1.1 cm for horizontal slices of the leaning trunk.
+    - The tree tool's fit (2026-10-26) on level bands above G: 1.00–1.10 m: 47,527 points, girth 1.20 m, 0.9 cm
+      rms, 75 % of the circumference, position 0.353 m from the foot. 0.60–0.70 m: 0.198 m from the foot.
+      0.10–0.20 m: 0.011 m, but 10,778 of 75,752 points were off the circle (flare).
+    - Up to 3.0 m above G: one clean cylinder, with residuals of 0.8–1.4 cm rms.
+    - At 3.0 m it forks: the residuals rise to 3–9 cm.
+    - Leaves (points 2 m or more from the axis) begin at about 4.2 m.
+  - **Lean:** 18.5°, toward azimuth 38°. The centre at 0.1–0.5 m above G is 1 cm from the centre of the flare;
+    the centre at 1.2–1.4 m is 0.42 m away from it.
+  - **Coverage:** the slices cover 81–89 % of the trunk's circumference, so circle fits are well constrained.
+- evidence: scratchpad scripts `tree_profile.py`, `tree_axis.py`, `tree_base.py`, `tree_girth.py`, `tree_band.py`
+  (this session)
+- seen elsewhere: not measured. The user notes (2026-10-23) that the ground around most trees does not slope
+  much, so this tree's ground is probably an exception, and that shrubs are sometimes right against the trunk,
+  which makes the ground height hard to tell.
+- implications:
+  - **Rule:** with lean, a position taken from a band of trunk sits off the foot by the band's height × tan(lean).
+    R-015 (the user's design) identifies trees by a band at 1.00–1.10 m, which is 0.35 m off here, and keeps the
+    whole trunk as an optional item for where the foot matters. The bare stem up to 3.0 m and the leaves above
+    4.2 m make such bands easy to select without a trunk-or-branch call.
+  - **Algorithm:** a vertical-cylinder pole detector would miss or split leaning trunks like this one. Lean is a
+    trunk-vs-pole feature (O-0008), since poles stand within a degree or two of vertical.
+  - **Tool:** the tree tool (`Shift+U`, built 2026-10-26) selects and saves the band. Following the trunk slice by
+    slice to measure lean, and give the foot, is a possible extension.
+- status: open
+
 ### Prior observations from earlier work in this workspace (status `to verify`)
 
 These come from `../Roadrun/docs/experiments.md` and `../Roadrun/docs/project_brief.md`, made on a 5 cm voxel

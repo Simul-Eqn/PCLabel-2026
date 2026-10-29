@@ -194,6 +194,8 @@ def select_volume(xyz, tiles, base, axis, along, params: VolumeParams = VolumePa
     t = tiles
     cand = np.flatnonzero((t["x1"] >= lo[0]) & (t["x0"] <= hi[0]) & (t["y1"] >= lo[1]) & (t["y0"] <= hi[1])
                           & (t["zmax"] >= lo[2]) & (t["zmin"] <= hi[2]))  # fmt: skip
+    if filters is not None:
+        cand = filters.tiles(t, cand)
     hl, hw = _half_extents(p)
     arr = np.asarray(xyz)
     parts = []
@@ -299,6 +301,8 @@ def select_loop(xyz, tiles, origin, normal, u, poly2d, bottom: float, top: float
     t = tiles
     cand = np.flatnonzero((t["x1"] >= lo[0]) & (t["x0"] <= hi[0]) & (t["y1"] >= lo[1]) & (t["y0"] <= hi[1])
                           & (t["zmax"] >= lo[2]) & (t["zmin"] <= hi[2]))  # fmt: skip
+    if filters is not None:
+        cand = filters.tiles(t, cand)
     arr = np.asarray(xyz)
     parts = []
     for k in cand:

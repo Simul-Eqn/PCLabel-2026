@@ -102,8 +102,42 @@ def test_labels_are_inherited_and_exported_by_label(projects, tmp_path):
     assert by["curb"]["counts"] == {"segment": 0, "curve": 1, "points": 0}
     assert by["road"]["points"] == 1000 and by["road"]["items"][0]["source_indices"] == sorted(
         int(i) for i in p.source_index[np.arange(1000)])  # fmt: skip
-    assert doc["overlaps"] == [{"labels": ["road", "lane line"], "points": 100}]
+    assert doc["overlaps"] == [{"labels": ["road", "lane line"], "points": 100, "subset": False}]
     assert doc["unlabelled"]["counts"]["segment"] == 1 and summary[""] == (1, 0)
+    assert by["road"]["kind"] == "class" and by["lane line"]["kind"] == "text"
+    # road lines (R-006): paint is a flag on top of the road's class, so a `marking` point set overlaps the road's
+    paint.label = "marking"
+    t.export_labels(out, p, {"road": 1, "curb": 2}, {"ambiguous": 0, "marking": 1})
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    assert [e["label"] for e in doc["labels"]] == ["road", "curb", "marking", "curb lip"]  # classes, flags, the rest
+    m = {e["label"]: e for e in doc["labels"]}["marking"]
+    assert m["kind"] == "flag" and m["flag_bit"] == 1 and m["class_id"] is None and m["points"] == 300
+    assert doc["overlaps"] == [{"labels": ["road", "marking"], "points": 100, "subset": False}]  # the road lines
+    # road lines as a class that is part of the road (taxonomy `subset_of`, the user's request of 2026-10-28)
+    paint.label = "road_line"
+    t.export_labels(out, p, {"road": 1, "curb": 2, "road_line": 10}, {}, {"road_line": "road"})
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    by = {e["label"]: e for e in doc["labels"]}
+    assert [e["label"] for e in doc["labels"]] == ["road", "curb", "road_line", "curb lip"]
+    assert by["road_line"]["subset_of"] == "road" and by["road_line"]["outside_parent"] == 200  # 1000..1199
+    assert by["road"]["subsets"] == ["road_line"] and by["road"]["points"] == 1000
+    assert by["road"]["points_with_subsets"] == 1200 and "subset_of" not in by["road"]
+    assert doc["overlaps"] == [{"labels": ["road", "road_line"], "points": 100, "subset": True}]
+
+
+def test_taxonomy_subsets(tmp_path):
+    from pclabel.taxonomy import load_taxonomy
+
+    tax = load_taxonomy()
+    assert tax.subset_of() == {"road_line": "road"} and tax.class_id("road_line") == 10
+    base = "schema: pclabel.taxonomy/1\nclasses:\n  - {id: 0, name: unassessed, color: '#000000'}\n"
+    a_of_b = "  - {id: 1, name: a, color: '#000000', subset_of: b}\n"
+    b_of_a = "  - {id: 2, name: b, color: '#000000', subset_of: a}\n"
+    for extra, msg in ((a_of_b, "not a class"), (a_of_b + b_of_a, "circle")):
+        f = tmp_path / "t.yaml"
+        f.write_text(base + extra, encoding="utf-8")
+        with pytest.raises(ValueError, match=msg):
+            load_taxonomy(f)
 
 
 def test_locked_labels_and_their_points():
@@ -189,6 +223,33 @@ def test_export_and_import(projects, tmp_path):
     assert sorted(x.kind for x in other.items()) == ["curve", "segment"] and "another scan" in warnings[0]
 
 
+def test_export_by_label_keeps_the_directories_that_give_the_labels(projects, tmp_path):
+    p = Project(projects[0])
+    seg, c, pts = sample(p)
+    t = Annotations()
+    for x in (seg, c, pts):
+        t.add(x)
+    kerb = t.new_directory("kerb")
+    kerb.label = "curb"
+    lip = t.add(PointSet(np.arange(10, 20, dtype=np.int64), name="lip"))
+    lip.label = "curb lip"  # in the curb directory, with a label of its own
+    t.move([c.id, lip.id], kerb.id)
+    pts.label = "road"
+    out = tmp_path / "curb.json"
+    assert t.export(out, p, labels={"curb"}) == 1
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    assert doc["schema"] == SCHEMA and doc["labels_exported"] == ["curb"]
+    assert [n["name"] for n in doc["tree"]] == ["kerb"] and doc["tree"][0]["label"] == "curb"
+    assert [n["type"] for n in doc["tree"][0]["children"]] == ["curve"]  # not the lip (curb lip)
+    back = Annotations()
+    back.import_file(out, p)
+    assert [back.label_of(x.id)[0] for x in back.items()] == ["curb"]  # the label comes along with its directory
+    assert t.export(out, p, labels={"road", ""}) == 2  # "": the unlabelled segment
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    assert sorted(n["type"] for n in doc["tree"]) == ["points", "segment"]
+    assert t.export(out, p, labels={"lane line"}) == 0 and json.loads(out.read_text(encoding="utf-8"))["tree"] == []
+
+
 def test_source_indices_map_back_to_store_indices(projects):
     p = Project(projects[0])
     store = np.array([3, 17, 1000, len(p.source_index) - 1], np.int64)
@@ -262,3 +323,57 @@ def test_lock_switches():
     assert t.locked_labels(never) == {"road"}
     t.locks_on = False  # all off, the choices kept
     assert t.locked_labels(never) == set() and t.locks == {"road"}
+
+
+def test_uncertain_labels(projects, tmp_path):
+    from pclabel.store.annotations import LABELS_SCHEMA
+
+    p = Project(projects[0])
+    t = Annotations()
+    kerbs = t.new_directory("kerbs")
+    kerbs.label = "curb"
+    a = t.add(PointSet(np.arange(0, 100, dtype=np.int64)), name="a")
+    b = t.add(PointSet(np.arange(100, 150, dtype=np.int64)), name="b")
+    ramp = t.add(PointSet(np.arange(150, 170, dtype=np.int64)), name="ramp?")
+    t.move([a.id, b.id, ramp.id], kerbs.id)
+    ramp.label = "ramp"
+    assert not hasattr(kerbs, "uncertain")  # only items can be uncertain (the user, 2026-10-26)
+    a.uncertain = ramp.uncertain = True
+    # saved and read back; directories carry no mark
+    t.save(p)
+    u, warnings = Annotations.load(p)
+    assert not warnings and [x.uncertain for x in u.root[0].children] == [True, False, True]
+    doc = json.loads((p.path / "annotations.json").read_text(encoding="utf-8"))
+    assert doc["schema"] == SCHEMA == "pclabel.annotations/5" and "uncertain" not in doc["tree"][0]
+    # a schema 2 document that marked a directory: the items that took its label carry the mark instead
+    old2 = json.loads(json.dumps(doc))
+    old2["tree"][0]["uncertain"] = True
+    for n in old2["tree"][0]["children"]:
+        n["uncertain"] = False
+    v, _ = Annotations.from_doc(dict(old2, schema="pclabel.annotations/2"), p, p.path)
+    assert [(x.name, x.uncertain) for x in v.root[0].children] == [("a", True), ("b", True), ("ramp?", False)]
+
+    def strip(nodes):
+        for n in nodes:
+            n.pop("uncertain", None)
+            strip(n.get("children", []))
+
+    strip(doc["tree"])  # a schema 1 document (no marks) still reads, everything sure
+    old, _ = Annotations.from_doc(dict(doc, schema="pclabel.annotations/1"), p, p.path)
+    assert not any(x.uncertain for x, _ in old.walk() if x.kind != "directory")
+    # exported with the labels: per item and per label
+    out = tmp_path / "labels.json"
+    t.export_labels(out, p, {"curb": 2, "ramp": 9})
+    d = json.loads(out.read_text(encoding="utf-8"))
+    assert d["schema"] == LABELS_SCHEMA == "pclabel.annotation-labels/5"
+    by = {e["label"]: e for e in d["labels"]}
+    assert by["curb"]["uncertain_points"] == 100 and by["curb"]["uncertain_items"] == 1
+    assert [i["uncertain"] for i in by["curb"]["items"]] == [True, False] and "uncertain_from" not in by["curb"]["items"][0]
+    assert by["ramp"]["uncertain_points"] == 20
+    a.uncertain = False
+    t.export_labels(out, p, {"curb": 2, "ramp": 9})
+    d = json.loads(out.read_text(encoding="utf-8"))
+    assert {e["label"]: e["uncertain_points"] for e in d["labels"]} == {"curb": 0, "ramp": 20}
+    # a split keeps the mark
+    smooth, rough = t.split_point_set(ramp.id, np.arange(20) < 5, {"tool": "split"})
+    assert smooth.uncertain and rough.uncertain and smooth.label == "ramp"

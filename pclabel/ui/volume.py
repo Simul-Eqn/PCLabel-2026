@@ -11,8 +11,11 @@ along its plane's normal (``tools.volume``).
   in the panel.
 - Enter selects the points inside; Shift+Enter adds them to the selection, Ctrl+Enter takes them out. The panel's
   buttons do the same.
+- The keys work while a field of the panel has the focus too (e.g. after typing a radius): W A S D Q E Z X and K go
+  to the volume, and Enter in a field takes its value and hands the keys back to the view (the next Enter selects).
+- Tree mode (``ui.trees``, Shift+U): a click only slides the cylinder across the axis, so its band keeps its height.
 - K (or "clip to this") clips the view to the volume instead: only what is inside stays visible (and selectable).
-  With "clip live" the clip follows the volume as it moves. The Clip box panel turns it off and on.
+  With "clip live" the clip follows the volume as it moves. The Clips panel turns it off and on.
 """
 
 from __future__ import annotations
@@ -20,8 +23,9 @@ from __future__ import annotations
 from dataclasses import replace
 
 import numpy as np
-from PySide6.QtCore import QObject, Qt
+from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtWidgets import (
+    QAbstractSpinBox,
     QCheckBox,
     QComboBox,
     QDockWidget,
@@ -106,7 +110,7 @@ class VolumeDock(QDockWidget):
         f.addRow("vertical lines", self.verticals)
         crow = QHBoxLayout()
         self.clip = QPushButton("clip to this (K)")
-        self.clip.setToolTip("show only what is inside the volume (and select only that); the Clip box panel turns "
+        self.clip.setToolTip("show only what is inside the volume (and select only that); the Clips panel turns "
                              "it off")  # fmt: skip
         self.unclip = QPushButton("unclip")
         self.live = QCheckBox("clip live")
@@ -142,6 +146,39 @@ class VolumeDock(QDockWidget):
                        **{n: sp.value() / k for n, (sp, k) in self.spins.items()})  # fmt: skip
 
 
+FIELD_KEYS = {Qt.Key.Key_W, Qt.Key.Key_A, Qt.Key.Key_S, Qt.Key.Key_D, Qt.Key.Key_Q, Qt.Key.Key_E, Qt.Key.Key_Z,
+              Qt.Key.Key_X, Qt.Key.Key_K}  # letters a number field has no use for: they move the volume  # fmt: skip
+
+
+class _KeysToTheVolume(QObject):
+    """In the panel's number fields, while 3D select is the tool: W A S D Q E Z X K go to the volume (as in the
+    view), and Enter takes the typed value and gives the focus back to the view, so the next Enter selects."""
+
+    def __init__(self, controller):
+        super().__init__(controller)
+        self.c = controller
+
+    def eventFilter(self, obj, e):
+        t = e.type()
+        if t not in (QEvent.Type.KeyPress, QEvent.Type.ShortcutOverride) or self.c.vp.tool != "volume":
+            return False
+        spin = obj if isinstance(obj, QAbstractSpinBox) else obj.parent()
+        if not isinstance(spin, QAbstractSpinBox):
+            return False
+        plain = not (e.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier))
+        if e.key() in FIELD_KEYS and plain:
+            if t == QEvent.Type.ShortcutOverride:
+                e.accept()  # ours, not the window's shortcut (W: height wrap, K: clip box)
+            else:
+                self.c.key(int(e.key()), e.modifiers())
+            return True
+        if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and t == QEvent.Type.KeyPress:
+            spin.interpretText()
+            self.c.vp.setFocus()
+            return True
+        return False
+
+
 class VolumeController(QObject):
     def __init__(self, window):
         super().__init__(window)
@@ -152,6 +189,9 @@ class VolumeController(QObject):
         self.loop_id = None  # the closed curve used as the loop
         self.move = np.zeros(3)  # how far the loop has been moved from the curve (local)
         self._mask_key, self._mask_spec = None, None  # the loop's last mask, reused while it only moves
+        self.keep_height = False  # tree mode: a click slides the box or cylinder across the axis only
+        self._keys = _KeysToTheVolume(self)
+        self.route_keys(self.dock)
         d = self.dock
         d.shape.currentIndexChanged.connect(self._shape_changed)
         for sp, _ in d.spins.values():
@@ -167,6 +207,12 @@ class VolumeController(QObject):
         self.vp.volume_placed.connect(self.place)
         self.vp.volume_key.connect(self.key)
         self.vp.tool_changed.connect(lambda _: self.refresh())
+
+    def route_keys(self, widget):
+        """The volume's keys work in the number fields inside ``widget`` too (_KeysToTheVolume)."""
+        for sp in widget.findChildren(QAbstractSpinBox):
+            sp.installEventFilter(self._keys)
+            sp.lineEdit().installEventFilter(self._keys)
 
     def frame(self):
         """(axis, along, name) of the active height axis, world."""
@@ -238,6 +284,10 @@ class VolumeController(QObject):
             centre = origin + loop_centre(poly) @ np.array([u, np.cross(n, u)])
             d = np.asarray(p_local, np.float64) - centre
             self.move = self.move + d - np.dot(d, n) * n  # across the loop's normal only
+        elif self.keep_height and self.base is not None:  # tree mode: across the axis only
+            n = self._axis()
+            d = np.asarray(p_local, np.float64) - self.base
+            self.base = self.base + d - np.dot(d, n) * n
         else:
             self.base = np.asarray(p_local, np.float64)
         self.refresh()

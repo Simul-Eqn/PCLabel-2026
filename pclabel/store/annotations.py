@@ -26,7 +26,10 @@ import numpy as np
 from pclabel.analysis import curves
 from pclabel.store.importer import write_json_atomic
 
-SCHEMA = "pclabel.annotations/1"
+SCHEMA = "pclabel.annotations/5"  # 2 added `uncertain` on nodes, 3 keeps it on items only, 4 added `label_colors`,
+# 5 added `labels_exported` (exports by label)
+READ_SCHEMAS = ("pclabel.annotations/1", "pclabel.annotations/2", "pclabel.annotations/3", "pclabel.annotations/4",
+                SCHEMA)  # fmt: skip
 SET_OPS = {  # op -> (symbol, words)
     "union": ("∪", "in A or B"),
     "intersection": ("∩", "in both A and B"),
@@ -34,7 +37,7 @@ SET_OPS = {  # op -> (symbol, words)
     "b_minus_a": ("/", "in B but not in A"),
     "xor": ("△", "in one of them only"),
 }
-LABELS_SCHEMA = "pclabel.annotation-labels/1"
+LABELS_SCHEMA = "pclabel.annotation-labels/5"
 PALETTE = ("#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#42d4f4", "#f032e6", "#bfef45", "#fabed4",
            "#469990", "#dcbeff", "#9a6324", "#fffac8", "#800000", "#aaffc3", "#808000", "#ffd8b1", "#000075")  # fmt: skip
 
@@ -69,6 +72,7 @@ class Segment:
     color: str = PALETTE[0]  # used at the top level; inside a directory the directory's colour applies
     label: str = ""  # empty: the nearest enclosing directory's label
     id: str = field(default_factory=new_id)
+    uncertain: bool = False  # the labeller is unsure of the label here (the taxonomy's `ambiguous` flag)
     kind = "segment"
 
     def length(self) -> float:
@@ -103,6 +107,7 @@ class Curve:
     label: str = ""
     id: str = field(default_factory=new_id)
     closed: bool = False  # a loop: a last piece joins the last node back to the first
+    uncertain: bool = False  # the labeller is unsure of the label here (the taxonomy's `ambiguous` flag)
     kind = "curve"
 
     @classmethod
@@ -228,6 +233,7 @@ class PointSet:
     color: str = PALETTE[0]
     label: str = ""
     id: str = field(default_factory=new_id)
+    uncertain: bool = False  # the labeller is unsure of the label here (the taxonomy's `ambiguous` flag)
     kind = "points"
 
     def describe(self) -> str:
@@ -241,7 +247,7 @@ class Directory:
     children: list = field(default_factory=list)
     label: str = ""  # applies to everything inside that has no label of its own
     id: str = field(default_factory=new_id)
-    kind = "directory"
+    kind = "directory"  # never uncertain: only items are (the user, 2026-10-26)
 
     def describe(self) -> str:
         n = len(self.children)
@@ -275,6 +281,7 @@ class Annotations:
         self.locks: set = set()  # labels whose points cannot be selected
         self.unlocked: set = set()  # never-selected classes (taxonomy selectable: false) the user unlocked
         self.locks_on = True  # all locks at once; off: nothing is locked, the choices above are kept
+        self.label_colors: dict = {}  # label -> "#rrggbb" for the labels view and map (chosen, or given once)
 
     def locked_labels(self, never) -> set:
         """The labels whose points cannot be selected now: the locked ones and the never-selected classes
@@ -359,6 +366,12 @@ class Annotations:
         return sets_.union_all([x.indices for x in self.items() if x.kind == "points"
                                 and self.label_of(x.id)[0] in labels])  # fmt: skip
 
+    def label_layers(self) -> list:
+        """[(label, point set)] for every point set, by its own or inherited label ("" for none), largest set first:
+        drawn in this order, a smaller set shows over a larger one it overlaps (a ``marking`` over its ``road``)."""
+        sets_ = [(self.label_of(m.id)[0], m) for m in self.items() if m.kind == "points"]
+        return sorted(sets_, key=lambda lm: -len(lm[1].indices))
+
     def move(self, node_ids, target_id: str | None):
         """Move nodes into a directory (``target_id``) or to the top level (None), keeping their order. A directory
         is not moved into itself or its own contents; nodes whose directory moves along stay inside it."""
@@ -376,6 +389,30 @@ class Annotations:
         for x in picked:
             self._siblings(x.id).remove(x)
             dest.append(x)
+
+    def duplicate(self, node_ids) -> list:
+        """Copies of nodes (a directory with everything in it), each right after its original, named "<name> copy",
+        with new ids, the same labels and uncertain marks, and a colour of its own where the original had one (what is
+        inside a copied directory keeps its names). Nodes
+        inside a directory that is copied as well are copied once, with it. Point sets add a "duplicate" record to
+        their provenance. The copies back, in tree order."""
+        wanted = set(node_ids)
+        picked = [x for x, anc in self.walk() if x.id in wanted and not any(d.id in wanted for d in anc)]
+        copies = []
+        for x in picked:
+            c = clone_nodes([x])[0]
+            for y, _ in self.walk([c]):
+                y.id = new_id()
+                if y.kind == "points":
+                    y.provenance.append({"tool": "duplicate", "of": y.name})
+            _, color = self._next()
+            c.name = f"{x.name} copy"
+            if c.color:
+                c.color = color
+            sib = self._siblings(x.id)
+            sib.insert(sib.index(x) + 1, c)
+            copies.append(c)
+        return copies
 
     def remove(self, node_id: str):
         """Remove a node (a directory with everything in it)."""
@@ -411,7 +448,7 @@ class Annotations:
         for part, mask in (("smooth", ~rough), ("rough", rough)):
             _, color = self._next()
             parts.append(PointSet(ps.indices[mask], [*ps.provenance, dict(record, part=part)], f"{ps.name} {part}",
-                                  color, ps.label))  # fmt: skip
+                                  color, ps.label, uncertain=ps.uncertain))  # fmt: skip
         sib = self._siblings(ps.id)
         i = sib.index(ps)
         sib[i : i + 1] = parts
@@ -439,7 +476,8 @@ class Annotations:
         if close and len(picked) < 3:
             raise ValueError("a closed loop needs at least three points")
         c = Curve(picked, a.axis.copy(), a.axis_origin.copy(), a.mode, h_in=h_in, h_out=h_out, frame=a.frame,
-                  picked_source=source, name=a.name, color=a.color, label=a.label, closed=bool(close))  # fmt: skip
+                  picked_source=source, name=a.name, color=a.color, label=a.label, closed=bool(close),
+                  uncertain=a.uncertain or b.uncertain)  # fmt: skip
         c.refit()
         sib = self._siblings(a.id)
         sib[sib.index(a)] = c
@@ -461,19 +499,21 @@ class Annotations:
             "locks": sorted(self.locks),
             "unlocked": sorted(self.unlocked),
             "locks_on": self.locks_on,
+            "label_colors": dict(sorted(self.label_colors.items())),
             "tree": [_node_doc(x, project, points) for x in self.root],
         }
 
     @classmethod
     def from_doc(cls, doc: dict, project, base: Path | None = None) -> tuple["Annotations", list[str]]:
         """Annotations from a document, and warnings (e.g. point sets of another scan, which are left out)."""
-        if doc.get("schema") != SCHEMA:
+        if doc.get("schema") not in READ_SCHEMAS:
             raise ValueError(f"unsupported schema {doc.get('schema')!r} (expected {SCHEMA})")
         out, warnings = cls(), []
         out.counter = int(doc.get("counter", 0))
         out.locks = set(doc.get("locks", []))
         out.unlocked = set(doc.get("unlocked", []))
         out.locks_on = bool(doc.get("locks_on", True))
+        out.label_colors = {str(k): str(v) for k, v in doc.get("label_colors", {}).items()}
         same_scan = _same_scan(doc, project)
         for nd in doc.get("tree", []):
             x = _node_from_doc(nd, project, base, same_scan, warnings)
@@ -514,46 +554,90 @@ class Annotations:
             return cls(), []
         return cls.from_doc(json.loads(path.read_text(encoding="utf-8")), project, Path(project.path))
 
-    def export(self, path, project, node_ids=None):
-        """One self-contained JSON file (point sets as source indices): the whole tree, or only these nodes."""
+    def export(self, path, project, node_ids=None, labels=None) -> int:
+        """One self-contained JSON file (point sets as source indices): the whole tree, or only these nodes.
+        ``labels``: only the items whose label (own or inherited, "" for none) is one of these, each still in its
+        directories (which keep their names and labels, and only the items kept), so the file imports with the same
+        labels. Returns the number of items written."""
         doc = self.to_doc(project, points="inline")
+        roots = self.root
         if node_ids is not None:
             keep = set(node_ids)
-            doc["tree"] = [_node_doc(x, project, "inline") for x, anc in self.walk()
-                           if x.id in keep and not any(d.id in keep for d in anc)]  # fmt: skip
+            roots = [x for x, anc in self.walk() if x.id in keep and not any(d.id in keep for d in anc)]
+        if labels is None:
+            doc["tree"] = [_node_doc(x, project, "inline") for x in roots]
+            n = len(self.items(roots))
+        else:
+            labels = set(labels)
+            wanted = {x.id for x in self.items(roots) if self.label_of(x.id)[0] in labels}
+            doc["tree"] = [d for d in (_pruned_doc(x, wanted, project) for x in roots) if d is not None]
+            doc["labels_exported"] = sorted(labels)
+            n = len(wanted)
         write_json_atomic(Path(path), doc)
+        return n
 
-    def export_labels(self, path, project, class_ids: dict | None = None) -> dict:
+    def export_labels(self, path, project, class_ids: dict | None = None, flag_bits: dict | None = None,
+                      subset_of: dict | None = None) -> dict:  # fmt: skip
         """One JSON file grouped by label instead of by directory: for each label its items (each with its
         directory path and where the label comes from), counts, the number of distinct points, and the points
-        shared with other labels. ``class_ids`` maps taxonomy class names to ids, for labels that are classes.
+        shared with other labels. ``class_ids`` maps taxonomy class names to ids, for labels that are classes;
+        ``flag_bits`` maps taxonomy flag names to bits, for labels that are flags (e.g. ``marking``, R-006: a flag
+        sits on top of the surface's class, so its points are meant to overlap a class's); ``subset_of`` maps a class
+        to the class it is part of (``road_line`` of ``road``): the parent is also counted with its subsets' points,
+        and subset points outside the parent are reported.
         Returns a summary {label: (items, points)}."""
         class_ids = class_ids or {}
+        flag_bits = flag_bits or {}
+        subset_of = subset_of or {}
         by_label: dict = {}
         for x, anc in self.walk():
             if x.kind == "directory":
                 continue
             label, giver = self.label_of(x.id)
-            d = _node_doc(x, project, "inline")
+            d = _node_doc(x, project, "inline")  # with the item's own `uncertain`
             d["path"] = [a.name for a in anc]
             d["label_from"] = None if giver is None else self.node(giver).name
             by_label.setdefault(label, []).append((x, d))
-        order = sorted((k for k in by_label if k), key=lambda k: (k not in class_ids, class_ids.get(k, 0), k))
+        order = sorted((k for k in by_label if k),
+                       key=lambda k: (k not in class_ids, k not in flag_bits, class_ids.get(k, 0), flag_bits.get(k, 0), k))  # fmt: skip
         from pclabel.tools import sets as sets_
 
         unions = {k: sets_.union_all([x.indices for x, _ in v if x.kind == "points"]) for k, v in by_label.items()}
+        unsure = {k: sets_.union_all([x.indices for x, d in v if x.kind == "points" and d["uncertain"]])
+                  for k, v in by_label.items()}  # fmt: skip
+        def ancestors(k):
+            out = []
+            while k in subset_of:
+                k = subset_of[k]
+                out.append(k)
+            return out
+
         overlaps = []
         for a_i, a in enumerate(order):
             for b in order[a_i + 1 :]:
                 n = int(np.intersect1d(unions[a], unions[b], assume_unique=True).size)
                 if n:
-                    overlaps.append({"labels": [a, b], "points": n})
+                    overlaps.append({"labels": [a, b], "points": n,
+                                     "subset": a in ancestors(b) or b in ancestors(a)})  # fmt: skip
+        empty = np.empty(0, np.int64)
 
         def entry(k):
             items = by_label[k]
             counts = {t: sum(x.kind == t for x, _ in items) for t in ("segment", "curve", "points")}
-            return {"label": k, "class_id": class_ids.get(k), "counts": counts, "points": int(unions[k].size),
-                    "items": [d for _, d in items]}  # fmt: skip
+            kind = "class" if k in class_ids else "flag" if k in flag_bits else "text"
+            e = {"label": k, "kind": kind, "class_id": class_ids.get(k), "flag_bit": flag_bits.get(k),
+                 "counts": counts, "points": int(unions[k].size), "uncertain_items": sum(d["uncertain"] for _, d in items),
+                 "uncertain_points": int(unsure[k].size)}  # fmt: skip
+            if k in subset_of:  # part of another class: its points outside that class's are worth a look
+                parent = subset_of[k]
+                e["subset_of"] = parent
+                e["outside_parent"] = int(sets_.difference(unions[k], unions.get(parent, empty)).size)
+            subs = [s for s in order if k in ancestors(s)]
+            if subs:  # the class with its subsets' points (a road with its lines)
+                e["subsets"] = subs
+                e["points_with_subsets"] = int(sets_.union_all([unions[k]] + [unions[s] for s in subs]).size)
+            e["items"] = [d for _, d in items]
+            return e
 
         src = project.meta.get("source", {})
         doc = {
@@ -575,6 +659,8 @@ class Annotations:
             x.id = new_id()
         self.root.extend(other.root)
         self.counter = max(self.counter, other.counter)
+        for k, v in other.label_colors.items():  # colours of labels new here come along; ours stay
+            self.label_colors.setdefault(k, v)
         return warnings
 
 
@@ -591,10 +677,21 @@ def _same_scan(doc, project) -> bool:
     return int(s.get("n_valid", -1)) == project.n and (s.get("sha256") == sha or not s.get("sha256") or not sha)
 
 
+def _pruned_doc(x, wanted: set, project) -> dict | None:
+    """``_node_doc`` (inline) of a node with only the items in ``wanted``; a directory without any is left out."""
+    if x.kind != "directory":
+        return _node_doc(x, project, "inline") if x.id in wanted else None
+    children = [d for d in (_pruned_doc(c, wanted, project) for c in x.children) if d is not None]
+    if not children:
+        return None
+    return {"id": x.id, "type": x.kind, "name": x.name, "color": x.color, "label": x.label, "children": children}
+
+
 def _node_doc(x, project, points: str) -> dict:
     base = {"id": x.id, "type": x.kind, "name": x.name, "color": x.color, "label": x.label}
     if x.kind == "directory":
         return dict(base, children=[_node_doc(c, project, points) for c in x.children])
+    base["uncertain"] = bool(x.uncertain)
     if x.kind == "segment":
         return dict(base, a=_pt(x.a), b=_pt(x.b), length_m=x.length(), picked_source_indices=[int(i) for i in x.picked])
     if x.kind == "curve":
@@ -624,6 +721,27 @@ def _node_doc(x, project, points: str) -> dict:
 
 
 def _node_from_doc(nd: dict, project, base, same_scan: bool, warnings: list):
+    x = _node_from_doc_body(nd, project, base, same_scan, warnings)
+    if x is None:
+        return None
+    if x.kind != "directory":
+        x.uncertain = bool(nd.get("uncertain", False))  # absent in schema 1
+    elif nd.get("uncertain"):  # schema 2 could mark a directory: the items that took its label carry the mark now
+        _mark_inheriting(x)
+    return x
+
+
+def _mark_inheriting(d):
+    for c in d.children:
+        if c.label:
+            continue  # a label of its own: the directory's mark was not about it
+        if c.kind == "directory":
+            _mark_inheriting(c)
+        else:
+            c.uncertain = True
+
+
+def _node_from_doc_body(nd: dict, project, base, same_scan: bool, warnings: list):
     kind = nd.get("type")
     nid = nd.get("id") or new_id()
     name, color, label = nd.get("name", ""), nd.get("color"), nd.get("label", "")

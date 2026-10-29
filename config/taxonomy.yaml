@@ -11,9 +11,12 @@
 # key       default hotkey ("shift+N" for the second row). "0" erases to unassessed.
 # selectable  false: points with this class (an annotation label, D-007) are never selected by any tool.
 #             Default true. Set on `other` ("no class") at the user's request (2026-10-20).
+# subset_of   another class's name: this class is a part of that one, and its points are that class's points too
+#             (`road_line` of `road`, the user's request of 2026-10-28). The parent's set keeps them; exports count
+#             the parent with its subsets and report subset points outside the parent.
 
 schema: pclabel.taxonomy/1
-version: "0.2"
+version: "0.4"
 
 groups: [ground, vegetation, pole, structure, temporary, other]
 
@@ -38,6 +41,10 @@ classes:
      def: "top of a raised traffic island / median (only if R-008 chooses a separate class)", rule: R-008}
   - {id: 8,  name: driveway,           group: ground,     status: proposed, enabled: false, color: "#AC8E68",
      def: "vehicle crossing over the pavement (only if R-010 chooses a separate class)", rule: R-010}
+  - {id: 9,  name: ramp,               group: ground,     status: core,     enabled: true,  color: "#F7A6D5",
+     def: "sloped walking surface between the pavement and the road, e.g. behind a lowered kerb at a crossing (added at the user's request 2026-10-22; extent pending)", rule: R-007}
+  - {id: 10, name: road_line,          group: ground,     status: core,     enabled: true,  color: "#E6FF00", subset_of: road,
+     def: "painted lines and markings on the road: lane, edge and centre lines, stop lines, arrows, text, zig-zags; part of the road (added at the user's request 2026-10-28)", rule: R-006}
 
   # vegetation
   - {id: 20, name: shrub_hedge,        group: vegetation, status: proposed, enabled: true,  color: "#9BCB3C", key: "shift+2",

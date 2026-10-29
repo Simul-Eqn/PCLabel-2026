@@ -5,12 +5,22 @@ import pytest
 
 from pclabel.render.camera import OrbitCamera
 from pclabel.render.colormaps import cyclic_oklab, sample_repeat_linear, sequential_oklab, wrap_color
-from pclabel.render.renderer import BYTES_PER_POINT, PAGE_MAX, PointRenderer, PointSource, page_range, pages_for
+from pclabel.render.renderer import (
+    BYTES_PER_POINT,
+    INSIDE_BIT,
+    PAGE_MAX,
+    PointRenderer,
+    PointSource,
+    label_bytes,
+    page_range,
+    pages_for,
+)
 from pclabel.render.shaders import (
     MODE_CLASS,
     MODE_FLAT,
     MODE_HEIGHT,
     MODE_INTENSITY,
+    MODE_LABELS,
     MODE_RGB,
     MODE_WRAP,
 )
@@ -279,4 +289,60 @@ def test_pages_packed_later_carry_the_selection(gl, target, taxonomy):
     r.render(bev(), (W, H), target, wait=True)
     img, _ = centre(target)
     assert (img[:, 10:40, 2] < 120).mean() > 0.95 and (img[:, W - 40 : W - 10, 2] > 150).mean() > 0.95
+    r.close()
+
+
+def test_labels_view(gl, target, taxonomy):
+    """The labels mode: annotation label codes (fourth label byte) in their colours, later layers over earlier
+    ones; the rest dim grey, or hidden with labels_only; codes set before and after the pages exist."""
+    src = grid_source(lambda x: np.full_like(x, 11.0))
+    r = make(gl, src, taxonomy)
+    r.display.mode = MODE_LABELS
+    table = np.zeros((256, 4), np.uint8)
+    table[1] = (0, 0, 255, 255)
+    table[2] = (255, 0, 0, 255)
+    r.set_label_colors(table)
+    left = np.flatnonzero(src.xyz[:, 0] < 0)
+    r.set_label_layers([(left, 1)])  # before any page exists
+    r.render(bev(), (W, H), target, wait=True)
+    img, _ = centre(target)
+    assert (img[:, 10:40, 2] > 200).mean() > 0.95 and (img[:, 10:40, 0] < 30).mean() > 0.95
+    rest = img[:, W - 40 : W - 10].astype(int)
+    assert (np.abs(rest[..., 0] - rest[..., 1]) < 3).mean() > 0.95 and (rest.sum(2) > 0).mean() > 0.95  # grey
+    band = np.flatnonzero(np.abs(src.xyz[:, 0]) < 1.0)
+    r.set_label_layers([(left, 1), (band, 2)])  # resident pages rewritten; the later layer over the earlier
+    r.render(bev(), (W, H), target, wait=True)
+    img, _ = centre(target)
+    assert (img[H // 2, W // 2 - 4 : W // 2 + 4, 0] > 200).all() and (img[:, 10:40, 2] > 200).mean() > 0.95
+    lab = label_bytes(src, 0, 2000, r.marks, r.label_layers)
+    assert np.array_equal(lab[:, 3] == 2, np.abs(src.xyz[:2000, 0]) < 1.0)
+    r.labels_only = True
+    r.render(bev(), (W, H), target, wait=True)
+    img, _ = centre(target)
+    assert (img.sum(2) > 0)[:, W - 40 : W - 10].mean() < 0.01 and (img[:, 10:40, 2] > 200).mean() > 0.95
+    table[1, 3] = 0  # a hidden code shows as unlabelled (hidden here)
+    r.set_label_colors(table)
+    r.render(bev(), (W, H), target, wait=True)
+    img, _ = centre(target)
+    assert (img.sum(2) > 0)[:, 10:40].mean() < 0.01
+    r.close()
+
+
+def test_clip_to_a_point_set(gl, target, taxonomy):
+    src = grid_source(lambda x: np.full_like(x, 11.0))
+    r = make(gl, src, taxonomy)
+    r.render(bev(), (W, H), target, wait=True)  # pages resident first: their label bytes are rewritten in place
+    right = np.flatnonzero(src.xyz[:, 0] >= 0)
+    r.set_marks(INSIDE_BIT, right)
+    r.display.clip_set_on = True
+    r.render(bev(), (W, H), target, wait=True)
+    img, _ = centre(target)
+    lit = img.sum(2) > 0
+    assert lit[:, : W // 2 - 8].mean() < 0.01 and lit[:, W // 2 + 8 :].mean() > 0.95
+    r.display.clip_set_on = False  # off: everything again, the set kept
+    r.render(bev(), (W, H), target, wait=True)
+    img, _ = centre(target)
+    assert (img.sum(2) > 0)[:, : W // 2 - 8].mean() > 0.95
+    lab = label_bytes(src, 0, 1000, r.marks)  # the set's bit in the third byte, apart from the flags
+    assert lab.shape == (1000, 4) and np.array_equal(lab[:, 2] == 1, src.xyz[:1000, 0] >= 0) and not lab[:, 1].any()
     r.close()

@@ -36,6 +36,8 @@ from dataclasses import asdict, dataclass
 import numba as nb
 import numpy as np
 
+from pclabel.tools import sets
+
 
 @dataclass(frozen=True)
 class GroundGrowParams:
@@ -90,11 +92,14 @@ def tile_block(tiles, t, x0, y0, cell, nx, ny):
 
 
 @nb.njit(nogil=True, cache=True)
-def _accumulate(xyz, inten, has_int, a, b, x0, y0, cell, ox, oy, w, h, clip_on, lo, hi, cnt, bz, bi, seen):
+def _accumulate(xyz, inten, has_int, a, b, x0, y0, cell, ox, oy, w, h, clip_on, lo, hi, in_on, inside, cnt, bz, bi,
+                seen):  # fmt: skip
     """Keep the first K points (K = bz.shape[1]) of every cell of the block (ox, oy, w, h) of the grid at (x0, y0)
-    from store points a..b."""
+    from store points a..b (only those in ``inside`` when ``in_on``)."""
     k_max = bz.shape[1]
     for i in range(a, b):
+        if in_on and not inside[i]:
+            continue
         x, y, z = xyz[i, 0], xyz[i, 1], xyz[i, 2]
         if clip_on and (x < lo[0] or x > hi[0] or y < lo[1] or y > hi[1] or z < lo[2] or z > hi[2]):
             continue
@@ -238,7 +243,7 @@ def _classify(xyz, a, b, x0, y0, cell, nx, ny, region, surf, tol, out):
         out[k] = ok
 
 
-def _roi_tiles(tiles, seed, radius, clip=None):
+def _roi_tiles(tiles, seed, radius, clip=None, inside=None):
     t = tiles
     near = (t["x1"] >= seed[0] - radius) & (t["x0"] <= seed[0] + radius) & (t["y1"] >= seed[1] - radius) & (
         t["y0"] <= seed[1] + radius
@@ -247,12 +252,15 @@ def _roi_tiles(tiles, seed, radius, clip=None):
         lo, hi = clip
         near &= (t["x1"] >= lo[0]) & (t["x0"] <= hi[0]) & (t["y1"] >= lo[1]) & (t["y0"] <= hi[1])
         near &= (t["zmax"] >= lo[2]) & (t["zmin"] <= hi[2])
-    return np.flatnonzero(near)
+    cand = np.flatnonzero(near)
+    return cand if inside is None else inside.keep_tiles(tiles, cand)
 
 
-def cell_grid(xyz, intensity, tiles, seed, params: GroundGrowParams, clip=None, *, extent=None) -> CellGrid:
-    """Cell statistics around ``seed`` (local coordinates). ``clip`` = (lo, hi) local box limits the points.
-    ``extent`` = (x0, y0, nx, ny) places the grid explicitly instead (``params.radius`` is then unused)."""
+def cell_grid(xyz, intensity, tiles, seed, params: GroundGrowParams, clip=None, *, extent=None,
+              inside=None) -> CellGrid:  # fmt: skip
+    """Cell statistics around ``seed`` (local coordinates). ``clip`` = (lo, hi) local box and ``inside`` (a
+    tools.sets.PointMask: the clip to a point set) limit the points. ``extent`` = (x0, y0, nx, ny) places the grid
+    explicitly instead (``params.radius`` is then unused)."""
     p = params
     seed = np.asarray(seed, np.float64)
     if extent is None:
@@ -273,6 +281,8 @@ def cell_grid(xyz, intensity, tiles, seed, params: GroundGrowParams, clip=None, 
     iarr = np.asarray(intensity) if has_int else np.zeros(1, np.uint16)
     lo, hi = (np.asarray(clip[0], np.float64), np.asarray(clip[1], np.float64)) if clip is not None else (
         np.zeros(3), np.zeros(3))  # fmt: skip
+    in_on, in_mask = sets.mask_args(inside)
+
     def block(t):
         ox, oy, w, h = tile_block(tiles, t, x0, y0, p.cell, nx, ny)
         if w == 0 or h == 0:
@@ -280,12 +290,12 @@ def cell_grid(xyz, intensity, tiles, seed, params: GroundGrowParams, clip=None, 
         a, n = int(tiles["start"][t]), int(tiles["count"][t])
         cnt_t, seen_t = np.zeros(w * h, np.int64), np.zeros(w * h, np.int64)
         bz_t, bi_t = np.empty((w * h, k), np.float32), np.empty((w * h, k), np.float32)
-        _accumulate(arr, iarr, has_int, a, a + n, x0, y0, p.cell, ox, oy, w, h, clip is not None, lo, hi, cnt_t, bz_t,
-                    bi_t, seen_t)  # fmt: skip
+        _accumulate(arr, iarr, has_int, a, a + n, x0, y0, p.cell, ox, oy, w, h, clip is not None, lo, hi, in_on,
+                    in_mask, cnt_t, bz_t, bi_t, seen_t)  # fmt: skip
         return ox, oy, w, h, cnt_t, bz_t, bi_t, seen_t
 
     with ThreadPoolExecutor(THREADS) as ex:
-        for b in ex.map(block, _roi_tiles(tiles, centre, half, clip)):  # in tile order
+        for b in ex.map(block, _roi_tiles(tiles, centre, half, clip, inside)):  # in tile order
             if b is not None:
                 _merge_block(nx, *b, cnt, bz, bi, seen)
     surf = np.full(n_cells, np.nan)
@@ -361,7 +371,7 @@ def grow_cells(grid: CellGrid, seed, params: GroundGrowParams):
 
 
 def select_region_points(xyz, tiles, grid: CellGrid, region: np.ndarray, params: GroundGrowParams,
-                         clip=None) -> np.ndarray:  # fmt: skip
+                         clip=None, inside=None) -> np.ndarray:  # fmt: skip
     """Full-resolution store indices of the points on the grown surface."""
     if not region.any():
         return np.empty(0, np.int64)
@@ -370,6 +380,8 @@ def select_region_points(xyz, tiles, grid: CellGrid, region: np.ndarray, params:
     hi = np.array([grid.x0 + (xs.max() + 1) * grid.cell, grid.y0 + (ys.max() + 1) * grid.cell])
     t = tiles
     cand = np.flatnonzero((t["x1"] >= lo[0]) & (t["x0"] <= hi[0]) & (t["y1"] >= lo[1]) & (t["y0"] <= hi[1]))
+    if inside is not None:
+        cand = inside.keep_tiles(t, cand)
     arr = np.asarray(xyz)
     surf = np.where(region, grid.surf, 0.0)
     parts = []
@@ -378,6 +390,8 @@ def select_region_points(xyz, tiles, grid: CellGrid, region: np.ndarray, params:
         out = np.empty(b - a, np.bool_)
         _classify(arr, a, b, grid.x0, grid.y0, grid.cell, grid.nx, grid.ny, region, surf, params.surface_tol, out)
         idx = np.flatnonzero(out) + a
+        if inside is not None and idx.size:
+            idx = idx[inside.mask[idx]]
         if clip is not None and idx.size:
             q = arr[idx]
             idx = idx[np.all((q >= clip[0]) & (q <= clip[1]), axis=1)]
@@ -386,14 +400,14 @@ def select_region_points(xyz, tiles, grid: CellGrid, region: np.ndarray, params:
 
 
 def ground_grow(xyz, intensity, tiles, seed, params: GroundGrowParams = GroundGrowParams(), *, grid=None,
-                clip=None) -> GrowResult:  # fmt: skip
-    """Run the whole tool. Pass ``grid`` from a previous run with the same seed area and cell size to re-grow
-    with new thresholds without re-reading the points."""
+                clip=None, inside=None) -> GrowResult:  # fmt: skip
+    """Run the whole tool. Pass ``grid`` from a previous run with the same seed area, cell size and clips to
+    re-grow with new thresholds without re-reading the points. ``inside``: only these points (a PointMask)."""
     seed = np.asarray(seed, np.float64)
     if grid is None:
-        grid = cell_grid(xyz, intensity, tiles, seed, params, clip)
+        grid = cell_grid(xyz, intensity, tiles, seed, params, clip, inside=inside)
     region, info = grow_cells(grid, seed, params)
-    idx = select_region_points(xyz, tiles, grid, region, params, clip)
+    idx = select_region_points(xyz, tiles, grid, region, params, clip, inside)
     info["points"] = int(idx.size)
     info["params"] = asdict(params)
     return GrowResult(idx, region, grid, info)

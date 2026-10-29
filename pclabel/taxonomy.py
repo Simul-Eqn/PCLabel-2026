@@ -40,6 +40,10 @@ class Taxonomy:
     def flag_mask(self, name: str) -> int:
         return 1 << self.flag_bit(name)
 
+    def subset_of(self) -> dict:
+        """{class: its parent class} for the classes that are part of another (taxonomy key ``subset_of``)."""
+        return {c["name"]: c["subset_of"] for c in self.classes if c.get("subset_of")}
+
     def color_table(self) -> "list[tuple[int, int, int]]":
         """256 RGB entries indexed by class id (grey for unused ids)."""
         table = [(128, 128, 128)] * 256
@@ -61,6 +65,17 @@ def load_taxonomy(path: str | Path | None = None) -> Taxonomy:
         raise ValueError(f"class ids must fit uint8 in {path}")
     if UNASSESSED not in ids:
         raise ValueError(f"{path} must define class 0 (unassessed)")
+    names = {c["name"] for c in classes}
+    parent = {c["name"]: c["subset_of"] for c in classes if c.get("subset_of")}
+    for child, p in parent.items():
+        if p not in names:
+            raise ValueError(f"{path}: {child} is a subset of {p!r}, which is not a class")
+        seen = {child}
+        while p in parent:  # a chain of subsets must end
+            if p in seen:
+                raise ValueError(f"{path}: the subsets of {child} go round in a circle")
+            seen.add(p)
+            p = parent[p]
     return Taxonomy(
         path=path,
         sha256=hashlib.sha256(raw).hexdigest(),

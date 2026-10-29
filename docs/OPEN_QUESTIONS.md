@@ -168,10 +168,11 @@ cosmetic.
 - **Watch for:** any case where calling it road feels wrong, e.g. a hatched area used as a parking or loading bay.
 - **Evidence:** —
 
-### Q-14 Markings: flag only, or type as well? · R-006 · low
-- **Decide:** whether the `marking` flag is enough, or each marking needs a type (lane, edge, double yellow,
-  zig-zag, arrow, text) per point or as instances.
-- **Meanwhile:** flag only.
+### Q-14 Markings: one class, or types as well? · R-006 · low
+- **Decide:** whether `road_line` (one class, part of road, since 2026-10-28) is enough, or each marking needs a
+  type (lane, edge, double yellow, zig-zag, arrow, text) per point or as instances. A type could be another class
+  with `subset_of: road_line`, or a directory per type.
+- **Meanwhile:** one class, `road_line`; paint off the road keeps the `marking` flag.
 - **Watch for:** whether paint is separable in intensity at 20–40 m; yellow vs white in RGB; which types the sketch
   needs (the current product exports lane and arrow markings).
 - **Evidence:** —
@@ -186,15 +187,30 @@ cosmetic.
 - **Ready when:** 5 or more verges or beds measured.
 - **Evidence:** —
 
-### Q-16 Trees: where does trunk end, and what are tree pits? · R-011 · low
+### Q-16 Trees: where does trunk end, and what are tree pits? · R-011, R-015 · medium
 - **Decide:**
   - (a) The trunk/canopy boundary: up to the first main fork, or include main branches.
   - (b) Tree pits and grates in the pavement: `pavement`, `grass` or `drain`?
+  - (c) Tree instances (R-015, proposed; the user's design of 2026-10-26): one directory per tree, identified by a
+    band of trunk 1.00–1.10 m above the ground at its foot, with the band's circle centre as the tree's position.
+    Is the band's height right, and is the band enough where trunks lean (0.35 m off the foot on `tree_example`)?
+  - (d) Small trees and saplings: trees like any other, or set apart (e.g. by girth at 1 m, Singapore's measure)?
 - **Meanwhile:**
-  - main stems → `tree_trunk`, everything leafy → `tree_canopy`;
+  - label trees as R-015 proposes: a band on every tree (the tree tool, `Shift+U`), `trunk` and `crown` when
+    wanted;
+  - main stems up to the first main fork → `tree_trunk`, everything above → `tree_canopy`;
   - a tree grate → `pavement`, soil in a pit → `grass`.
-- **Watch for:** trunks that a pole detector would confuse (O-0008); grates you can stand on.
-- **Evidence:** O-0008 (to verify)
+- **Watch for:**
+  - trunks that a pole detector would confuse (O-0008);
+  - grates you can stand on;
+  - trees that branch or carry leaves at the band's height;
+  - multi-stem trees;
+  - buttresses;
+  - bases hidden by hedges or cars;
+  - shrubs right against the trunk, which hide the ground height (the user, 2026-10-23);
+  - whether the ground around trees is flat (the user: mostly, 2026-10-23).
+- **Ready when:** 5 or more trees labelled with a band, including a leaning one and one in a pit or grate.
+- **Evidence:** O-0008 (to verify), O-0012
 
 ## objects and artefacts
 

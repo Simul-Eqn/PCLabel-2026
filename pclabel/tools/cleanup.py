@@ -13,7 +13,8 @@ pavement of its area unselected; this takes them in, and drops stray specks.
    surrounding columns are selected, and connected pieces of the footprint (touching columns) with fewer than
    ``min_island`` selected points.
 Only the points the caller allows are considered (``allowed``: visible through the clips and the slice, not locked);
-hidden selected points stay as they are.
+hidden selected points stay as they are. With ``inside`` (a clip to a point set) the points outside the set are not
+read at all: they count neither for the surface nor for the footprint.
 """
 
 from __future__ import annotations
@@ -54,9 +55,11 @@ def _columns(xyz, a, b, origin, n, u, v, x0, y0, cell, nx, ny, hlo, hhi, col, hg
         hgt[k] = h
 
 
-def clean_selection(xyz, tiles, selection, axis, along, origin, params: CleanParams = CleanParams(), allowed=None):
+def clean_selection(xyz, tiles, selection, axis, along, origin, params: CleanParams = CleanParams(), allowed=None,
+                    inside=None):  # fmt: skip
     """(added, removed, info): sorted store indices to add to / take out of the selection. ``axis``, ``along`` and
-    ``origin`` (local) give the height frame; ``allowed(store_indices) -> bool mask`` limits the points considered."""
+    ``origin`` (local) give the height frame; ``allowed(store_indices) -> bool mask`` limits the points considered;
+    ``inside`` (a tools.sets.PointMask) limits the points read."""
     from scipy import ndimage
 
     p = params
@@ -80,12 +83,14 @@ def clean_selection(xyz, tiles, selection, axis, along, origin, params: CleanPar
     t = tiles
     cand = np.flatnonzero((t["x1"] >= lo[0]) & (t["x0"] <= hi[0]) & (t["y1"] >= lo[1]) & (t["y0"] <= hi[1])
                           & (t["zmax"] >= lo[2]) & (t["zmin"] <= hi[2]))  # fmt: skip
+    if inside is not None:
+        cand = inside.keep_tiles(t, cand)
     idx_parts, col_parts, h_parts = [], [], []
     for k in cand:
         a, m = int(t["start"][k]), int(t["count"][k])
         col, hgt = np.empty(m, np.int64), np.empty(m)
         _columns(arr, a, a + m, origin, n, u, v, x0, y0, p.cell, nx, ny, hlo, hhi, col, hgt)
-        keep = np.flatnonzero(col >= 0)
+        keep = np.flatnonzero((col >= 0) & (inside.mask[a : a + m] if inside is not None else True))
         idx_parts.append(keep + a)
         col_parts.append(col[keep])
         h_parts.append(hgt[keep])
