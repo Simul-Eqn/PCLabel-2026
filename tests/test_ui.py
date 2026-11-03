@@ -52,6 +52,29 @@ def window(gl, taxonomy, project_dir):
     app.processEvents()
 
 
+def test_import_from_the_menu_finishes_in_the_ui_thread(window, tmp_path):
+    """Regression (2026-11-03): the import's progress and done signals ran their handlers in the worker thread
+    ("Timers cannot be started from another thread"), and the done handler waited for its own thread: a hang."""
+    import threading
+
+    from PySide6.QtWidgets import QApplication
+
+    from pclabel.ui.import_dialog import run_import
+
+    src = write_street_e57(make_street(n_target=20_000, seed=9), tmp_path / "small.e57")
+    got = []
+    run_import(window, str(src), "small", str(tmp_path / "projects"),
+               lambda path, err: got.append((path, err, threading.current_thread() is threading.main_thread())))  # fmt: skip
+    t0 = time.perf_counter()
+    while not got and time.perf_counter() - t0 < 60:
+        QApplication.instance().processEvents()
+        time.sleep(0.01)
+    assert got, "the import did not finish"
+    path, err, in_ui_thread = got[0]
+    assert err is None and in_ui_thread and (path / "project.json").exists()
+    assert not window._import_job[0].isRunning()
+
+
 def test_open_stream_and_pick(window):
     assert window.settle()
     vp = window.viewport

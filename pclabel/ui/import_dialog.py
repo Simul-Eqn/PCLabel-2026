@@ -91,8 +91,30 @@ class _Worker(QObject):
             self.done.emit(None, f"{e}\n\n{traceback.format_exc(limit=3)}")
 
 
+class _Relay(QObject):
+    """Receives the worker's signals in the UI thread. A signal connected to a plain function (no receiver object)
+    runs it in the sender's thread: the worker's. The progress dialog was then touched from the worker ("Timers
+    cannot be started from another thread"), and ``thread.wait()`` ran in the thread it waited for: the import hung
+    (the user's report of 2026-11-03)."""
+
+    def __init__(self, source, dlg, thread, on_done, parent):
+        super().__init__(parent)
+        self.name, self.dlg, self.thread, self.on_done = Path(source).name, dlg, thread, on_done
+
+    def progress(self, stage, frac):
+        self.dlg.setValue(int(frac * 1000))
+        self.dlg.setLabelText(f"Importing {self.name}: {stage} ({frac:.0%})")
+
+    def finished(self, path, err):
+        self.thread.quit()
+        self.thread.wait()
+        self.dlg.close()
+        self.on_done(path, err)
+
+
 def run_import(parent, source: str, name: str, projects_dir: str, on_done):
-    """Start an import in a worker thread with a progress dialog; calls on_done(path or None, error or None)."""
+    """Start an import in a worker thread with a progress dialog; calls on_done(path or None, error or None) in the
+    UI thread."""
     cancel = threading.Event()
     dlg = QProgressDialog(f"Importing {Path(source).name}", "Cancel", 0, 1000, parent)
     dlg.setWindowTitle("Import")
@@ -104,19 +126,10 @@ def run_import(parent, source: str, name: str, projects_dir: str, on_done):
     worker = _Worker(source, name, projects_dir, cancel)
     worker.moveToThread(thread)
     thread.started.connect(worker.run)
-
-    def progress(stage, frac):
-        dlg.setValue(int(frac * 1000))
-        dlg.setLabelText(f"Importing {Path(source).name}: {stage} ({frac:.0%})")
-
-    def finished(path, err):
-        thread.quit()
-        thread.wait()
-        dlg.close()
-        on_done(path, err)
-
-    worker.progress.connect(progress)
-    worker.done.connect(finished)
+    relay = _Relay(source, dlg, thread, on_done, parent)  # lives in the UI thread: its slots run there
+    worker.progress.connect(relay.progress, Qt.ConnectionType.QueuedConnection)
+    worker.done.connect(relay.finished, Qt.ConnectionType.QueuedConnection)
     dlg.canceled.connect(cancel.set)
-    parent._import_job = (thread, worker, dlg)  # keep references alive
+    parent._import_job = (thread, worker, dlg, relay)  # keep references alive
     thread.start()
+    return relay
