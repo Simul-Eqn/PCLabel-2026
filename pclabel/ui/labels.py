@@ -3,9 +3,11 @@
 - **Labels view** (B, or the "labels" colour mode): every point set's points in its label's colour (its own label or
   its directory's, D-007), segments and curves too; points in no labelled point set are dim grey, or hidden with
   "only labelled points". Where point sets overlap, the smaller one shows (a ``marking`` over its ``road``).
-- **Legend:** the labels in use with their colours, items and points. A label's colour is its taxonomy class colour,
-  else one given once from a palette; double-click a colour to change it (saved with the annotations). Unticked
-  labels are left out of the view, the map and the export.
+- **Legend:** the labels in use with their colours, items and points, as the taxonomy's tree (2026-11-04): a class
+  under its parent, a parent not in use shown as a group with its classes' totals. A label's colour is its taxonomy
+  class colour, else one given once from a palette; double-click a colour to change it (saved with the annotations).
+  Unticked labels are left out of the view, the map and the export; ticking or unticking a label does the same to
+  every label in use below it.
 - **Export annotations** (the user's request of 2026-10-29): the items with the ticked labels, in their directories,
   as an annotations file (``Annotations.export(labels=...)``).
 - **Label map** (Shift+B): everything shown projected onto a plane (z, or a fitted plane) as a PNG with a legend
@@ -21,7 +23,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QImage, QPainter
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -46,6 +48,7 @@ from pclabel.tools.labelmap import LABEL_MAP_SCHEMA, LabelMapParams, label_map
 from pclabel.ui.docks import _spin
 
 NO_LABEL = ""  # point sets, segments and curves without a label (own or inherited)
+GROUP = Qt.ItemDataRole.UserRole + 1  # a legend row for a class not in use itself, above classes in use
 NO_LABEL_COLOR = "#9e9e9e"
 LEGEND_WIDTH = 240  # pixels: the legend strip on the right of the map image
 
@@ -78,8 +81,7 @@ class LabelsDock(QDockWidget):
         v.addLayout(row)
         self.legend = QTreeWidget()
         self.legend.setHeaderLabels(["label", "colour", "items", "points"])
-        self.legend.setRootIsDecorated(False)
-        self.legend.setColumnWidth(0, 130)
+        self.legend.setColumnWidth(0, 170)
         self.legend.setColumnWidth(1, 60)
         self.legend.setColumnWidth(2, 45)
         self.legend.headerItem().setToolTip(3, "points in its point sets (a point in two of its sets counts twice)")
@@ -151,6 +153,7 @@ class LabelsController(QObject):
         self.hidden: set = {NO_LABEL}  # labels left out of the view and the map (this session); unlabelled sets at first
         self._synced = None  # (annotations version, hidden, colours) last sent to the renderer
         self._legend_key = None  # the same, last shown in the legend
+        self._legend_held = False  # a click on a legend row is being handled: rebuild the legend after it
         self._prev_mode = None  # the colour mode before the labels view
         self._busy = False
         self._cancel = False
@@ -225,16 +228,33 @@ class LabelsController(QObject):
         self.sync(force=True)
         self.w.annot.refresh()
 
+    def _below(self, label) -> list:
+        """The labels in use below ``label`` in the taxonomy's tree."""
+        below = set(self.w.taxonomy.descendants(label)) if label else set()
+        return [k for k in self.labels_in_use() if k in below]
+
     def _on_item_changed(self, it, col):
         if col != 0:
             return
         label = it.data(0, Qt.ItemDataRole.UserRole)
-        shown = it.checkState(0) == Qt.CheckState.Checked
-        if shown == (label not in self.hidden):
+        shown = it.checkState(0) != Qt.CheckState.Unchecked
+        branch = ([] if it.data(0, GROUP) else [label]) + self._below(label)
+        if all(shown == (k not in self.hidden) for k in branch):
             return
-        (self.hidden.discard if shown else self.hidden.add)(label)
+        for k in branch:
+            (self.hidden.discard if shown else self.hidden.add)(k)
+        # the view now; the legend only once Qt is done with the clicked row: rebuilding it now (here, or through the
+        # annotations' refresh, which syncs too) deletes the row under the click and crashes Qt (2026-11-05)
+        self._legend_held = True
+        try:
+            self.sync(force=True)
+            self.w.annot.refresh()
+        finally:
+            QTimer.singleShot(0, self._release_legend)
+
+    def _release_legend(self):
+        self._legend_held = False
         self.sync(force=True)
-        self.w.annot.refresh()
 
     def set_shown(self, labels):
         """Tick exactly these labels in the legend (the others are left out of the view, the map and the export)."""
@@ -272,17 +292,57 @@ class LabelsController(QObject):
             if x.kind == "points":
                 points[lab] = points.get(lab, 0) + len(x.indices)
         t = self.dock.legend
+        tax = self.w.taxonomy
+        used = self.labels_in_use()
         t.blockSignals(True)
         t.clear()
-        for lab in self.labels_in_use():
-            it = QTreeWidgetItem([lab or "(no label)", "", str(items.get(lab, 0)), f"{points.get(lab, 0):,}"])
+        rows = {}
+
+        def row(lab):
+            """The legend row of a label, made (with its parents' rows) when first needed."""
+            if lab in rows:
+                return rows[lab]
+            anc = tax.ancestors(lab) if lab else []
+            parent = row(anc[0]) if anc else None
+            if lab in used:
+                it = QTreeWidgetItem([lab or "(no label)", "", str(items.get(lab, 0)), f"{points.get(lab, 0):,}"])
+                state = lab not in self.hidden
+                it.setCheckState(0, Qt.CheckState.Checked if state else Qt.CheckState.Unchecked)
+            else:  # a class above classes in use: their totals (a point in two of them counts twice)
+                below = self._below(lab)
+                it = QTreeWidgetItem([lab, "", str(sum(items.get(k, 0) for k in below)),
+                                      f"{sum(points.get(k, 0) for k in below):,}"])  # fmt: skip
+                it.setData(0, GROUP, True)
+                for c in (0, 2, 3):
+                    f = it.font(c)
+                    f.setItalic(True)
+                    it.setFont(c, f)
+                it.setToolTip(0, f"{lab}: the labels in use below it (tick or untick them all)")
+                shown = [k not in self.hidden for k in below]
+                it.setCheckState(0, Qt.CheckState.Checked if all(shown) else
+                                 Qt.CheckState.Unchecked if not any(shown) else Qt.CheckState.PartiallyChecked)  # fmt: skip
             it.setData(0, Qt.ItemDataRole.UserRole, lab)
             it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            it.setCheckState(0, Qt.CheckState.Unchecked if lab in self.hidden else Qt.CheckState.Checked)
             it.setBackground(1, QColor(self.color(lab)))
             it.setToolTip(1, f"{self.color(lab)} (double-click to change)")
-            t.addTopLevelItem(it)
+            (t.addTopLevelItem if parent is None else parent.addChild)(it)
+            rows[lab] = it
+            return it
+
+        for lab in used:
+            row(lab)
+        t.expandAll()
         t.blockSignals(False)
+
+    def legend_rows(self) -> dict:
+        """{label: legend row}, every row of the tree."""
+        t, out = self.dock.legend, {}
+        stack = [t.topLevelItem(i) for i in range(t.topLevelItemCount())]
+        while stack:
+            it = stack.pop()
+            out[it.data(0, Qt.ItemDataRole.UserRole)] = it
+            stack += [it.child(i) for i in range(it.childCount())]
+        return out
 
     # ---- the view -------------------------------------------------------------------------------------------
 
@@ -307,11 +367,12 @@ class LabelsController(QObject):
         return tuple(v / 255 for v in _rgb(self.color(lab))) + (1.0,)
 
     def sync(self, force: bool = False):
-        """Bring the legend and, in the labels view, the renderer's label codes and colours up to date."""
+        """Bring the legend (unless a click on it is being handled) and, in the labels view, the renderer's label codes
+        and colours up to date."""
         self.dock.view.setChecked(self.active())
         m = self._model()
         key = (self.w.annot.version, frozenset(self.hidden), tuple(sorted(m.label_colors.items())))
-        if force or key != self._legend_key:
+        if not self._legend_held and (force or key != self._legend_key):
             self.fill_legend()
             self._legend_key = key
         r = self.w.viewport.renderer
@@ -368,7 +429,7 @@ class LabelsController(QObject):
                 continue
             poly = np.array([x.a, x.b]) if x.kind == "segment" else x.polyline()
             if x.kind == "curve" and x.closed:
-                poly = np.vstack([poly, poly[:1]])
+                poly = np.vstack([poly, poly[:1]])  # (an imported polyline's outline comes closed)
             vectors.append((poly, codes[lab]))
             vector_info.append({"name": x.name, "kind": x.kind, "label": lab, "closed": bool(getattr(x, "closed", False)),
                                 "uncertain": bool(x.uncertain)})  # fmt: skip

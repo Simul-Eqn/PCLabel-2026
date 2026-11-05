@@ -110,7 +110,7 @@ compare with the expected source indices.
   journal/ops.jsonl       one line per operation (below)
   journal/data/<op>.npz   indices and previous values per operation
   frames.json             height frames, schema pclabel.frames/1 (below)
-  annotations.json        segments, curves and point sets in directories, schema pclabel.annotations/5 (below)
+  annotations.json        segments, curves, polylines, markers and point sets in directories, schema pclabel.annotations/7 (below)
   annotations/<id>.npy    a point set's store indices (int64, sorted)
   surfaces/<name>.npz     reference / relief surfaces (grid origin, cell, heights, mask, parameters)
   regions.json            assessed regions (polygon, z range, per-class status) and patrol records
@@ -150,9 +150,10 @@ relative to the offset), `size` f8 (quadtree node edge, m), `start count` u8 (st
 
 Frames never change stored coordinates (D-006). Algorithms can read this file to use the same "height above road".
 
-**`annotations.json` and exported annotations, schema `pclabel.annotations/5`** (2 added `uncertain` on nodes,
+**`annotations.json` and exported annotations, schema `pclabel.annotations/7`** (2 added `uncertain` on nodes,
 2026-10-22; 3 keeps it on items only, 2026-10-26; 4 added `label_colors`, 2026-10-28; 5 added `labels_exported`,
-2026-10-29. Schema 1 files still read,
+2026-10-29; 6 added `polyline` items, 2026-11-04; 7 added `marker` items, 2026-11-04, and reads schema 6's one-vertex
+polylines as markers. Schema 1 files still read,
 with nothing uncertain; in schema 2 files an uncertain directory passes its mark to the items that take its label;
 schema 3 files read with no label colours. Written atomically; it replaced `pclabel.groups/1`, which is no longer
 read):
@@ -181,26 +182,61 @@ read):
       points before projection); `picked_source_indices`; `length_m`.
     - `polyline`: points about 2 cm apart along the curve. Piece k is the cubic Bézier `nodes[k]`,
       `handles_out[k]`, `handles_in[k+1]`, `nodes[k+1]`.
+  - `polyline` (imported labels, e.g. a DXF's lines): `vertices` (exact, straight pieces between them), `closed`
+    (an outline), `length_m`, `source` (where it came from: for a DXF `{format: "dxf", file, sha256, layer, entity,
+    handle}`, plus `mesh_face` for a polyface mesh's face, `radius` for a circle or arc).
+  - `marker` (a position: where a thing is): `position`, `source`. Placed from selected points (Ctrl+M):
+    `{tool: "marker", across: "mean" | "circle", height: "mean" | "lowest", points, spread (m, rms across the
+    height axis), height_range, height_axis, axis, selection (the selection operations)}`, and for a circle `trim,
+    radius, girth, rms, points_fitted, points_dropped, coverage (share of the circumference), mean_off_centre (m:
+    how far the points' mean was from the circle's centre)}`. Placed by the tree tool: `{tool: "tree", object,
+    across: "circle", height: "ground", points, points_dropped, radius, girth, rms, coverage, ground, ground_h, band,
+    height_axis, axis}`. Imported from a DXF: as a polyline's source, plus `block`, `scale`, `rotation_deg`.
   - `points`: `count`, `provenance` (the selection operations), and either `file` (the project's copy: store
     indices in `annotations/<id>.npy`) or `source_indices` (an export: sorted source indices, the export order).
-- **Labels export, schema `pclabel.annotation-labels/5`** (2 added `kind` and `flag_bit`, 2026-10-21; 3 added the
-  uncertain counts and marks, 2026-10-22; 4 dropped `uncertain_from`, 2026-10-26; 5 added the subsets, 2026-10-28):
-  `{schema, coordinates, source, offset, labels: [...], unlabelled, overlaps}`.
-  - A class that is part of another (taxonomy `subset_of`, e.g. `road_line` of `road`) also has `subset_of` and
-    `outside_parent` (its distinct points in no point set of the parent). A class with subsets in use also has
-    `subsets` (their names) and `points_with_subsets` (its distinct points with theirs).
+- **Label import profiles** (`config/label_imports/*.yaml`, schema `pclabel.label-import-profile/1`): `{schema,
+  name, format ("dxf"), layers: {source layer: label | {label, note}}}`. A label is a taxonomy class or flag name,
+  or "" (none). The import dialog picks the profile of the file's format that knows the most of its layers.
+- **Labels export, schema `pclabel.annotation-labels/6`** (2 added `kind` and `flag_bit`, 2026-10-21; 3 added the
+  uncertain counts and marks, 2026-10-22; 4 dropped `uncertain_from`, 2026-10-26; 5 added the subsets, 2026-10-28;
+  6 the taxonomy tree and markers, 2026-11-04: `subset_of`, `outside_parent`, `subsets`, `points_with_subsets` and
+  the overlaps' `subset` became `parent`, `outside_ancestors`, `descendants`, `points_with_descendants` and
+  `nested`; `path` and `rollup` added): `{schema, coordinates, source, offset, labels: [...], unlabelled, overlaps,
+  rollup}`.
+  - A class below another in the taxonomy's tree (e.g. `road_line` below `road`) also has `parent` and
+    `outside_ancestors` (its distinct points in no point set of any class above it: a road line not yet inside the
+    road's set, or a mislabel). A class with classes in use below it also has `descendants` (their names) and
+    `points_with_descendants` (its distinct points with theirs).
   - Each label is `{label, kind ("class", "flag" or "text"), class_id (null if not a taxonomy class), flag_bit
-    (null if not a taxonomy flag), counts {segment, curve, points}, points (distinct), uncertain_items,
-    uncertain_points (distinct points in uncertain point sets), items}`. A flag label (e.g. `marking`, R-006) is
-    meant to overlap a class's points.
+    (null if not a taxonomy flag), path (the class's ancestors from the top, then itself; [label] for others),
+    counts {segment, curve, polyline, marker, points}, points (distinct), uncertain_items, uncertain_points
+    (distinct points in uncertain point sets), items}`. A flag label (e.g. `marking`, R-006) is meant to overlap a
+    class's points.
+  - `rollup`: every class in use or above one, in the taxonomy's order, `{label, class_id, parent, depth, labels
+    (the classes in use at or below it), items, points (distinct)}`: e.g. `pole` with its lamp posts' and traffic
+    lights' items, though nothing is labelled `pole` itself.
   - Each item has its own `uncertain` (true/false).
   - Items are as in the tree, plus `path` (enclosing directory names) and `label_from` (the name of the node that
     carries the label).
-  - Labels are ordered taxonomy classes first (by id), then flags (by bit), then other labels by name.
-  - `overlaps` lists `{labels: [a, b], points, subset}` for labels whose point sets share points; `subset` is true
-    when one is part of the other (expected).
+  - Labels are ordered taxonomy classes first (in the taxonomy's tree order), then flags (by bit), then other
+    labels by name.
+  - `overlaps` lists `{labels: [a, b], points, nested}` for labels whose point sets share points; `nested` is true
+    when one is below the other in the tree (expected: a road set holding its lines; the more specific label is
+    the point's).
 - **Import:** source indices are mapped back to store indices with one parallel pass over `source_index`
   (0.55 s on streets 1). Point sets are only imported into a project of the same source (`sha256` and `n_valid`).
+
+**`config/taxonomy.yaml`, schema `pclabel.taxonomy/2`** (2026-11-04: the classes form a tree; schema 1 had a flat
+`group` per class and `subset_of`, and still loads, its `subset_of` read as `parent`):
+- `{schema, version, classes: [...], flags: [...]}`. A class is `{id, name, parent?, only?, status, enabled, color,
+  key?, countable?, selectable?, def, rule?}`; listed in tree order (a parent before its children).
+- `parent`: the class it is a kind of (none: a top-level class: ground, vegetation, pole, structure, temporary,
+  noise, other). Ids never change when a class moves; the tree, not the id range, says what a class belongs to.
+- `only`: `line` (segments, curves, polylines only: `curb_top`, `curb_bottom`, `curb_back`) or `marker` (`cover`).
+  Without it a class goes on point sets, lines and markers.
+- The loader refuses duplicate ids or names, a parent that is not a class, parents that go round in a circle, and an
+  unknown `only`. `pclabel.taxonomy.Taxonomy` gives `parents`, `ancestors`, `path_of`, `children`, `descendants`,
+  `tree_order` and `fits(label, item kind)`.
 
 ## rendering and LOD
 
@@ -377,11 +413,11 @@ As built in M1 (`pclabel/render/`). `renderer.py` uses moderngl only and runs in
 | `<scan>.labels.json` | sidecar: schema `pclabel.labels/1`, source path/size/sha256/N_valid, taxonomy snapshot, standard version + hash, assessed regions, op count, export time, app version |
 | LAS 1.4 (PDRF 7) | xyz, rgb, intensity; `classification` = class id; `user_data` = flags; extra bytes for instance. Optional crop and/or voxel downsample (majority label) for sharing pieces |
 | PLY | binary, with `label` and `flags` properties |
-| collapsed export | classes mapped to their `group`, or a named mapping table in taxonomy.yaml |
+| collapsed export | classes mapped to an ancestor in the taxonomy's tree (e.g. to the top level), or a named mapping table in taxonomy.yaml |
 | observations | JSONL as stored, plus markdown in the OBSERVATIONS.md template |
 | threshold / statistics reports | JSON, CSV, markdown (SPEC §10) |
 | frames / surfaces | JSON / npz, so algorithms can use the same "height above road" |
-| annotations | JSON, schema `pclabel.annotations/5` (above): segments, curves and point sets (source indices) in directories; all, the selected entries, or by label: only the items whose label (own or inherited; "" for none) is in `labels_exported`, each in its directories (which keep their names and labels but only those items), so the file imports with the same labels |
+| annotations | JSON, schema `pclabel.annotations/7` (above): segments, curves, polylines, markers and point sets (source indices) in directories; all, the selected entries, or by label: only the items whose label (own or inherited; "" for none) is in `labels_exported`, each in its directories (which keep their names and labels but only those items), so the file imports with the same labels |
 | label map | PNG (the map, then a 240 px legend strip on the right) and a JSON sidecar, schema `pclabel.label-map/1`: `source`, `offset`, `plane` (the frame), `transform {plane_normal, plane_origin (world), map_x, map_y, pixel, width, height (the map's columns and rows, without the strip), top_left (map metres), pixel_to_world}` (world = plane_origin + (top_left[0] + (col + 0.5) pixel) map_x + (top_left[1] − (row + 0.5) pixel) map_y), `image {png, map_columns, legend_strip}`, `params {pixel, dot, line_width, margin, h_min, h_max (null: none), max_side, context}`, `overlaps` (the drawing order), `legend [{label, color, code, class_id, flag_bit, pixels, points_drawn}]`, `vectors [{name, kind, label, closed, uncertain, map_xy}]` (map metres), `seconds`, `created` |
 | a plane | JSON, schema `pclabel.plane/1`: `name`, `equation {a, b, c, d}` (`a x + b y + c z + d = 0`, unit normal up, scan coordinates: the left side is the height above the plane), `z_of_xy {p, q, r}`, `normal`, `origin`, `along`, `fit` (the frame's report), `source`, `offset` |
 

@@ -172,6 +172,8 @@ def label_map(xyz_local, offset, normal, origin, along, layers, vectors, colors,
     for uv, (_, code) in zip(vectors_uv, vectors):
         if len(uv) >= 2:
             _line(codes, np.ascontiguousarray(uv), x0, y1, p.pixel, 0.5 * p.line_width, np.uint8(code))
+        elif len(uv) == 1:  # a point feature (an imported map symbol): a dot twice the line width across
+            _line(codes, np.repeat(uv, 2, 0), x0, y1, p.pixel, p.line_width, np.uint8(code))
     tick(1)
     table = np.asarray(colors, np.uint8).copy()
     table[0] = 0

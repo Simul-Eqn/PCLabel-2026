@@ -584,8 +584,8 @@ parameters.
   - On streets 1 the user's case was curve 11 as a loop, inset 5 cm, −0.10 to +0.05 m, giving 27.3M points. The
     preview would add 739k (the grass at the island's tip, and the feet of people and poles) and take out 15
     specks, in 3.3 s in a worker.
-- **Tree tool** (2026-10-26, the user's design; R-015, proposed): `Shift+U` (Select ▸ "Tree"), then click the
-  ground at the foot of a trunk.
+- **Tree tool** (2026-10-26, the user's design; R-015, proposed; for poles too since 2026-11-04, R-017 proposed,
+  below): `Shift+U` (Select ▸ "Tree or pole"), then click the ground at the foot of a trunk.
   - The clicked point's height along the height axis is the tree's ground height. A cylinder appears 1.00–1.10 m
     above it: the "Tree" box in the 3D select panel sets the band and the starting radius (0.5 m).
   - 3D select takes over: W A S D move the cylinder onto the trunk, and the radius field sizes it. A click on the
@@ -598,6 +598,8 @@ parameters.
   - The circle's centre at the ground height is the tree's position. The position, radius, girth, rms, the share
     of the circumference covered and the ground point go into the point set's provenance (`"tool": "tree"`) and
     are shown in the box. Undoable.
+  - Since 2026-11-04 the directory also gets a **marker** named `position`, labelled `tree`, at that position
+    (first in the directory), and the box's "what" can be a pole instead (below).
 - **3D select's keys in its number fields** (2026-10-26, the user's request): after typing a radius (or any field
   of the 3D select panel), W A S D Q E Z X and K still move, turn and clip the volume. Enter in a field takes its
   value and gives the keys back to the view, so the next Enter selects.
@@ -611,13 +613,77 @@ parameters.
 - **`ramp` class** (2026-10-22, the user's request): taxonomy 0.3, id 9, the sloped walking surface between the
   pavement and the road (R-007, proposed change; its extent is open).
 - **`road_line` class** (2026-10-28, the user's request: "a road lines class, which is going to be a subset of the
-  road class"): taxonomy 0.4, id 10, with the new taxonomy key `subset_of: road` (R-006, proposed).
+  road class"): taxonomy 0.4, id 10, with the new taxonomy key `subset_of: road` (R-006, proposed). Since
+  2026-11-04 the general case: `road_line`'s `parent` is `road` in the taxonomy's tree (below).
   - Label the road's set `road` with its lines in it, and the lines' own sets `road_line`.
-  - "Export labels" (schema 5) gives the parent its `subsets` and `points_with_subsets`, the subset its
-    `subset_of` and `outside_parent` (its points in no set of the parent: to check), and marks parent ∩ subset
-    overlaps `subset: true`.
+  - "Export labels" (schema 6) gives the parent its `descendants` and `points_with_descendants`, the child its
+    `parent` and `outside_ancestors` (its points in no set of a class above it: to check), and marks parent ∩ child
+    overlaps `nested: true`.
   - The labels view and the label map draw the smaller set on top, so the lines show over the road.
-  - The taxonomy loader refuses a `subset_of` that names no class or goes round in a circle.
+- **The labels form a tree** (2026-11-04, the user's decision, P8; taxonomy 0.5, schema `pclabel.taxonomy/2`):
+  - Every class has a `parent` it is a kind of, under six top-level kinds: `ground` (road with road_line, gutter,
+    parking, driveway and ramp; curb with curb_lowered and its three edges; pavement; drain; cover; hard_surface;
+    grass; island), `vegetation` (shrub_hedge; tree with tree_trunk and tree_canopy), `pole` (lamp_post,
+    traffic_light_pole, other_pole), `structure` (building_wall, wall, fence_railing, barrier, roof_shelter, bridge,
+    street_furniture), `temporary` (vehicle, person, temporary_object, ghost), then `noise` and `other`. Ramp and
+    driveway are kinds of road; pavement has no sub-labels (the user, 2026-11-04).
+  - **What a parent label means** (the user's words): use the parent "if it's not covered by a sub-label, or we're
+    lazy, or not fully sure"; otherwise use the more specific sub-label.
+  - **Label menus show the tree:** the label box in Annotations and the import dialog's label boxes indent each
+    class under its parent. The Labels panel's legend is the tree too: a parent not in use is a group row (italic)
+    with its classes' totals, ticked, unticked or partly ticked; ticking or unticking a label does the same to every
+    label in use below it.
+  - **Lines and markers only:** `curb_top`, `curb_bottom` and `curb_back` (the kerb's lip, toe and back: ROCK's
+    TOP_, BOTTOM_ and BACK_OF_CURB) go only on lines, `cover` (a manhole or utility cover) only on markers. The
+    label box greys them out for other items and refuses them there (also when typed in the tree). Every other
+    label goes anywhere: on a point set its points, on a line its edge or outline, on a marker where it stands.
+  - **Export labels** (schema 6): each label has its `path` in the tree; a class with classes in use below it has
+    `points_with_descendants`; `rollup` totals every class in use or above one (e.g. `pole` over its lamp posts and
+    traffic lights). Overlaps along a branch are `nested` (expected; the more specific label is the point's).
+  - Moving a class to another parent in the yaml changes what it rolls up to, without relabelling anything. No class
+    was renamed and no id changed, so every earlier annotation file keeps its labels.
+  - **Colours follow the tree** (taxonomy 0.6, 2026-11-05, the user's request): one hue family per kind. Ground's
+    surfaces each have a hue (road blue, curb red, pavement yellow, drain cyan, grass green), and their sub-classes
+    are shades of it (road_line pale blue on the road's indigo; the curb's three lines light, dark and crimson red);
+    vegetation is green, poles purple, structures grey, temporary things orange; noise dark grey, other near white.
+    A test keeps every colour distinct and each sub-class within 40° of its parent's hue.
+  - The labels view (B) redraws segments, curves, polylines and markers in their labels' colours when it comes on,
+    and in their directories' when it goes off (until 2026-11-05 they kept their colours until the next redraw).
+  - Ticking a legend row rebuilds the legend only after Qt has finished with the click. Rebuilding it during the
+    click deleted the clicked row under Qt and crashed the app (an access violation in Qt6Widgets, 2026-11-05).
+    `%LOCALAPPDATA%\PCLabel\_logs\crash.log` now gets the Python stack of every thread on such a crash.
+- **Markers** (2026-11-04, the user's request: "a new kind of marker object ... place marker at mean location (of
+  selected points)"): a position, as an annotation item (`marker`; annotations schema 7).
+  - `Ctrl+M` (Select ▸ "Marker where the selection is"; the "marker" button in Annotations): a marker for the
+    selection, in the directory selected in the tree like `Ctrl+G` (`Ctrl+Shift+M`: at the top level). The panel's
+    "marker at" chooses:
+    - across the height axis: the **mean of the points**, or the **centre of a circle** fitted to them (poles,
+      trunks; points more than 3 cm off the circle are left out and it is fitted again);
+    - along it: their **mean height** or their **lowest point**.
+  - Why the circle: a pole or trunk is scanned from one side, so its points' mean sits toward the scanner. On the
+    127 tree bands of `streets 1` the mean was a median 5.6 cm (0.73 radii) from the fitted centre, 83 % of them
+    toward the scanner, up to 31 cm (O-0014). The status line says how far the mean was from the centre.
+  - The marker keeps how it was placed (method, points, spread, the selection's operations; for a circle its radius,
+    girth, rms and coverage). Drawn as a dot with an 0.8 m pin up the height axis; on the label map as a dot.
+  - **Moving markers up or down** (2026-11-04, the user's request): "move selected markers up by" (a distance in
+    metres, negative: down) and "move" shift the markers selected in the tree (and those in selected directories)
+    along each marker's own height axis (the active one for a marker without one, e.g. imported). One undo step;
+    each move is added to the marker's `source.moved`.
+  - **A marker's plane** (2026-11-05, the user's request): a marker keeps the height axis it was placed with
+    (`source.height_axis`, `axis`); its pin is drawn along it. "Use the active height axis" makes the active one (z
+    or a fitted plane) the selected markers' own, keeping their positions (the user's choice: switch the axis, do
+    not re-place). One undo step; each change is added to `source.axis_changes`.
+  - Labelled like any item; exported with `position` and `source`; counted under `marker` in "export labels".
+  - Imported map symbols (a DXF's block references: poles, trees, manholes) are markers; schema 6's one-vertex
+    polylines are read as markers.
+- **Trees and poles by a band, with a marker** (2026-11-04, R-017 proposed; the tree tool's method for poles):
+  - The Tree box is now "Tree or pole": "what" is `tree`, `pole`, `lamp_post`, `traffic_light_pole` or
+    `other_pole` (the taxonomy's `pole` and its kinds).
+  - Saving makes `lamp_post NN` (etc.) in `poles` (default; made when missing), with a marker named `position`
+    labelled with what it is, at the band's circle centre at the clicked ground, and the band as a point set `pole
+    1.00 to 1.10 m` labelled the same. A tree's band stays `tree_trunk`; its marker is `tree`.
+  - "Add markers to earlier trees": every directory holding a tree band saved before markers existed (a recorded
+    position and no marker) gets its marker from that position; one undo step.
 - **Pieces: keep part of the selection** (2026-10-21, the user's request: a 3D select gives an object plus a few
   random points elsewhere, "contiguous subselect the object"): the selection falls into connected pieces, points
   joined through selected points closer than the gap (10 cm voxels, 26 neighbours: closer than 10 cm always join,
@@ -797,6 +863,40 @@ parameters.
   (boundary tracing) and refine.
 - **Export:** local-frame JSON and DXF layers. This is the bridge to the sketch plan.
 
+**Imported labels (built 2026-11-04, the user's request: "import different kinds of labels", first ROCK Robotic's
+planimetrics DXF for `mobile-colorized-v2-1`)** (`io/dxf.py`, `store/label_import.py`, `ui/label_import.py`).
+- **File > Import labels (DXF)...** (`Ctrl+Shift+I`): the file is read in a worker thread, then a dialog shows:
+  - the drawing (version, units) and how it sits on the scan: its vertices inside the scan's bounding box (red when
+    under half: another site or coordinate system?), and the entity types not read;
+  - per layer: its colour in the drawing, its features (e.g. "55 POLYLINE"), vertices, the label it gets and why;
+  - the profile the labels come from (`config/label_imports/*.yaml`; the one that knows the most of the layers is
+    chosen). Labels can be edited and layers unticked before importing.
+- **The import** (one undo step): a directory "<file> (imported)", a directory per layer (its name, its colour, its
+  label), and a **polyline** per feature: exact 3D vertices, unlike a curve (planar and smoothed), so a curb line
+  keeps the drawing's heights. A map symbol (a DXF block reference: pole, manhole, tree) is a **marker** (until
+  2026-11-04 a one-vertex polyline). Every feature keeps its file, layer, entity type and handle.
+- Imported polylines and markers are annotations like the others: labels view, label map (markers as dots twice the
+  line width), "export labels", export by label, rename, move, duplicate, delete.
+- **The ROCK profile** (remapped 2026-11-04 to the taxonomy's tree): all 53 layers ROCK lists. The curb's three lines
+  go to `curb_top`, `curb_bottom`, `curb_back`; GUTTER and GUTTER_BOTTOM to `gutter`; PAVED_PARKING to `parking`;
+  MANHOLE to `cover`; CONCRETE, HARD_SURFACE to `hard_surface`; SINGLE_TREE to `tree`; retaining walls to `wall`;
+  GUARD_RAIL to `barrier`. Paved and unpaved go to the same label (P1: function, not material). Ten rural or US-only
+  layers (RAILS, PIPELINE, ABOVE_GROUND_PIPE, ROUND_TANK, CATTLE_GUARD, DAM, DOCK, AIRPORT_RUNWAY, SWIMMING_POOL,
+  TENNIS_COURT) get no label.
+- **DXF reading** (no CAD library): LINE, POINT, 3DFACE, POLYLINE (3D, 2D, polyface mesh faces), LWPOLYLINE (arcs
+  tessellated every 5 degrees), CIRCLE, ARC, INSERT (insertion point only). Planar entities are turned from their
+  object coordinate system into world coordinates (the arbitrary axis algorithm): 413 of the 422 LWPOLYLINEs of
+  `mobile-colorized-v2-1.dxf` are tilted, and read as plain x, y they would land kilometres away. `$INSUNITS`
+  scales to metres. Binary DXF is refused.
+- **Measured** on `mobile-colorized-v2-1.dxf` (7.3 MB, 1,021 entities, 40,326 vertices, 31 layers) for the
+  `mobile-colorized-v2-1` project (595M points): read in 0.38 s, the tree in 0.04 s, 2.1 MB of annotations JSON;
+  every vertex inside the scan's bounding box; 748 features labelled by the ROCK profile (1,015 of 1,021 since its
+  remapping to the tree, 2026-11-04: all but RAILS).
+- **How it lines up:** the drawing is in the scan's own coordinates (UTM-like metres, no shift). Where scan points
+  lie within 5 cm (xy) of a vertex (36% of vertices), the nearest one's height is within 1 cm for 90% of the
+  vertices of the ground layers (median 0.000 m: the vertices sit on scan points). Below TOP_OF_CURB the lowest
+  points nearby are a median 14 cm lower (the curb's face).
+
 **Built early (2026-10-19, at the user's request): segments, curves and annotation directories**
 (`ui/annotate.py`, `store/annotations.py`, `analysis/curves.py`).
 - **Segment** (`V`): click two points of the cloud, near or far apart (navigate between the clicks). Each click takes
@@ -916,6 +1016,7 @@ parameters.
 | `Shift+Enter` | finish a curve as a closed loop (built) |
 | `V` / `Shift+V` | line segment (click two points) / curve (click points, Enter: edit its gradients) (built early, §13) |
 | `Ctrl+G` | make the selection a point set (an annotation item; built early, §13), in the directory selected in Annotations |
+| `Ctrl+M` / `Ctrl+Shift+M` | a marker where the selection is (its mean, or a circle's centre; its mean height or lowest point), in the directory selected in Annotations / at the top level |
 | `Ctrl+Shift+G` | the same, at the top level |
 | `Ctrl+D` | duplicate the directories and items selected in Annotations |
 | `F2` | rename the directory or item selected in Annotations |
@@ -940,10 +1041,11 @@ parameters.
 | `H` / `Shift+H` | height axis z ↔ last fitted plane / height slice on and off (M2, built; `hs` comes later) |
 | `K` / `Shift+K` | clip box on/off / clip box from the view (M1) |
 | `P` | keep a piece of the selection: click it (Shift adds a piece, Ctrl takes one away) |
-| `Shift+U` | tree: click the ground at a trunk; a cylinder 1.00–1.10 m above it (3D select); Enter, then "save the selection as a tree" |
+| `Shift+U` | tree or pole: click the ground at its foot; a cylinder 1.00–1.10 m above it (3D select); Enter, then "save the selection": the band and a marker at its circle's centre, at the ground |
 | `Ctrl+K` / `Ctrl+Shift+K` | clip to the point sets selected in the Annotations panel / that clip off and on |
 | `Ctrl+E` | eye-dome lighting on/off (M1) |
 | `Ctrl+O` / `Ctrl+I` | open project / import scan (M1) |
+| `Ctrl+Shift+I` | import labels made elsewhere (a DXF's layers) |
 | right drag / right mouse + `W A S D Q E` | rotate, as left drag / fly: once a key is pressed the mouse looks until the button goes up (while the right button is held these keys move instead of their usual action) |
 
 Built in M1: `T`, `C` / `Shift+C`, `W`, `[` `]`, `Shift+[` `Shift+]` and the rows marked M1.

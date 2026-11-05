@@ -56,6 +56,7 @@ from pclabel.ui.trees import TreeController
 from pclabel.ui.split import SplitController
 from pclabel.ui.volume import VolumeController
 from pclabel.ui.import_dialog import ImportDialog, run_import
+from pclabel.ui.label_import import LabelImportController
 from pclabel.ui.undo import UndoStack
 
 MODES = sorted(MODE_NAMES)
@@ -137,6 +138,7 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.pieces.dock)
         self.tabifyDockWidget(self.display, self.pieces.dock)
         self.labels = LabelsController(self)  # the labels view and the label map
+        self.label_import = LabelImportController(self)  # File > Import labels (e.g. a DXF's layers)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.labels.dock)
         self.tabifyDockWidget(self.display, self.labels.dock)
         self._locked = (None, np.empty(0, np.int64))  # (annotations version, store indices that cannot be selected)
@@ -180,7 +182,7 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self.s_gl)
 
         self.display.changed.connect(self._apply_display)
-        self.display.changed.connect(lambda: self.labels.sync())
+        self.display.changed.connect(self._labels_view_changed)
         self.display.budget_changed.connect(self.viewport.set_point_budget)
         self.display.auto_height.connect(self.auto_height)
         self.display.auto_intensity.connect(self.auto_intensity)
@@ -230,6 +232,7 @@ class MainWindow(QMainWindow):
         m = self.menuBar().addMenu("&File")
         self._action(m, "Open project...", "Ctrl+O", self.open_dialog)
         self._action(m, "Import scan...", "Ctrl+I", self.import_dialog)
+        self._action(m, "Import labels (DXF)...", "Ctrl+Shift+I", lambda: self.label_import.start())
         m.addSeparator()
         self._action(m, "Quit", "Ctrl+Q", self.close)
         m = self.menuBar().addMenu("&Edit")
@@ -276,7 +279,7 @@ class MainWindow(QMainWindow):
                               lambda: self.toggle_tool("volume"))  # fmt: skip
         self._action(m, "Keep a piece of the selection (click it; Shift adds, Ctrl takes away)", "P",
                      lambda: self.toggle_tool("piece"))  # fmt: skip
-        self._action(m, "Tree: click the ground at a trunk, 3D select a band of it, save it as a tree", "Shift+U",
+        self._action(m, "Tree or pole: click the ground at its foot, 3D select a band of it, save it", "Shift+U",
                      lambda: self.trees.begin())  # fmt: skip
         fit = self._action(m, "Fit plane to selection (height axis)", "F", self.fit_plane)
         m.addSeparator()
@@ -286,6 +289,10 @@ class MainWindow(QMainWindow):
                              lambda: self.annot.points_from_selection())  # fmt: skip
         self._action(m, "Point set from the selection, at the top level", "Ctrl+Shift+G",
                      lambda: self.annot.points_from_selection(top_level=True))  # fmt: skip
+        marker = self._action(m, "Marker where the selection is (in the directory selected in Annotations)", "Ctrl+M",
+                              lambda: self.annot.marker_from_selection())  # fmt: skip
+        self._action(m, "Marker where the selection is, at the top level", "Ctrl+Shift+M",
+                     lambda: self.annot.marker_from_selection(top_level=True))  # fmt: skip
         self._action(m, "Rename the directory or item selected in Annotations", "F2", lambda: self.annot.rename_selected())
         self._action(m, "Duplicate the directories and items selected in Annotations", "Ctrl+D",
                      lambda: self.annot.duplicate_selected())  # fmt: skip
@@ -316,7 +323,7 @@ class MainWindow(QMainWindow):
         for a, label in ((lasso, "Lasso (L)"), (rect, "Rectangle (R)"), (grow, "Grow select (G)"),
                          (magic, "Magic select (I)"), (volume, "3D select (U)"), (fit, "Fit plane (F)"),
                          (seg, "Segment (V)"),
-                         (curve, "Curve (Shift+V)"), (group, "Points (Ctrl+G)")):  # fmt: skip
+                         (curve, "Curve (Shift+V)"), (group, "Points (Ctrl+G)"), (marker, "Marker (Ctrl+M)")):  # fmt: skip
             b = tb.addAction(label, a.trigger)
             b.setToolTip(a.text())
         tb.addAction("Slice", lambda: self.frames_dock.slice_on.toggle())
@@ -388,6 +395,15 @@ class MainWindow(QMainWindow):
         self.s_gl.setText(gl)
 
     # ---- display ----------------------------------------------------------------------------------------
+
+    def _labels_view_changed(self):
+        """The colour mode changed: the labels' codes and colours, and when the labels view comes or goes, the
+        segments, curves, polylines and markers drawn again in their labels' colours (or their directories')."""
+        self.labels.sync()
+        on = self.labels.active()
+        if on != getattr(self, "_labels_on", False):
+            self._labels_on = on
+            self.annot.refresh()
 
     def _on_renderer_ready(self):
         self.clip_scene()

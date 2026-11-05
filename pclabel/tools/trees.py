@@ -1,9 +1,10 @@
-"""Trees identified by a band of their trunk (R-015, proposed; the user's design of 2026-10-26).
+"""Trees identified by a band of their trunk (R-015, proposed; the user's design of 2026-10-26), and poles the same
+way (R-017, proposed 2026-11-04).
 
-The labeller clicks the ground at the foot of the trunk: its height along the height axis is the tree's ground
-height. A cylinder 1.00-1.10 m above it (``TreeParams``) is moved onto the trunk and sized; the points inside are the
-tree's identifying band. ``fit_trunk`` fits a circle to the band across the height axis: the circle's centre, put
-at the ground height, is the tree's position; its radius gives the girth.
+The labeller clicks the ground at the foot of the trunk or pole: its height along the height axis is the object's
+ground height. A cylinder 1.00-1.10 m above it (``TreeParams``) is moved onto the trunk or pole and sized; the points
+inside are the object's identifying band. ``fit_trunk`` fits a circle to the band across the height axis: the
+circle's centre, put at the ground height, is the object's position (its marker); its radius gives the girth.
 """
 
 from __future__ import annotations
@@ -60,7 +61,11 @@ def fit_trunk(xyz, idx, ground, axis, along=(1.0, 0.0, 0.0), trim: float = 0.03)
             "band": (float(h.min()), float(h.max()))}  # fmt: skip
 
 
+def next_name(names, base: str = "tree") -> str:
+    """"tree 01", "tree 02", ... (or "lamp_post 01", ...): one more than the highest number among ``names``."""
+    nums = [int(m.group(1)) for s in names if (m := re.fullmatch(re.escape(base) + r" (\d+)", s))]
+    return f"{base} {max(nums, default=0) + 1:02d}"
+
+
 def next_tree_name(names) -> str:
-    """"tree 01", "tree 02", ...: one more than the highest number among ``names``."""
-    nums = [int(m.group(1)) for s in names if (m := re.fullmatch(r"tree (\d+)", s))]
-    return f"tree {max(nums, default=0) + 1:02d}"
+    return next_name(names, "tree")

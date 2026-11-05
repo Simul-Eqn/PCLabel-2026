@@ -150,6 +150,93 @@ Things noticed in the scans while labelling. Observations are the main output of
     slice to measure lean, and give the foot, is a possible extension.
 - status: open
 
+### O-0013 ROCK's planimetrics draw a kerb as three lines plus a gutter: lip 14.5 cm above and 7 cm out from the toe
+- date / who: 2026-11-04, measured by Claude on the DXF at the user's request (recorded at the user's request)
+- scan: `mobile-colorized-v2-1` (ROCK mobile mapping, R3 Pro); drawing `mobile-colorized-v2-1.dxf` (ROCK
+  planimetrics) · where: the whole drawing (not recorded per kerb)
+- tags: curb, curb_top, curb_bottom, curb_back, gutter, road edge, ROCK, Q-01, Q-02, Q-10
+- seen (medians over the lines' vertices, each layer against the nearest line of the other, densified every 2 cm;
+  from the DXF alone, not checked against the scan's points):
+  - TOP_OF_CURB is 7 cm out from BOTTOM_OF_CURB (p10–p90 4.6–9.0 cm) and 14.5 cm above it (p10 10.5, p90 15.0 cm).
+    90 % at or under 15.0 cm, which is 6 inches: possibly a template profile rather than measured heights.
+  - BACK_OF_CURB is 8 cm behind TOP_OF_CURB (p10–p90 6–12 cm) at the same height to the millimetre (p10, p50 and
+    p90 all 0.000 m): constructed from the top line, not measured.
+  - GUTTER is 0.51 m out from BOTTOM_OF_CURB (p10–p90 0.31–0.62 m; 82 % of its vertices within 1.5 m of it) and
+    2.7 cm higher: BOTTOM_OF_CURB is the gutter's flow line.
+  - PAVED_ROAD runs along GUTTER (4.9 cm) where there is a gutter, else near BOTTOM_OF_CURB: ROCK's road stops at
+    the gutter.
+  - FOOT_PATH runs along BACK_OF_CURB (4.8 cm, where it is within 1.5 m of it: 54 % of its vertices); PAVED_PARKING
+    along BOTTOM_OF_CURB (4.5 cm).
+  - Each curb layer has 55 polylines of about 2.8 km in all.
+- evidence: scratchpad script `rock_line_gaps.py` (this session); earlier (O-0011's session) the lowest scan
+  points below TOP_OF_CURB were a median 14 cm lower, consistent with the 14.5 cm.
+- seen elsewhere: not checked (ROCK's r3_pro drawing `planimetrics-dataset-with-r3-pro-try-2-3d-1-.dxf`; no
+  Singapore scan has a ROCK drawing)
+- implications:
+  - **Rule:** ROCK's model is R-004's option B (a kerb unit from toe to back) with Q-02 answered "draw all three
+    lines" and Q-10 answered "the gutter is not road". The taxonomy's line labels `curb_top`, `curb_bottom` and
+    `curb_back` (2026-11-04, proposed) let the labeller draw the same three lines; R-004 proposed addition: label
+    the kerb's edges as these lines where they are visible.
+  - **Lint:** for a labelled kerb with all three lines, `curb_top` should lie above `curb_bottom` by the kerb's step
+    and `curb_back` within the kerb-top width of `curb_top`; a pair of lines more than about 0.3 m apart is a
+    mislabel or an unusual kerb (not a §9 point query: a check between lines).
+  - **Measurement:** check ROCK's lines against the scan's points: the step at TOP_OF_CURB measured in cross
+    sections (is it really 15 cm everywhere, or a template?), and whether BACK_OF_CURB sits on a visible joint.
+  - **View:** draw two lines' separation along them (a profile of the gap and the height difference), so a
+    template-like constant shows at a glance.
+- status: open
+
+### O-0014 The plain mean of a trunk band sits 5.6 cm from the trunk's axis, toward the scanner
+- date / who: 2026-11-04, measured by Claude on the user's tree bands
+- scan: `streets 1.e57` · where: the 127 tree bands saved with the tree tool (directories `bli_trees`,
+  `bri_trees`, `middle_trees`, `top_trees`)
+- tags: tree, tree_trunk, marker, position, instance, R-015, R-017, Q-16, Q-17
+- seen (each band's points against the circle the tree tool fitted to it, across the height axis):
+  - bands: radius p10/50/90 3.1 / 8.4 / 18.5 cm; 31 % / 50 % / 84 % of the circumference covered; 20 / 46 / 73 m from
+    the scanner; 56 / 486 / 6,794 points.
+  - the points' mean is 1.6 / 5.6 / 13.4 cm from the fitted centre (p10/50/90), up to 31.4 cm; 0.35 / 0.73 / 0.86
+    radii. 83 % of the offsets point toward the scanner (taken at the scan's origin).
+  - by coverage: under 50 % (55 bands) median 6.9 cm (0.80 radii); 50–75 % (48) 4.8 cm (0.71); 75 % and more (24)
+    3.4 cm (0.50).
+- evidence: scratchpad script `tree_mean_bias.py` (this session). In theory a circular arc of half-angle a has its
+  points' mean r·sin(a)/a from the centre: 0.64 r for a half circle.
+- seen elsewhere: not checked
+- implications:
+  - **Rule:** a pole's or trunk's position should not be its points' mean; the circle's centre of a band (R-015's
+    method) is not pulled toward the scanner. Proposed R-017: one marker per tree or pole, at its band's circle
+    centre at the ground.
+  - **Tool:** markers (Ctrl+M) offer "circle centre" besides "mean", and say how far the mean was from the centre.
+  - **Algorithm:** a detector that places poles at the centroid of their points is biased by about 0.7 radii toward
+    the scanner; position errors should be scored against circle centres.
+  - **Measurement:** whether the circle fit itself is biased at low coverage (31 % at p10): compare with trunks seen
+    from two sides where a scan has them.
+- status: open
+
+### O-0015 ROCK's pole and tree symbols sit at the foot, within 5–13 cm of the pole's axis
+- date / who: 2026-11-04, measured by Claude
+- scan: `mobile-colorized-v2-1` with `mobile-colorized-v2-1.dxf` · where: every LIGHT_POLE (25), TRAFFIC_SIGNAL
+  (16), SIGN_BOARD (19), SINGLE_TREE (12) and ELECTRIC_POLE (3) symbol
+- tags: lamp_post, traffic_light_pole, other_pole, tree, marker, position, ROCK, R-017, Q-17
+- seen (for each symbol, the densest 5 cm column of scan points within 1 m and 1.0–1.5 m above it, a circle fitted
+  to it; p10/50/90):
+  - symbol to the column's circle centre: light poles 1.5 / 6.0 / 15.7 cm; traffic signals 3.9 / 9.0 / 31.2 cm;
+    sign boards 0.8 / 4.9 / 17.2 cm; trees 5.0 / 12.7 / 73.6 cm; electric poles (3) median 8.7 cm.
+  - symbol height above the ground under it (5th percentile of points within the column's radius + 0.4 m): light
+    poles 1.4 / 4.2 / 7.7 cm, traffic signals 2.7 / 5.0 / 13.4 cm, sign boards 1.8 / 2.6 / 14.6 cm, trees
+    4.3 / 6.3 / 9.7 cm.
+  - The mobile scan sees each pole from one side: the columns cover only 6–19 % of their circumference, so these
+    circle centres are themselves uncertain by several cm. The columns' plain means were 6–9 cm (median) off them.
+- evidence: scratchpad script `rock_symbols_vs_poles.py` (this session)
+- seen elsewhere: not checked (no Singapore scan has a ROCK drawing)
+- implications:
+  - **Rule:** ROCK places a pole's or tree's symbol at its foot, on or near its axis: the same reference as R-017
+    (proposed), so labelled markers and ROCK's symbols can be matched and their distances scored.
+  - **Measurement:** with markers placed by the band method on this scan, ROCK's position errors could be measured
+    properly; a scan that sees poles from more sides would bound the circle fit's own error.
+  - **Tool:** matching markers between two sources (ROCK's and the labeller's) within a radius, reporting
+    detections, misses and distances, is a possible tool.
+- status: open
+
 ### Prior observations from earlier work in this workspace (status `to verify`)
 
 These come from `../Roadrun/docs/experiments.md` and `../Roadrun/docs/project_brief.md`, made on a 5 cm voxel

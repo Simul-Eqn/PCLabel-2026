@@ -1,8 +1,13 @@
 """Annotations: line segments, curves and point sets, organised in a tree of directories (SPEC §13; format in
 ARCHITECTURE "annotations").
 
-- **Items** (segments, curves, point sets) stand on their own: a new item goes to the top level with a colour of its
-  own.
+- **Items** (segments, curves, point sets, and imported polylines) stand on their own: a new item goes to the top
+  level with a colour of its own.
+- **Polylines** come from imported labels (a DXF drawing's lines and outlines, store/label_import.py): exact 3D
+  vertices, unlike a curve (planar, smoothed).
+- **Markers** are positions: where a thing is (a pole's or a tree's foot, a manhole). One is placed from selected
+  points (their mean, or the centre of a circle fitted across the height axis: tools/markers.py) or imported (a
+  DXF's map symbol). Schema 6's one-vertex polylines are read as markers.
 - **Directories** hold items and other directories. Everything inside a directory is drawn in the directory's
   colour; a directory without a colour of its own takes its parent's. So separate items can share a colour without
   being one item.
@@ -26,10 +31,11 @@ import numpy as np
 from pclabel.analysis import curves
 from pclabel.store.importer import write_json_atomic
 
-SCHEMA = "pclabel.annotations/5"  # 2 added `uncertain` on nodes, 3 keeps it on items only, 4 added `label_colors`,
-# 5 added `labels_exported` (exports by label)
+SCHEMA = "pclabel.annotations/7"  # 2 added `uncertain` on nodes, 3 keeps it on items only, 4 added `label_colors`,
+# 5 added `labels_exported` (exports by label), 6 added `polyline` items (imported labels), 7 added `marker` items
 READ_SCHEMAS = ("pclabel.annotations/1", "pclabel.annotations/2", "pclabel.annotations/3", "pclabel.annotations/4",
-                SCHEMA)  # fmt: skip
+                "pclabel.annotations/5", "pclabel.annotations/6", SCHEMA)  # fmt: skip
+ITEM_KINDS = ("segment", "curve", "polyline", "marker", "points")
 SET_OPS = {  # op -> (symbol, words)
     "union": ("∪", "in A or B"),
     "intersection": ("∩", "in both A and B"),
@@ -37,7 +43,7 @@ SET_OPS = {  # op -> (symbol, words)
     "b_minus_a": ("/", "in B but not in A"),
     "xor": ("△", "in one of them only"),
 }
-LABELS_SCHEMA = "pclabel.annotation-labels/5"
+LABELS_SCHEMA = "pclabel.annotation-labels/6"  # 6: the taxonomy tree (parent, rollup), markers
 PALETTE = ("#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#42d4f4", "#f032e6", "#bfef45", "#fabed4",
            "#469990", "#dcbeff", "#9a6324", "#fffac8", "#800000", "#aaffc3", "#808000", "#ffd8b1", "#000075")  # fmt: skip
 
@@ -226,6 +232,66 @@ class Curve:
 
 
 @dataclass(eq=False)  # nodes are compared by identity (their arrays have no single truth value)
+class Polyline:
+    """Imported vector geometry, kept exactly: straight pieces between 3D vertices (no plane, no smoothing)."""
+
+    vertices: np.ndarray  # (n, 3) world (a single position is a Marker)
+    closed: bool = False  # an outline: a last piece joins the last vertex back to the first
+    source: dict = field(default_factory=dict)  # where it came from, e.g. {"format": "dxf", "layer": ..., "handle": ...}
+    name: str = ""
+    color: str = PALETTE[0]
+    label: str = ""
+    id: str = field(default_factory=new_id)
+    uncertain: bool = False
+    kind = "polyline"
+
+    def polyline(self) -> np.ndarray:
+        """The vertices, with the first again at the end of an outline."""
+        v = np.asarray(self.vertices, np.float64)
+        return np.vstack([v, v[:1]]) if self.closed and len(v) > 2 else v
+
+    def length(self) -> float:
+        return curves.length(self.polyline()) if len(self.vertices) > 1 else 0.0
+
+    def describe(self) -> str:
+        if len(self.vertices) == 1:
+            return "point" + (f", {self.source['block']}" if self.source.get("block") else "")
+        return f"{'outline' if self.closed else 'polyline'}, {len(self.vertices)} vertices, {self.length():.2f} m"
+
+
+@dataclass(eq=False)  # nodes are compared by identity (their arrays have no single truth value)
+class Marker:
+    """A position: where a thing is, e.g. the foot of a pole or a tree, a manhole. Placed from selected points
+    (tools/markers.py) or imported (a DXF's map symbol)."""
+
+    position: np.ndarray  # (3,) world
+    source: dict = field(default_factory=dict)  # how it was placed ({"tool": "marker", "across": "circle", ...}) or
+    # where it came from ({"format": "dxf", "layer": ..., "block": ...})
+    name: str = ""
+    color: str = PALETTE[0]
+    label: str = ""
+    id: str = field(default_factory=new_id)
+    uncertain: bool = False
+    kind = "marker"
+
+    def polyline(self) -> np.ndarray:
+        """The position as a one-vertex line (drawn as a dot, e.g. on the label map)."""
+        return np.asarray(self.position, np.float64).reshape(1, 3)
+
+    def length(self) -> float:
+        return 0.0
+
+    def describe(self) -> str:
+        s = self.source
+        if s.get("block"):
+            return f"marker, {s['block']}"
+        if "across" in s and "points" in s:
+            how = "circle centre" if s["across"] == "circle" else "mean"
+            return f"marker, {how} of {int(s['points']):,} points"
+        return "marker"
+
+
+@dataclass(eq=False)  # nodes are compared by identity (their arrays have no single truth value)
 class PointSet:
     indices: np.ndarray  # sorted int64 store indices
     provenance: list = field(default_factory=list)  # how the selection was made (tools, parameters, seeds)
@@ -267,6 +333,10 @@ def clone_nodes(nodes: list) -> list:
             out.append(replace(x, picked=x.picked.copy(), nodes=x.nodes.copy(), h_in=x.h_in.copy(),
                                h_out=x.h_out.copy(), normal=x.normal.copy(), point=x.point.copy(),
                                picked_source=list(x.picked_source)))  # fmt: skip
+        elif x.kind == "polyline":
+            out.append(replace(x, vertices=x.vertices.copy(), source=dict(x.source)))
+        elif x.kind == "marker":
+            out.append(replace(x, position=x.position.copy(), source=dict(x.source)))
         else:
             out.append(replace(x, provenance=list(x.provenance)))
     return out
@@ -333,7 +403,8 @@ class Annotations:
         return self.root if p is None else p.children
 
     def items(self, nodes=None) -> list:
-        """Every segment, curve and point set (inside ``nodes`` and their directories, or in the whole tree)."""
+        """Every segment, curve, polyline, marker and point set (inside ``nodes`` and their directories, or in the
+        whole tree)."""
         return [x for x, _ in self.walk(nodes) if x.kind != "directory"]
 
     def color_of(self, node_id: str) -> str:
@@ -577,18 +648,21 @@ class Annotations:
         return n
 
     def export_labels(self, path, project, class_ids: dict | None = None, flag_bits: dict | None = None,
-                      subset_of: dict | None = None) -> dict:  # fmt: skip
+                      parents: dict | None = None) -> dict:  # fmt: skip
         """One JSON file grouped by label instead of by directory: for each label its items (each with its
         directory path and where the label comes from), counts, the number of distinct points, and the points
-        shared with other labels. ``class_ids`` maps taxonomy class names to ids, for labels that are classes;
-        ``flag_bits`` maps taxonomy flag names to bits, for labels that are flags (e.g. ``marking``, R-006: a flag
-        sits on top of the surface's class, so its points are meant to overlap a class's); ``subset_of`` maps a class
-        to the class it is part of (``road_line`` of ``road``): the parent is also counted with its subsets' points,
-        and subset points outside the parent are reported.
+        shared with other labels. ``class_ids`` maps taxonomy class names to ids (in the taxonomy's order), for
+        labels that are classes; ``flag_bits`` maps taxonomy flag names to bits, for labels that are flags (e.g.
+        ``marking``, R-006: a flag sits on top of the surface's class, so its points are meant to overlap a class's);
+        ``parents`` maps a class to the class it is a kind of (the taxonomy tree: ``road_line`` of ``road``). A class
+        is also counted with the classes below it (``points_with_descendants``, and ``rollup`` for every class in
+        use or above one), overlaps along a branch are marked ``nested`` (expected: a road set holding its lines),
+        and a class's points outside every set of its ancestors are reported (``outside_ancestors``).
         Returns a summary {label: (items, points)}."""
         class_ids = class_ids or {}
         flag_bits = flag_bits or {}
-        subset_of = subset_of or {}
+        parents = parents or {}
+        class_pos = {k: i for i, k in enumerate(class_ids)}
         by_label: dict = {}
         for x, anc in self.walk():
             if x.kind == "directory":
@@ -599,7 +673,7 @@ class Annotations:
             d["label_from"] = None if giver is None else self.node(giver).name
             by_label.setdefault(label, []).append((x, d))
         order = sorted((k for k in by_label if k),
-                       key=lambda k: (k not in class_ids, k not in flag_bits, class_ids.get(k, 0), flag_bits.get(k, 0), k))  # fmt: skip
+                       key=lambda k: (k not in class_ids, k not in flag_bits, class_pos.get(k, 0), flag_bits.get(k, 0), k))  # fmt: skip
         from pclabel.tools import sets as sets_
 
         unions = {k: sets_.union_all([x.indices for x, _ in v if x.kind == "points"]) for k, v in by_label.items()}
@@ -607,8 +681,8 @@ class Annotations:
                   for k, v in by_label.items()}  # fmt: skip
         def ancestors(k):
             out = []
-            while k in subset_of:
-                k = subset_of[k]
+            while k in parents:
+                k = parents[k]
                 out.append(k)
             return out
 
@@ -618,26 +692,39 @@ class Annotations:
                 n = int(np.intersect1d(unions[a], unions[b], assume_unique=True).size)
                 if n:
                     overlaps.append({"labels": [a, b], "points": n,
-                                     "subset": a in ancestors(b) or b in ancestors(a)})  # fmt: skip
+                                     "nested": a in ancestors(b) or b in ancestors(a)})  # fmt: skip
         empty = np.empty(0, np.int64)
 
         def entry(k):
             items = by_label[k]
-            counts = {t: sum(x.kind == t for x, _ in items) for t in ("segment", "curve", "points")}
+            counts = {t: sum(x.kind == t for x, _ in items) for t in ITEM_KINDS}
             kind = "class" if k in class_ids else "flag" if k in flag_bits else "text"
             e = {"label": k, "kind": kind, "class_id": class_ids.get(k), "flag_bit": flag_bits.get(k),
-                 "counts": counts, "points": int(unions[k].size), "uncertain_items": sum(d["uncertain"] for _, d in items),
-                 "uncertain_points": int(unsure[k].size)}  # fmt: skip
-            if k in subset_of:  # part of another class: its points outside that class's are worth a look
-                parent = subset_of[k]
-                e["subset_of"] = parent
-                e["outside_parent"] = int(sets_.difference(unions[k], unions.get(parent, empty)).size)
+                 "path": [*reversed(ancestors(k)), k], "counts": counts, "points": int(unions[k].size),
+                 "uncertain_items": sum(d["uncertain"] for _, d in items), "uncertain_points": int(unsure[k].size)}  # fmt: skip
+            if k in parents:  # a kind of another class: its points outside every set of its ancestors are worth a look
+                e["parent"] = parents[k]
+                above = sets_.union_all([unions.get(a, empty) for a in ancestors(k)])
+                e["outside_ancestors"] = int(sets_.difference(unions[k], above).size)
             subs = [s for s in order if k in ancestors(s)]
-            if subs:  # the class with its subsets' points (a road with its lines)
-                e["subsets"] = subs
-                e["points_with_subsets"] = int(sets_.union_all([unions[k]] + [unions[s] for s in subs]).size)
+            if subs:  # the class with the points of the classes below it (a road with its lines)
+                e["descendants"] = subs
+                e["points_with_descendants"] = int(sets_.union_all([unions[k]] + [unions[s] for s in subs]).size)
             e["items"] = [d for _, d in items]
             return e
+
+        def rollup():
+            """Every class in use or above one: its items and distinct points, with the classes below it."""
+            used = [k for k in order if k in class_ids]
+            above = {a for k in used for a in ancestors(k)}
+            out = []
+            for k in sorted(set(used) | above, key=lambda k: (class_pos.get(k, len(class_pos)), k)):
+                below = [s for s in used if s == k or k in ancestors(s)]
+                out.append({"label": k, "class_id": class_ids.get(k), "parent": parents.get(k),
+                            "depth": len(ancestors(k)), "labels": below,
+                            "items": sum(len(by_label[s]) for s in below),
+                            "points": int(sets_.union_all([unions[s] for s in below]).size)})  # fmt: skip
+            return out
 
         src = project.meta.get("source", {})
         doc = {
@@ -648,6 +735,7 @@ class Annotations:
             "labels": [entry(k) for k in order],
             "unlabelled": entry("") if "" in by_label else None,
             "overlaps": overlaps,
+            "rollup": rollup(),
         }
         write_json_atomic(Path(path), doc)
         return {k: (len(by_label[k]), int(unions[k].size)) for k in by_label}
@@ -712,6 +800,11 @@ def _node_doc(x, project, points: str) -> dict:
             length_m=curves.length(line),
             polyline=[_pt(p) for p in line],  # about 2 cm apart: the curve for readers without Bézier code
         )
+    if x.kind == "polyline":
+        return dict(base, vertices=[_pt(p) for p in x.vertices], closed=bool(x.closed), length_m=x.length(),
+                    source=jsonable(x.source))  # fmt: skip
+    if x.kind == "marker":
+        return dict(base, position=_pt(x.position), source=jsonable(x.source))
     d = dict(base, count=int(len(x.indices)), provenance=jsonable(x.provenance))
     if points == "file":
         d["file"] = f"annotations/{x.id}.npy"
@@ -771,6 +864,14 @@ def _node_from_doc_body(nd: dict, project, base, same_scan: bool, warnings: list
                      np.asarray(pl["point"], np.float64), nodes, h_in, h_out, frame,
                      list(nd.get("picked_source_indices", [-1] * len(nodes))), name, color, label, nid,
                      bool(nd.get("closed", False)))  # fmt: skip
+    if kind == "polyline":
+        v = np.asarray(nd["vertices"], np.float64).reshape(-1, 3)
+        if len(v) == 1:  # schema 6 kept an imported map symbol as a one-vertex polyline: it is a marker
+            return Marker(v[0].copy(), dict(nd.get("source", {})), name, color, label, nid)
+        return Polyline(v, bool(nd.get("closed", False)), dict(nd.get("source", {})), name, color, label, nid)
+    if kind == "marker":
+        return Marker(np.asarray(nd["position"], np.float64).reshape(3), dict(nd.get("source", {})), name, color,
+                      label, nid)  # fmt: skip
     if kind == "points":
         prov = list(nd.get("provenance", []))
         if "file" in nd:

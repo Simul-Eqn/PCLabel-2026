@@ -99,10 +99,10 @@ def test_labels_are_inherited_and_exported_by_label(projects, tmp_path):
     by = {e["label"]: e for e in doc["labels"]}
     assert by["curb"]["class_id"] == 2 and by["lane line"]["class_id"] is None
     assert by["curb"]["items"][0]["path"] == ["kerb"] and by["curb"]["items"][0]["label_from"] == "kerb"
-    assert by["curb"]["counts"] == {"segment": 0, "curve": 1, "points": 0}
+    assert by["curb"]["counts"] == {"segment": 0, "curve": 1, "polyline": 0, "marker": 0, "points": 0}
     assert by["road"]["points"] == 1000 and by["road"]["items"][0]["source_indices"] == sorted(
         int(i) for i in p.source_index[np.arange(1000)])  # fmt: skip
-    assert doc["overlaps"] == [{"labels": ["road", "lane line"], "points": 100, "subset": False}]
+    assert doc["overlaps"] == [{"labels": ["road", "lane line"], "points": 100, "nested": False}]
     assert doc["unlabelled"]["counts"]["segment"] == 1 and summary[""] == (1, 0)
     assert by["road"]["kind"] == "class" and by["lane line"]["kind"] == "text"
     # road lines (R-006): paint is a flag on top of the road's class, so a `marking` point set overlaps the road's
@@ -112,30 +112,78 @@ def test_labels_are_inherited_and_exported_by_label(projects, tmp_path):
     assert [e["label"] for e in doc["labels"]] == ["road", "curb", "marking", "curb lip"]  # classes, flags, the rest
     m = {e["label"]: e for e in doc["labels"]}["marking"]
     assert m["kind"] == "flag" and m["flag_bit"] == 1 and m["class_id"] is None and m["points"] == 300
-    assert doc["overlaps"] == [{"labels": ["road", "marking"], "points": 100, "subset": False}]  # the road lines
-    # road lines as a class that is part of the road (taxonomy `subset_of`, the user's request of 2026-10-28)
+    assert doc["overlaps"] == [{"labels": ["road", "marking"], "points": 100, "nested": False}]  # the road lines
+    # road lines as a class below the road in the taxonomy's tree (the user's request of 2026-10-28; the tree 2026-11-04)
     paint.label = "road_line"
-    t.export_labels(out, p, {"road": 1, "curb": 2, "road_line": 10}, {}, {"road_line": "road"})
+    t.export_labels(out, p, {"ground": 100, "road": 1, "road_line": 10, "curb": 2}, {},
+                    {"road": "ground", "road_line": "road", "curb": "ground"})  # fmt: skip
     doc = json.loads(out.read_text(encoding="utf-8"))
     by = {e["label"]: e for e in doc["labels"]}
-    assert [e["label"] for e in doc["labels"]] == ["road", "curb", "road_line", "curb lip"]
-    assert by["road_line"]["subset_of"] == "road" and by["road_line"]["outside_parent"] == 200  # 1000..1199
-    assert by["road"]["subsets"] == ["road_line"] and by["road"]["points"] == 1000
-    assert by["road"]["points_with_subsets"] == 1200 and "subset_of" not in by["road"]
-    assert doc["overlaps"] == [{"labels": ["road", "road_line"], "points": 100, "subset": True}]
+    assert [e["label"] for e in doc["labels"]] == ["road", "road_line", "curb", "curb lip"]  # the taxonomy's order
+    assert by["road_line"]["parent"] == "road" and by["road_line"]["outside_ancestors"] == 200  # 1000..1199
+    assert by["road_line"]["path"] == ["ground", "road", "road_line"] and by["curb lip"]["path"] == ["curb lip"]
+    assert by["road"]["descendants"] == ["road_line"] and by["road"]["points"] == 1000
+    assert by["road"]["points_with_descendants"] == 1200 and by["road"]["parent"] == "ground"
+    assert doc["overlaps"] == [{"labels": ["road", "road_line"], "points": 100, "nested": True}]
+    roll = {e["label"]: e for e in doc["rollup"]}
+    assert [e["label"] for e in doc["rollup"]] == ["ground", "road", "road_line", "curb"]
+    assert roll["ground"]["labels"] == ["road", "road_line", "curb"] and roll["ground"]["points"] == 1200
+    assert roll["ground"]["class_id"] == 100 and roll["ground"]["parent"] is None and roll["road_line"]["depth"] == 2
 
 
-def test_taxonomy_subsets(tmp_path):
+def test_taxonomy_tree(tmp_path):
+    """The classes form a tree (the user's decision of 2026-11-04): parents, ancestors, the tree order, labels kept
+    to lines or markers; a schema 1 file's subset_of is a parent; a parent that is not a class, or a circle, fails."""
     from pclabel.taxonomy import load_taxonomy
 
     tax = load_taxonomy()
-    assert tax.subset_of() == {"road_line": "road"} and tax.class_id("road_line") == 10
+    assert tax.parents()["road_line"] == "road" and tax.class_id("road_line") == 10
+    assert tax.path_of("road_line") == ["ground", "road", "road_line"] and tax.ancestors("ground") == []
+    assert tax.ancestors("not a class") == [] and tax.path_of("lane line") == ["lane line"]
+    # the user, 2026-11-04: ramp and driveway under road; pavement its own thing
+    assert tax.parents()["ramp"] == "road" and tax.parents()["driveway"] == "road" and tax.children("pavement") == []
+    assert set(tax.descendants("curb")) == {"curb_lowered", "curb_top", "curb_bottom", "curb_back"}
+    assert tax.children(None)[:2] == ["ground", "vegetation"] and "unassessed" not in tax.children(None)
+    order = [c["name"] for c, _ in tax.tree_order()]
+    assert all(order.index(tax.parents()[k]) < order.index(k) for k in order if k in tax.parents())  # parents first
+    assert "island" in order and "island" not in [c["name"] for c, _ in tax.tree_order(enabled_only=True)]
+    assert dict((c["name"], d) for c, d in tax.tree_order())["road_line"] == 2
+    assert tax.fits("curb_top", "curve") and tax.fits("curb_top", "polyline") and not tax.fits("curb_top", "points")
+    assert tax.fits("cover", "marker") and not tax.fits("cover", "curve") and tax.fits("cover", "directory")
+    assert tax.fits("road", "points") and tax.fits("road", "marker") and tax.fits("any text", "points")
+    ids = [int(c["id"]) for c in tax.classes]
+    assert len(ids) == len(set(ids))
+    # colours (2026-11-05): all different; a sub-class is a shade of its parent's hue (ground's own surfaces each have
+    # a hue of their own; pale or grey colours have no hue to speak of)
+    import colorsys
+
+    cols = [c["color"].lower() for c in tax.classes]
+    assert len(cols) == len(set(cols))
+
+    def hsv(name):
+        h = tax.by_name(name)["color"].lstrip("#")
+        return colorsys.rgb_to_hsv(*(int(h[i : i + 2], 16) / 255 for i in (0, 2, 4)))
+
+    for child, parent in tax.parents().items():
+        if parent == "ground":
+            continue
+        (h1, s1, _), (h2, s2, _) = hsv(child), hsv(parent)
+        if s1 > 0.25 and s2 > 0.25:
+            d = abs(h1 - h2) * 360
+            assert min(d, 360 - d) <= 40, (child, parent)
+    # schema 1 (subset_of) still loads; bad trees do not
     base = "schema: pclabel.taxonomy/1\nclasses:\n  - {id: 0, name: unassessed, color: '#000000'}\n"
     a_of_b = "  - {id: 1, name: a, color: '#000000', subset_of: b}\n"
     b_of_a = "  - {id: 2, name: b, color: '#000000', subset_of: a}\n"
-    for extra, msg in ((a_of_b, "not a class"), (a_of_b + b_of_a, "circle")):
-        f = tmp_path / "t.yaml"
-        f.write_text(base + extra, encoding="utf-8")
+    f = tmp_path / "t.yaml"
+    f.write_text(base + a_of_b + "  - {id: 2, name: b, color: '#000000'}\n", encoding="utf-8")
+    assert load_taxonomy(f).parents() == {"a": "b"}
+    v2 = base.replace("/1", "/2")
+    for text, msg in ((base + a_of_b, "not a class"), (base + a_of_b + b_of_a, "circle"),
+                      (v2 + "  - {id: 1, name: a, color: '#000000', only: area}\n", "only must be"),
+                      (v2 + "  - {id: 1, name: a, color: '#000000'}\n  - {id: 2, name: a, color: '#000000'}\n",
+                       "duplicate class names")):  # fmt: skip
+        f.write_text(text, encoding="utf-8")
         with pytest.raises(ValueError, match=msg):
             load_taxonomy(f)
 
@@ -344,7 +392,7 @@ def test_uncertain_labels(projects, tmp_path):
     u, warnings = Annotations.load(p)
     assert not warnings and [x.uncertain for x in u.root[0].children] == [True, False, True]
     doc = json.loads((p.path / "annotations.json").read_text(encoding="utf-8"))
-    assert doc["schema"] == SCHEMA == "pclabel.annotations/5" and "uncertain" not in doc["tree"][0]
+    assert doc["schema"] == SCHEMA == "pclabel.annotations/7" and "uncertain" not in doc["tree"][0]
     # a schema 2 document that marked a directory: the items that took its label carry the mark instead
     old2 = json.loads(json.dumps(doc))
     old2["tree"][0]["uncertain"] = True
@@ -365,7 +413,7 @@ def test_uncertain_labels(projects, tmp_path):
     out = tmp_path / "labels.json"
     t.export_labels(out, p, {"curb": 2, "ramp": 9})
     d = json.loads(out.read_text(encoding="utf-8"))
-    assert d["schema"] == LABELS_SCHEMA == "pclabel.annotation-labels/5"
+    assert d["schema"] == LABELS_SCHEMA == "pclabel.annotation-labels/6"
     by = {e["label"]: e for e in d["labels"]}
     assert by["curb"]["uncertain_points"] == 100 and by["curb"]["uncertain_items"] == 1
     assert [i["uncertain"] for i in by["curb"]["items"]] == [True, False] and "uncertain_from" not in by["curb"]["items"][0]

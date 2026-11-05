@@ -1331,8 +1331,11 @@ def test_labels_view_and_label_map(window, tmp_path):
     codes = lc.codes()
     assert list(codes) == ["road", "curb", "marking"]  # taxonomy classes in order, then flags
     assert [c for _, c in r.label_layers] == [codes["road"], codes["marking"]]  # the smaller set drawn later
-    legend = [lc.dock.legend.topLevelItem(i).text(0) for i in range(lc.dock.legend.topLevelItemCount())]
-    assert legend == ["road", "curb", "marking"]
+    legend = lc.dock.legend
+    assert [legend.topLevelItem(i).text(0) for i in range(legend.topLevelItemCount())] == ["ground", "marking"]
+    ground = legend.topLevelItem(0)  # the taxonomy's tree: road and curb under ground, which is not used itself
+    assert [ground.child(i).text(0) for i in range(ground.childCount())] == ["road", "curb"]
+    assert ground.text(2) == "2" and ground.font(0).italic()
     road_rgb = tuple(int(window.taxonomy.classes[[c["name"] for c in window.taxonomy.classes].index("road")]["color"][i : i + 2], 16) for i in (1, 3, 5))
     page = r.pages[int(np.flatnonzero([len(p) for p in r.pages])[0])][0]
     window.viewport.makeCurrent()
@@ -1348,11 +1351,12 @@ def test_labels_view_and_label_map(window, tmp_path):
     assert a.model.label_colors["marking"] == marking_color
     lc.pick_color("marking", "#00ff88")
     saved = json.loads((window.project.path / "annotations.json").read_text(encoding="utf-8"))
-    assert saved["schema"] == "pclabel.annotations/5" and saved["label_colors"]["marking"] == "#00ff88"
+    assert saved["schema"] == "pclabel.annotations/7" and saved["label_colors"]["marking"] == "#00ff88"
     assert tuple(lc.color_table(lc.codes())[lc.codes()["marking"], :3]) == (0, 255, 136)
-    it = lc.dock.legend.topLevelItem(0)
-    it.setCheckState(0, Qt.CheckState.Unchecked)  # road left out of the view and the map
+    lc.legend_rows()["road"].setCheckState(0, Qt.CheckState.Unchecked)  # road left out of the view and the map
     assert "road" in lc.hidden and [c for _, c in r.label_layers] == [lc.codes()["marking"]]
+    QApplication.processEvents()  # the legend is rebuilt once Qt is done with the clicked row
+    assert lc.legend_rows()["ground"].checkState(0) == Qt.CheckState.PartiallyChecked  # curb is still shown
     # the annotations with the ticked labels (curb, marking), in their directories
     ann = tmp_path / "ticked.json"
     assert lc.export_annotations(ann) == ann
@@ -1378,11 +1382,78 @@ def test_labels_view_and_label_map(window, tmp_path):
     assert np.allclose(doc["vectors"][0]["map_xy"][1][0] - doc["vectors"][0]["map_xy"][0][0], 3.0)
     img = QImage(str(out))
     assert img.width() == doc["transform"]["width"] + 240 and img.height() >= doc["transform"]["height"]
-    it = lc.dock.legend.topLevelItem(0)
-    it.setCheckState(0, Qt.CheckState.Checked)
+    lc.legend_rows()["ground"].setCheckState(0, Qt.CheckState.Checked)  # a branch: road and curb
+    assert not {"road", "curb"} & lc.hidden
+    QApplication.processEvents()
+    lc.legend_rows()["ground"].setCheckState(0, Qt.CheckState.Unchecked)
+    assert {"road", "curb"} <= lc.hidden and "marking" not in lc.hidden
+    lc.set_shown(lc.labels_in_use())
     act["B"].trigger()  # back to the colour mode before
     assert window.display.mode.currentData() != MODE_LABELS and not lc.dock.view.isChecked()
     assert lc.vector_rgba(seg) is not None
+
+
+def test_import_labels_from_a_dxf(window, tmp_path, monkeypatch):
+    """File > Import labels: the dialog takes its labels from the matching profile, edits and unticked layers count;
+    the import is one undoable step; imported polylines draw, and map symbols go on the label map as dots."""
+    import threading
+
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+    from test_label_import import dxf_text
+
+    from pclabel.ui.label_import import LabelImportDialog
+
+    assert window.settle()
+    p = window.project
+    c = p.offset + np.asarray(p.meta["bounds"]["min"]) + 2.0
+    f = tmp_path / "rock.dxf"
+    f.write_text(dxf_text(x0=c[0], y0=c[1], z0=c[2]), encoding="utf-8")
+    li, a = window.label_import, window.annot
+    shown = []
+    monkeypatch.setattr(LabelImportDialog, "exec", lambda self: shown.append(threading.current_thread()) or 0)
+    li.start(f)  # read in a worker thread; the dialog opens in the UI thread when it is done (cancelled here)
+    t0 = time.perf_counter()
+    while not shown and time.perf_counter() - t0 < 30:
+        QApplication.instance().processEvents()
+        time.sleep(0.01)
+    assert shown == [threading.main_thread()] and not li._busy
+    dlg = li.last_dialog
+    src = dlg.source
+    assert dlg.profile.currentText() == "ROCK planimetrics"
+    assert [b.currentText() for b in dlg.boxes] == ["curb_top", "road_line", "lamp_post", ""]
+    box = dlg.boxes[0]  # the labels as the taxonomy's tree: road_line two levels down (ground, road)
+    from pclabel.ui.labelbox import DEPTH
+
+    assert box.itemData(box.findText("road_line"), DEPTH) == 2 and box.itemData(box.findText("ground"), DEPTH) == 0
+    assert dlg.table.item(3, 5).text() == "(not in the profile)" and "<b>100.0%</b> inside" in dlg.head.text()
+    dlg.boxes[3].setCurrentText("other")  # edited before importing
+    dlg.table.item(1, 0).setCheckState(Qt.CheckState.Unchecked)  # PAINT_STRIPE left out
+    n_before = len(a.model.root)
+    top = li.add(src, dlg.chosen())
+    assert [d.name for d in top.children] == ["TOP_OF_CURB", "LIGHT_POLE", "ODD"] and top.children[2].label == "other"
+    assert top.children[1].children[0].kind == "marker"  # the pole's map symbol
+    assert len(a.model.root) == n_before + 1 and "imported 5 features in 3 layers" in a.dock.status.text()
+    r = window.viewport.renderer
+    assert r._vectors["annotations"][0] is not None  # the outlines drawn
+    window.undo()
+    assert len(a.model.root) == n_before  # one step
+    window.redo()
+    assert a.model.root[-1].name == "rock.dxf (imported)"
+    # the label map: the pole (a single vertex) is a dot
+    lc = window.labels
+    lc.set_shown(["lamp_post"])
+    lc.fill_planes()
+    lc.dock.plane.setCurrentIndex(0)
+    out = tmp_path / "poles.png"
+    assert lc.export_map(out) == out
+    t0 = time.perf_counter()
+    while lc._busy and time.perf_counter() - t0 < 60:
+        QApplication.instance().processEvents()
+        time.sleep(0.01)
+    doc = json.loads(out.with_suffix(".json").read_text(encoding="utf-8"))
+    assert [e["label"] for e in doc["legend"]] == ["lamp_post"] and doc["legend"][0]["pixels"] > 0
+    lc.set_shown(lc.labels_in_use())
 
 
 def test_flags_are_offered_as_labels(window):
@@ -1393,6 +1464,138 @@ def test_flags_are_offered_as_labels(window):
     flags = [f["name"] for f in window.taxonomy.flags]
     assert "marking" in items and items.index("road") < items.index("marking")
     assert items[items.index(flags[0]) : items.index(flags[0]) + len(flags)] == flags
+
+
+def test_markers_and_the_label_tree(window):
+    """Ctrl+M: a marker where the selection is (the mean, or a circle's centre; the mean height or the lowest point),
+    in the selected directory, one undo step. The label box shows the taxonomy as a tree and keeps a line-only label
+    off a marker. The tree tool saves a pole with its marker; trees saved before markers get theirs."""
+    from PySide6.QtWidgets import QApplication
+
+    from pclabel.store.annotations import PointSet
+    from pclabel.ui.labelbox import DEPTH
+
+    app = QApplication.instance()
+    assert window.settle()
+    a, p, tr, vol, vp = window.annot, window.project, window.trees, window.volume, window.viewport
+    window.activate_frame(0)  # z
+    act = {x.shortcut().toString(): x for x in window.actions()}
+    xyz = np.asarray(p.xyz, np.float64)
+    w = xyz + p.offset
+    r = np.hypot(w[:, 0] - 6.0, w[:, 1] - 7.5)  # the synthetic tree's trunk (r 0.18 m) on the north verge
+    band = np.flatnonzero((r < 0.3) & (w[:, 2] > 1.0) & (w[:, 2] < 1.4))
+    window.set_selection(band, {"tool": "test", "op": "replace"})
+    a.dock.tree.clearSelection()
+    n0 = len(a.model.root)
+    act["Ctrl+M"].trigger()
+    mk = a.model.root[-1]
+    assert len(a.model.root) == n0 + 1 and mk.kind == "marker" and mk.source["across"] == "mean"
+    assert np.allclose(mk.position, w[band].mean(0)) and mk.source["selection"][-1]["tool"] == "test"
+    a.dock.marker_across.setCurrentIndex(a.dock.marker_across.findData("circle"))
+    a.dock.marker_height.setCurrentIndex(a.dock.marker_height.findData("lowest"))
+    d = a.model.new_directory("poles here")
+    a._changed()
+    a._item_of(d.id).setSelected(True)  # into the directory selected in the tree, like Ctrl+G
+    mk2 = a.marker_from_selection()
+    assert mk2 in a.model.node(d.id).children and mk2.source["across"] == "circle"
+    assert np.hypot(mk2.position[0] - 6.0, mk2.position[1] - 7.5) < 0.02
+    assert mk2.position[2] == pytest.approx(w[band, 2].min()) and mk2.source["radius"] == pytest.approx(0.18, abs=0.03)
+    assert "plain mean was" in a.dock.status.text()
+    window.undo()
+    assert not a.model.node(d.id).children  # one step
+    window.redo()
+    mk2 = a.model.node(d.id).children[0]
+    # the label box: the taxonomy as a tree; a line-only label greyed out for a marker, and refused on it
+    box = a.dock.label
+    assert box.itemData(box.findText("road_line"), DEPTH) == 2 and box.itemData(box.findText("road"), DEPTH) == 1
+    a.dock.tree.clearSelection()
+    a._item_of(mk2.id).setSelected(True)
+    assert not box.model().item(box.findText("curb_top")).isEnabled()
+    assert box.model().item(box.findText("cover")).isEnabled() and box.model().item(box.findText("lamp_post")).isEnabled()
+    a.set_label("curb_top")
+    assert a.model.node(mk2.id).label == "" and "for lines only" in a.dock.status.text()
+    a.set_label("lamp_post")
+    assert a.model.node(mk2.id).label == "lamp_post"
+    # the labels view (B) draws the marker in its label's colour, and back in its directory's after
+    from pclabel.ui.annotate import rgba
+
+    rend, lc = window.viewport.renderer, window.labels
+    drawn = []
+    orig = rend.set_vectors
+    rend.set_vectors = lambda lines, points, *x, **k: (drawn.append(points), orig(lines, points, *x, **k))[1]
+    try:
+        lc.set_view(True)
+        label_col = lc.vector_rgba(a.model.node(mk2.id))
+        assert drawn and label_col is not None
+        assert any(np.allclose(col, label_col) for _, col, _ in drawn[-1])
+        lc.set_view(False)
+        dir_col = rgba(a.model.color_of(mk2.id))
+        assert any(np.allclose(col, dir_col) for _, col, _ in drawn[-1])
+        assert not any(np.allclose(col, label_col) for _, col, _ in drawn[-1])
+    finally:
+        del rend.set_vectors
+    # move it down along the height axis (z here), one undo step
+    z0 = a.model.node(mk2.id).position.copy()
+    assert a.move_markers(-0.25) == 1
+    moved = a.model.node(mk2.id)
+    assert np.allclose(moved.position, z0 + [0, 0, -0.25]) and moved.source["moved"][-1]["by"] == -0.25
+    window.undo()
+    assert np.allclose(a.model.node(mk2.id).position, z0)
+    # its plane: a tilted height axis becomes its own; the position stays, moves follow the new axis
+    from pclabel.analysis.frames import HeightFrame
+
+    t = np.radians(20)
+    tilt = (float(np.sin(t)), 0.0, float(np.cos(t)))
+    window.frames.append(HeightFrame("tilted", tilt, tuple(z0)))
+    window.activate_frame(len(window.frames) - 1)
+    a.dock.tree.clearSelection()
+    a._item_of(mk2.id).setSelected(True)
+    assert a.set_marker_axis() == 1
+    m = a.model.node(mk2.id)
+    assert m.source["height_axis"] == "tilted" and m.source["axis_changes"][-1] == {"from": "z (scan frame)", "to": "tilted"}
+    assert np.allclose(m.position, z0)
+    window.activate_frame(0)  # moving follows the marker's own axis, not the active one
+    a.move_markers(0.5)
+    assert np.allclose(a.model.node(mk2.id).position, z0 + 0.5 * np.asarray(tilt))
+    window.undo()
+    window.undo()
+    assert a.model.node(mk2.id).source.get("height_axis") == "z (scan frame)"
+    window.frames.pop()
+    a.dock.tree.clearSelection()
+    assert a.move_markers(0.1) == 0 and "select markers" in a.dock.status.text()
+    # the tree tool, for a pole: the band labelled with the pole's class, and its marker
+    tr.fill_what()
+    assert [tr.what.itemText(i) for i in range(tr.what.count())] == ["tree", "pole", "lamp_post", "traffic_light_pole",
+                                                                      "other_pole"]  # fmt: skip
+    tr.what.setCurrentText("lamp_post")
+    tr.fill_directories(keep="new")
+    assert tr.into.currentText() in ("poles (new)", "poles")
+    ground = xyz[np.flatnonzero((r > 0.4) & (r < 1.0) & (w[:, 2] < 0.3))[0]]
+    tr.begin()
+    vp.seed_picked.emit(ground, "replace")
+    vp.volume_placed.emit(xyz[band[0]])  # onto the "pole"
+    vol.dock.spins["radius"][0].setValue(0.3)
+    vol.confirm("replace")
+    t0 = time.perf_counter()
+    while window._sel_busy and time.perf_counter() - t0 < 60:
+        app.processEvents()
+    pole = tr.save()
+    assert pole.name == "lamp_post 01" and pole in [x for x in a.model.root if x.name == "poles"][0].children
+    pm, ps = pole.children
+    assert pm.kind == "marker" and pm.label == "lamp_post" and ps.label == "lamp_post" and ps.name.startswith("pole ")
+    assert pm.position[2] == pytest.approx(ground[2] + p.offset[2]) and ps.provenance[-1]["object"] == "lamp_post"
+    window.toggle_tool(None)
+    tr.what.setCurrentText("tree")
+    # a tree saved before markers existed: its marker from its band's recorded position
+    old = a.model.new_directory("tree 99")
+    rec = {"tool": "tree", "position": [6.0, 7.5, 0.1], "radius": 0.18, "girth": 1.13, "rms": 0.01,
+           "points_fitted": 50, "points_dropped": 0, "coverage": 0.5}  # fmt: skip
+    a.model.move([a.model.add(PointSet(band.copy(), [rec]), "trunk 1.00 to 1.10 m").id], old.id)
+    a._changed()
+    assert tr.add_earlier_markers() >= 1
+    first = a.model.node(old.id).children[0]
+    assert first.kind == "marker" and first.label == "tree" and first.position.tolist() == [6.0, 7.5, 0.1]
+    assert tr.add_earlier_markers() == 0 and "every saved tree" in tr.status.text()
 
 
 def test_density_panel(window):
@@ -1709,13 +1912,16 @@ def test_tree_tool_band_fit_and_keys_in_the_fields(window):
     tree = tr.save()
     assert tree is not None and tree.name == "tree 01"
     trees = [x for x in a.model.root if x.kind == "directory" and x.name == "trees"][0]
-    ps = tree.children[0]
+    mk, ps = tree.children  # the tree's marker, at its band's circle centre at the ground, then the band
     assert tree in trees.children and ps.kind == "points" and ps.label == "tree_trunk" and np.array_equal(ps.indices, band)
+    assert mk.kind == "marker" and mk.label == "tree" and mk.name == "position"
+    assert mk.source["across"] == "circle" and mk.source["height"] == "ground" and mk.source["tool"] == "tree"
     rec = ps.provenance[-1]
     assert rec["tool"] == "tree" and rec["band"] == pytest.approx([1.0, 1.1])
     assert np.hypot(rec["position"][0] - 6.0, rec["position"][1] - 7.5) < 0.05
     assert rec["position"][2] == pytest.approx(ground[2] + p.offset[2]) and rec["radius"] == pytest.approx(0.18, abs=0.04)
     assert ps.provenance[-2]["tool"] == "select_volume"
+    assert mk.position.tolist() == pytest.approx(rec["position"])
     assert tr.save().name == "tree 02"
     window.undo()
     assert [c.name for c in [x for x in a.model.root if x.name == "trees"][0].children] == ["tree 01"]

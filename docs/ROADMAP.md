@@ -436,6 +436,21 @@ Results (in progress):
       R-006 rewritten, still proposed.
     - Export annotations by label (2026-10-29, the Labels panel): the items with the ticked labels, in their
       directories, as an annotations file (schema 5 adds `labels_exported`). 203 tests pass.
+    - Import scan from the menu no longer hangs (2026-11-03): its progress and done handlers ran in the worker
+      thread, and the done handler waited for its own thread.
+    - Import labels (2026-11-04, `Ctrl+Shift+I`): a DXF's layers as annotation directories of exact 3D polylines,
+      labelled by a profile (`config/label_imports/rock_planimetrics.yaml`); annotations schema 6 adds `polyline`.
+      ROCK's `mobile-colorized-v2-1.dxf` on its project: read in 0.38 s, 1,021 features in 31 layers, every
+      vertex inside the scan; vertices sit on scan points (nearest point within 1 cm in height for 90% of the
+      ground layers' vertices with a point within 5 cm).
+    - The label tree and markers (2026-11-04, the user's requests): taxonomy 0.5 (`pclabel.taxonomy/2`: `parent`,
+      `only`), label menus and the Labels legend as the tree, label exports rolled up along it (schema 6);
+      `marker` items (annotations schema 7) from the selection (`Ctrl+M`: mean or circle centre; mean height or
+      lowest point); the tree tool does poles too and saves a marker with each tree or pole; the ROCK profile
+      remapped to the tree (1,015 of 1,021 features labelled, 30 of 31 layers). 212 tests pass.
+      Measured for markers: on streets 1's 127 tree bands the points' mean sits a median 5.6 cm from the fitted
+      circle's centre (0.73 radii, up to 31 cm), 83 % toward the scanner (O-0014); ROCK's pole symbols sit at the
+      foot, 5–13 cm from the axis (O-0015).
 
     On streets 1 (GPU) at the magic-select site:
     - a 1 m cylinder took 107,891 points in 0.16 s;

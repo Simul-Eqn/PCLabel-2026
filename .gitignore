@@ -34,4 +34,7 @@ Thumbs.db
 .DS_Store
 
 ignore
+reference 
+backup 
+
 

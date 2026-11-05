@@ -32,7 +32,7 @@ cosmetic.
   - Kerbs whose face is fully hidden (the no-point strip, O-0005).
 - **Where:** streets 1 south kerb (x 15..35, y −30..−18); any kerb on newroad 2; the same kerb type in ExchangeGreen.
 - **Ready when:** joint visibility and top width noted at 5 or more places in 2 or more scans.
-- **Evidence:** —
+- **Evidence:** O-0013 (ROCK's drawing: a kerb unit from toe to back, top 8 cm wide, back line constructed)
 
 ### Q-02 Which line is "the curb line" in the vector map? · R-004 · high (for M9, not for point labels)
 - **Decide:** toe (road level), lip (top edge), face, or both toe and lip as separate lines.
@@ -43,7 +43,9 @@ cosmetic.
   - Which case is more common?
 - **Ask people:** which line the sketch users draw, and what LTA's kerb lines represent (see the end of this file).
 - **Ready when:** the sketch users have answered, plus 5 or more kerbs noted.
-- **Evidence:** —
+- **Line labels (2026-11-04):** `curb_top`, `curb_bottom` and `curb_back` (taxonomy, lines only) let all three be
+  drawn and kept apart, as ROCK does; the question becomes which of them the sketch uses.
+- **Evidence:** O-0013 (ROCK draws toe, lip and back: all three)
 
 ### Q-03 Lowered kerbs: which class, and where do they start? · R-007 · medium
 - **Decide:**
@@ -128,7 +130,9 @@ cosmetic.
 
 ### Q-09 Driveways and vehicle crossings · R-010 · medium
 - **Decide:** `road`, `pavement` (with `curb_lowered` at the edge), or a separate `driveway` class (id 8).
-- **Meanwhile:** `pavement` with `curb_lowered` at the road edge, and `ambiguous` on the driveway surface.
+- **Meanwhile:** `driveway`, a kind of road in the label tree: the user placed it under `road` on 2026-11-04 ("keep
+  ramp and driveway under road"), with `curb_lowered` at the road edge. That is "a separate class" and "road"
+  together; to record it as decided, use `/decide Q-09`.
 - **Watch for:** whether the pavement surface continues across; the material (concrete vs asphalt); the step at
   the road edge; how often driveways occur.
 - **Ready when:** 3 or more driveways seen.
@@ -136,11 +140,12 @@ cosmetic.
 
 ### Q-10 Gutter or channel strip along the kerb · R-005 · medium
 - **Decide:** whether a concrete channel or gutter band between the road and the kerb is `road`, `curb` or `drain`.
-- **Meanwhile:** `road`, with `ambiguous` set.
+- **Meanwhile:** `gutter` (2026-11-04), a kind of road in the label tree: it counts as road until this is decided,
+  and moving it under `curb` or `drain` then relabels nothing.
 - **Watch for:** the bright line pair 0.6–0.8 m from the streets 1 south kerb (O-0006): paint or a channel? Width,
   material, slope change.
 - **Ready when:** O-0006 resolved, and 2 or more other kerbs checked.
-- **Evidence:** O-0006 (to verify)
+- **Evidence:** O-0006 (to verify), O-0013 (ROCK, a US scene: a gutter 0.51 m wide; their road stops at it)
 
 ### Q-11 One pavement class, or subtypes? · R-002 / R-009 · low
 - **Decide:** keep `pavement` as one class, or split it into footpath / park connector / cycling path / covered
@@ -170,9 +175,9 @@ cosmetic.
 
 ### Q-14 Markings: one class, or types as well? · R-006 · low
 - **Decide:** whether `road_line` (one class, part of road, since 2026-10-28) is enough, or each marking needs a
-  type (lane, edge, double yellow, zig-zag, arrow, text) per point or as instances. A type could be another class
-  with `subset_of: road_line`, or a directory per type.
-- **Meanwhile:** one class, `road_line`; paint off the road keeps the `marking` flag.
+  type (lane, edge, double yellow, zig-zag, arrow, text, parking bay) per point or as instances. A type could be
+  a class below `road_line` in the label tree (lines labelled `road_line` stay valid), or a directory per type.
+- **Meanwhile:** one class, `road_line` (parking bay lines too); paint off the road keeps the `marking` flag.
 - **Watch for:** whether paint is separable in intensity at 20–40 m; yellow vs white in RGB; which types the sketch
   needs (the current product exports lane and arrow markings).
 - **Evidence:** —
@@ -210,7 +215,7 @@ cosmetic.
   - shrubs right against the trunk, which hide the ground height (the user, 2026-10-23);
   - whether the ground around trees is flat (the user: mostly, 2026-10-23).
 - **Ready when:** 5 or more trees labelled with a band, including a leaning one and one in a pit or grate.
-- **Evidence:** O-0008 (to verify), O-0012
+- **Evidence:** O-0008 (to verify), O-0012, O-0014 (127 bands: their points' mean is 5.6 cm off the axis)
 
 ## objects and artefacts
 
@@ -221,13 +226,13 @@ cosmetic.
   - (b) What is a pole carrying both a lamp and signal heads?
   - (c) Do signs mounted on a pole belong to the pole?
 - **Meanwhile:**
-  - the three classes;
+  - the three classes, or their parent `pole` when unsure which (the label tree, 2026-11-04);
   - signal heads present → `traffic_light_pole`;
   - all attachments belong to their pole;
-  - one instance id per pole.
+  - one instance per pole: its directory, with a marker at its foot (the band method, R-017 proposed).
 - **Watch for:** combined poles; which pole types the sketch needs (the current product exports lamp posts and
   traffic lights).
-- **Evidence:** —
+- **Evidence:** O-0014 (a pole's points' mean is pulled toward the scanner), O-0015 (ROCK's symbols sit at the foot)
 
 ### Q-18 Ghosts and temporary objects · R-013 · low
 - **Decide:** whether ghost streaks are `ghost` or `noise`; and whether partly scanned vehicles and people need any
@@ -263,6 +268,9 @@ cosmetic.
 - **Watch for:** classes never used after a few sessions; pairs you often confused; something you kept labelling
   `other`.
 - **Ready when:** after 3–5 labelling sessions.
+- **Since 2026-11-04** (taxonomy 0.5, the label tree): top-level kinds `ground`, `vegetation`, `pole`, `structure`,
+  `temporary` (core: the old groups), and proposed `gutter`, `parking`, `curb_top`, `curb_bottom`, `curb_back`,
+  `cover`, `hard_surface`, `tree`, `wall`, `bridge`; `driveway`, `building_wall` and `barrier` enabled.
 - **Evidence:** —
 
 ## questions for people, not data

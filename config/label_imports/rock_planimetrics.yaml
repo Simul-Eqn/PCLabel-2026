@@ -1,0 +1,81 @@
+# ROCK Robotic planimetrics (DXF): which PCLabel label each of their layers gets on import.
+# File > Import labels... picks the profile that knows the most of a drawing's layers; every label can still be
+# changed in the import dialog before importing, and afterwards on the layer's directory.
+#
+# Import conveniences, not labelling-standard rules: first proposed on 2026-11-04 from the layer names and from
+# mobile-colorized-v2-1.dxf against its scan; remapped the same day to the taxonomy tree the user agreed (curb edges
+# as line labels, map symbols as markers, gutter, parking, cover, hard_surface, wall, bridge). All 53 layers ROCK
+# lists are here; 10 rural or US-only ones have no label and say so. Paved and unpaved map to the same label: a
+# surface is labelled by what it is for, not its material (P1).
+#
+# Their features are lines along or around things (a curb's top, bottom and back edges; a road's or a path's
+# edge; a canopy's outline) and map symbols at a point (poles, manholes, trees), which import as markers.
+# On mobile-colorized-v2-1.dxf (medians, from the drawing alone): TOP_OF_CURB is 7 cm out from and 14.5 cm above
+# BOTTOM_OF_CURB, BACK_OF_CURB 8 cm behind the top at its height, GUTTER 0.51 m out from BOTTOM_OF_CURB, PAVED_ROAD
+# along GUTTER where there is one, FOOT_PATH along BACK_OF_CURB (O-0013).
+
+schema: pclabel.label-import-profile/1
+name: ROCK planimetrics
+format: dxf
+layers:
+  # the curb: three edge lines
+  TOP_OF_CURB:    {label: curb_top, note: "the curb's lip (top edge of the face)"}
+  BOTTOM_OF_CURB: {label: curb_bottom, note: "the curb's toe; beside a gutter, its flow line"}
+  BACK_OF_CURB:   {label: curb_back, note: "the back of the kerb unit, on the pavement side"}
+  # the road and what is part of it
+  PAVED_ROAD:     {label: road, note: "the edge of the road surface (along the gutter where there is one)"}
+  UNPAVED_ROAD:   {label: road, note: "the edge of an unpaved road"}
+  PAINT_STRIPE:   {label: road_line, note: "painted lines on the road (R-006)"}
+  PARKING_PAINT_STRIPE: {label: road_line, note: "parking bay lines (a marking type, Q-14)"}
+  GUTTER:         {label: gutter, note: "the gutter's outer edge, against the road (Q-10)"}
+  GUTTER_BOTTOM:  {label: gutter, note: "the gutter's lowest line"}
+  PAVED_PARKING:  {label: parking, note: "a parking area's edge"}
+  PAVED_DRIVEWAY: {label: driveway, note: "a driveway's edge"}
+  UNPAVED_DRIVEWAY: {label: driveway, note: "an unpaved driveway's edge"}
+  RAMP:           {label: ramp, note: "a ramp's edge (R-007)"}
+  # other ground
+  FOOT_PATH:      {label: pavement, note: "a footpath's edge"}
+  DRAINAGE_PIT:   {label: drain, note: "a drainage inlet"}
+  TOP_OF_DRAINAGE: {label: drain, note: "the top edge of a drainage channel"}
+  BOTTOM_OF_DRAINAGE: {label: drain, note: "the bottom of a drainage channel"}
+  CULVERT_PIPE:   {label: drain, note: "a culvert"}
+  MANHOLE:        {label: cover, note: "a manhole cover (marker; its points stay road or pavement)"}
+  HARD_SURFACE:   {label: hard_surface, note: "a paved surface that is not road or path"}
+  CONCRETE:       {label: hard_surface, note: "a concrete surface"}
+  CONCRETE_TOP:   {label: hard_surface, note: "the top edge of a concrete structure"}
+  CONCRETE_BOTTOM: {label: hard_surface, note: "the bottom edge of a concrete structure"}
+  EDGE_OF_GRASS:  {label: grass, note: "the edge of a grassed area"}
+  # vegetation
+  SINGLE_TREE:    {label: tree, note: "a map symbol at a tree, near the ground at its trunk (marker)"}
+  TREELINE:       {label: tree_canopy, note: "a tree canopy's outline seen from above"}
+  SHRUB:          {label: shrub_hedge, note: "a map symbol at a shrub (marker)"}
+  SHRUBLINE:      {label: shrub_hedge, note: "a shrub area's outline"}
+  BRUSHLINE:      {label: shrub_hedge, note: "a brush area's outline"}
+  # poles
+  LIGHT_POLE:     {label: lamp_post, note: "a map symbol at the pole's foot (marker)"}
+  TRAFFIC_SIGNAL: {label: traffic_light_pole, note: "a map symbol at the signal's pole (marker)"}
+  ELECTRIC_POLE:  {label: other_pole, note: "a utility pole (marker)"}
+  SIGN_BOARD:     {label: other_pole, note: "a map symbol at a sign's post (marker)"}
+  # structures
+  BUILDING:       {label: building_wall, note: "a building's footprint"}
+  TOP_OF_RETAINING_WALL: {label: wall, note: "the top edge of a retaining wall"}
+  BOTTOM_OF_RETAINING_WALL: {label: wall, note: "the bottom edge of a retaining wall"}
+  FENCE:          {label: fence_railing}
+  HAND_RAIL:      {label: fence_railing}
+  GUARD_RAIL:     {label: barrier, note: "a guard rail along the road"}
+  BRIDGE:         {label: bridge}
+  FIRE_HYDRANT:   {label: street_furniture, note: "a hydrant (marker)"}
+  # anything else
+  MISCE_SYMBOL:   {label: other, note: "miscellaneous symbols"}
+  MISCELLANEOUS:  {label: other, note: "miscellaneous features"}
+  # rural or US-only: none expected on Singapore streets
+  RAILS:          {label: "", note: "railway tracks (not in Singapore street scenes)"}
+  PIPELINE:       {label: "", note: "rural or industrial: not in Singapore street scenes"}
+  ABOVE_GROUND_PIPE: {label: "", note: "rural or industrial: not in Singapore street scenes"}
+  ROUND_TANK:     {label: "", note: "rural or industrial: not in Singapore street scenes"}
+  CATTLE_GUARD:   {label: "", note: "rural: not in Singapore street scenes"}
+  DAM:            {label: "", note: "not in Singapore street scenes"}
+  DOCK:           {label: "", note: "not in Singapore street scenes"}
+  AIRPORT_RUNWAY: {label: "", note: "not in Singapore street scenes"}
+  SWIMMING_POOL:  {label: "", note: "not in Singapore street scenes"}
+  TENNIS_COURT:   {label: "", note: "not in Singapore street scenes"}

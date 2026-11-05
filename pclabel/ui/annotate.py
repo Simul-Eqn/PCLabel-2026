@@ -19,6 +19,11 @@ and the panel.
   label and plane mode, and fits its plane to all the points again.
 - Locks: the points of point sets with a locked label cannot be selected by any tool; classes marked
   ``selectable: false`` in the taxonomy (``other``, "no class") are always locked.
+- Markers (Ctrl+M, the user's request of 2026-11-04): a position from the selection, at the points' mean or at the
+  centre of a circle fitted to them across the height axis (poles, trunks: the mean of a pole seen from one side sits
+  toward the scanner), at their mean height or lowest point (tools/markers.py). Drawn as a dot with a short pin.
+- The label box shows the taxonomy as a tree (each class indented under its parent); a class kept to lines or markers
+  (``only``) is greyed out for other items, and refused on them.
 """
 
 from __future__ import annotations
@@ -46,8 +51,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pclabel.store.annotations import SET_OPS, CURVE_MODES, Annotations, Curve, PointSet, Segment, clone_nodes
+from pclabel.store.annotations import SET_OPS, CURVE_MODES, Annotations, Curve, Marker, PointSet, Segment, clone_nodes
 from pclabel.tools import sets as sets_
+from pclabel.tools.markers import MarkerParams, place_marker
+from pclabel.ui import labelbox
+from pclabel.ui.docks import _spin
+
+MARKER_ACROSS = {"mean": "mean of the points", "circle": "circle centre (poles, trunks)"}
+MARKER_HEIGHTS = {"mean": "mean height", "lowest": "lowest point"}
+PIN = 0.8  # m: a marker's pin, along the height axis, so it stands out among the points
 
 ROLE = Qt.ItemDataRole.UserRole
 PENDING = (1.0, 1.0, 1.0, 1.0)
@@ -102,8 +114,8 @@ class AnnotationDock(QDockWidget):
         v = QVBoxLayout(w)
         hint = QLabel("Segment (V): two clicks. Curve (Shift+V): clicks in order, then Enter. Ctrl+G: the selection "
                       "as a point set, in the selected directory (or beside the selected item); Ctrl+Shift+G: at the "
-                      "top level. Drag onto a directory to put things in it. F2 renames the selected entry, inside a "
-                      "directory too.")  # fmt: skip
+                      "top level. Ctrl+M: a marker where the selection is. Drag onto a directory to put things in "
+                      "it. F2 renames the selected entry, inside a directory too.")  # fmt: skip
         hint.setWordWrap(True)
         v.addWidget(hint)
         row = QHBoxLayout()
@@ -225,6 +237,40 @@ class AnnotationDock(QDockWidget):
         lrow.addWidget(self.uncertain)
         lrow.addWidget(self.locks)
         v.addLayout(lrow)
+        krow = QHBoxLayout()
+        krow.addWidget(QLabel("marker at:"))
+        self.marker_across = QComboBox()
+        for k, words in MARKER_ACROSS.items():
+            self.marker_across.addItem(words, k)
+        self.marker_across.setToolTip("across the height axis: the selected points' mean, or the centre of a circle "
+                                      "fitted to them (a band of a pole or a trunk: seen from one side, its points' "
+                                      "mean sits toward the scanner)")  # fmt: skip
+        self.marker_height = QComboBox()
+        for k, words in MARKER_HEIGHTS.items():
+            self.marker_height.addItem(words, k)
+        self.marker_height.setToolTip("along the height axis: the points' mean height, or their lowest point (e.g. "
+                                      "a selection that reaches the ground at a pole's foot)")  # fmt: skip
+        self.marker = QPushButton("marker (Ctrl+M)")
+        self.marker.setToolTip("a marker where the selection is: in the directory selected here, or beside the item "
+                               "selected here (Ctrl+Shift+M: at the top level)")  # fmt: skip
+        krow.addWidget(self.marker_across, 1)
+        krow.addWidget(QLabel("at"))
+        krow.addWidget(self.marker_height)
+        krow.addWidget(self.marker)
+        v.addLayout(krow)
+        hrow = QHBoxLayout()
+        hrow.addWidget(QLabel("move selected markers up by:"))
+        self.marker_dz = _spin(-100.0, 100.0, 0.10, 0.01, 3, " m")
+        self.marker_dz.setToolTip("along the active height axis; negative moves them down")
+        self.marker_move = QPushButton("move")
+        self.marker_move.setToolTip("move the selected markers (and those in selected directories) by this much")
+        hrow.addWidget(self.marker_dz, 1)
+        hrow.addWidget(self.marker_move)
+        self.marker_axis = QPushButton("use the active height axis")
+        self.marker_axis.setToolTip("make the active height axis (z or a fitted plane) the selected markers' own: their "
+                                    "pin and \"move\" follow it; their positions stay where they are")  # fmt: skip
+        hrow.addWidget(self.marker_axis)
+        v.addLayout(hrow)
         grid = QGridLayout()
         self.new_dir = QPushButton("new directory")
         self.new_dir.setToolTip("at the top level, or inside the selected directory")
@@ -312,6 +358,9 @@ class AnnotationController(QObject):
         d.done.clicked.connect(self.done)
         d.new_dir.clicked.connect(lambda: self.new_directory())
         d.points.clicked.connect(self.points_from_selection)
+        d.marker.clicked.connect(lambda: self.marker_from_selection())
+        d.marker_move.clicked.connect(lambda: self.move_markers())
+        d.marker_axis.clicked.connect(lambda: self.set_marker_axis())
         d.color.clicked.connect(lambda: self.set_color())
         d.select.clicked.connect(self.select_points)
         d.edit.clicked.connect(self.edit_selected)
@@ -705,6 +754,98 @@ class AnnotationController(QObject):
         self.dock.show()
         self.dock.raise_()
 
+    def marker_from_selection(self, top_level: bool = False, across: str | None = None, height: str | None = None):
+        """A marker where the selection is (Ctrl+M): across the height axis at the points' mean or at the centre of
+        a circle fitted to them, along it at their mean height or lowest point (the panel's choices, or ``across`` and
+        ``height``); in the directory selected in the tree, like Ctrl+G (at the top level with ``top_level``)."""
+        if self.project is None:
+            return None
+        sel = self.w.selection
+        if sel.size == 0:
+            self.dock.status.setText("nothing selected: select the points to place a marker at (e.g. a band of a pole)")
+            return None
+        d = self.dock
+        params = MarkerParams(across or d.marker_across.currentData(), height or d.marker_height.currentData())
+        f = self._frame()
+        try:
+            res = place_marker(self.project.xyz, sel, f.normal, params, f.along)
+        except ValueError as e:
+            self.dock.status.setText(f"no marker: {e}")
+            return None
+        rec = dict(res["record"], height_axis=f.name, axis=[float(v) for v in f.normal],
+                   selection=[dict(op) for op in self.w.selection_ops])  # fmt: skip
+        into = None if top_level else self._directory_for_new()
+        self._checkpoint("new marker")
+        mk = self.model.add(Marker(self._world(res["position"]), rec))
+        if into is not None:
+            self.model.move([mk.id], into.id)
+        x, y, z = mk.position
+        text = (f"{mk.name}: {MARKER_ACROSS[params.across]} of {sel.size:,} points, at their "
+                f"{MARKER_HEIGHTS[params.height]}: ({x:.3f}, {y:.3f}, {z:.3f})")  # fmt: skip
+        if params.across == "circle":
+            text += (f"; radius {rec['radius']:.3f} m, fit {rec['rms'] * 100:.1f} cm rms, {rec['coverage']:.0%} of the "
+                     f"circumference; the plain mean was {rec['mean_off_centre'] * 100:.1f} cm off its centre")  # fmt: skip
+            if rec["points_dropped"]:
+                text += f"; {rec['points_dropped']:,} points off the circle left out"
+        self._changed(text + (f", in {into.name}" if into is not None else ", at the top level"))
+        self.dock.show()
+        self.dock.raise_()
+        return mk
+
+    def _marker_axis(self, m) -> tuple:
+        """(unit normal, name) of a marker's own height axis (``source.axis``), else the active one."""
+        ax = m.source.get("axis")
+        if ax is not None and np.linalg.norm(ax) > 0:
+            a = np.asarray(ax, np.float64)
+            return a / np.linalg.norm(a), m.source.get("height_axis", "its axis")
+        f = self._frame()
+        return np.asarray(f.normal, np.float64), f.name
+
+    def move_markers(self, dh: float | None = None) -> int:
+        """Move the selected markers (and those in selected directories) by ``dh`` metres (None: the panel's value;
+        negative: down) along each marker's own height axis (the active one for a marker without one, e.g. imported).
+        One undo step; each marker's source records the move."""
+        mks = [m for m in self._selected_items() if m.kind == "marker"]
+        if not mks:
+            self.dock.status.setText("select markers (or directories holding them) to move first")
+            return 0
+        dh = float(self.dock.marker_dz.value() if dh is None else dh)
+        self._checkpoint(f"move {len(mks)} marker{'s' * (len(mks) != 1)}")
+        names = set()
+        for m in mks:
+            n, name = self._marker_axis(m)
+            names.add(name)
+            m.position = np.asarray(m.position, np.float64) + dh * n
+            m.source = dict(m.source, moved=[*m.source.get("moved", []), {"along": name, "by": dh}])
+        self._changed(f"{len(mks)} marker{'s' * (len(mks) != 1)} moved {dh:+.3f} m along {', '.join(sorted(names))}")
+        return len(mks)
+
+    def set_marker_axis(self) -> int:
+        """Make the active height axis the selected markers' own (``source.height_axis`` and ``axis``); their
+        positions stay. One undo step; each change is added to ``source.axis_changes``."""
+        mks = [m for m in self._selected_items() if m.kind == "marker"]
+        if not mks:
+            self.dock.status.setText("select markers (or directories holding them) first")
+            return 0
+        f = self._frame()
+        n = [float(v) for v in f.normal]
+        self._checkpoint(f"{len(mks)} marker{'s' * (len(mks) != 1)} on {f.name}")
+        for m in mks:
+            old = m.source.get("height_axis")
+            m.source = dict(m.source, height_axis=f.name, axis=n,
+                            axis_changes=[*m.source.get("axis_changes", []), {"from": old, "to": f.name}])  # fmt: skip
+        self._changed(f"{len(mks)} marker{'s' * (len(mks) != 1)} now on the height axis {f.name} (positions kept)")
+        return len(mks)
+
+    def _label_fits(self, label: str, nodes) -> str | None:
+        """Why ``label`` cannot go on these nodes (a class kept to lines or markers), or None."""
+        tax = self.w.taxonomy
+        bad = [n for n in nodes if not tax.fits(label, n.kind)]
+        if not bad:
+            return None
+        names = ", ".join(n.name for n in bad[:3]) + (f" and {len(bad) - 3} more" if len(bad) > 3 else "")
+        return f"{label!r} is for {tax.only(label)}s only, not {names}"
+
     def _directory_for_new(self):
         """Where a new point set goes: the one directory selected in the tree, or the directory of the one item
         selected (None: the top level)."""
@@ -749,6 +890,10 @@ class AnnotationController(QObject):
             self.dock.status.setText("select directories or items to label first")
             return
         label = (self.dock.label.currentText() if label is None else label).strip()
+        why = self._label_fits(label, [self.model.node(i) for i in ids]) if label else None
+        if why:
+            self.dock.status.setText(why)
+            return
         self._checkpoint(f"label {label!r}" if label else "remove label")
         for i in ids:
             self.model.node(i).label = label
@@ -756,7 +901,7 @@ class AnnotationController(QObject):
                       f"label removed from {len(ids)} entr{'y' if len(ids) == 1 else 'ies'}")  # fmt: skip
 
     def _labels_in_order(self, labels) -> list:
-        order = {c["name"]: int(c["id"]) for c in self.w.taxonomy.classes}
+        order = {c["name"]: i for i, c in enumerate(self.w.taxonomy.classes)}  # the taxonomy's tree order
         return sorted(labels, key=lambda k: (k not in order, order.get(k, 0), k))
 
     def _fill_locks(self):
@@ -820,29 +965,26 @@ class AnnotationController(QObject):
             if not path:
                 return None
         flags = {f["name"]: int(f["bit"]) for f in self.w.taxonomy.flags}
-        summary = self.model.export_labels(path, self.project, self._class_ids(), flags, self.w.taxonomy.subset_of())
+        summary = self.model.export_labels(path, self.project, self._class_ids(), flags, self.w.taxonomy.parents())
         parts = [f"{k or 'unlabelled'}: {n} item{'s' * (n != 1)}" + (f", {pts:,} points" if pts else "")
                  for k, (n, pts) in sorted(summary.items(), key=lambda kv: (kv[0] == "", kv[0]))]  # fmt: skip
         self.dock.status.setText(f"exported labels to {path}\n" + "; ".join(parts))
         return path
 
     def _fill_labels(self):
-        """The label box: the enabled taxonomy classes, then the flags (e.g. ``marking``: paint keeps the class of the
-        surface it is on, R-006, so a ``marking`` point set overlaps the road's), then other labels in use."""
-        box = self.dock.label
-        text = box.currentText()
-        names = [c["name"] for c in self.w.taxonomy.classes if int(c["id"]) != 0 and c.get("enabled", True)]
-        flags = [f["name"] for f in self.w.taxonomy.flags]
-        used = sorted({x.label for x, _ in self.model.walk() if x.label} - set(names) - set(flags))
-        box.blockSignals(True)
-        box.clear()
-        box.addItems(names)
-        for f in self.w.taxonomy.flags:
-            box.addItem(f["name"])
-            box.setItemData(box.count() - 1, f"flag: {f.get('def', '')}", Qt.ItemDataRole.ToolTipRole)
-        box.addItems(used)
-        box.setCurrentText(text)
-        box.blockSignals(False)
+        """The label box: the enabled taxonomy classes as a tree (each indented under its parent; one kept to lines or
+        markers greyed out unless the entries selected in the tree are such items), then the flags (e.g. ``marking``:
+        paint off the road keeps the class of the surface it is on, R-006), then other labels in use."""
+        entries = labelbox.taxonomy_entries(self.w.taxonomy)
+        known = {e[0] for e in entries}
+        used = sorted({x.label for x, _ in self.model.walk() if x.label} - known)
+        kinds = set()
+        for i in self.selected_ids():
+            try:
+                kinds.add(self.model.node(i).kind)
+            except KeyError:
+                pass
+        labelbox.fill(self.dock.label, entries, used, kinds or None)
 
     # ---- set operations on point sets ----------------------------------------------------------------------
 
@@ -1123,10 +1265,15 @@ class AnnotationController(QObject):
             return
         if col == 1:  # the label typed in the tree
             label = item.text(1).strip()
+            why = self._label_fits(label, [x]) if label else None
+            if why:
+                self.dock.status.setText(why)
+                QTimer.singleShot(0, self.rebuild_tree)  # put the label shown back
+                return
             if label != x.label:
                 self._checkpoint(f"label {label!r}" if label else "remove label")
                 x.label = label
-                self._changed()
+                QTimer.singleShot(0, self._changed)  # rebuilding the tree now would delete the item under the editor
             return
         name = item.text(0).strip()
         if col == 0 and name and name != x.name:
@@ -1145,6 +1292,7 @@ class AnnotationController(QObject):
 
     def on_tree_selection(self):
         self.highlight = {m.id for m in self._selected_items()}
+        self._fill_labels()
         self.refresh()
 
     # ---- overlays ---------------------------------------------------------------------------------------------
@@ -1180,6 +1328,19 @@ class AnnotationController(QObject):
                 lines.append((self._polyline(m) - off, col, width))
                 if m is not self.editing:
                     points.append((m.nodes - off, col, 6.0))
+            elif m.kind == "marker":  # a position: a dot with a pin up the height axis
+                p = m.polyline() - off
+                up = self._marker_axis(m)[0]  # its own height axis
+                points.append((p, col, 16.0 if hl else 11.0))
+                lines.append((np.vstack([p, p + PIN * up]), col, 3.5 if hl else 2.0))
+            elif m.kind == "polyline":  # imported: exact vertices; a single one is a point feature (a map symbol)
+                v = m.polyline() - off
+                if len(v) == 1:
+                    points.append((v, col, 14.0 if hl else 9.0))
+                else:
+                    lines.append((v, col, width))
+                    if hl:
+                        points.append((v, col, 6.0))
         targets = None
         if self.joining is not None:
             try:

@@ -1,100 +1,136 @@
 # PCLabel taxonomy: the source of truth for class ids, names, colours and flags.
 # Rules about *when* to use each class are in docs/LABELLING_STANDARD.md.
 #
-# id        uint8, stable forever. Never reuse or renumber an id; disable a class instead.
-#           Ranges: 1-19 ground, 20-29 vegetation, 30-39 poles, 40-49 structures, 50-59 temporary, 60+ other.
-# status    core      = asked for by the user
+# The classes form a tree (the user's decision of 2026-11-04, P8): a class is a kind of its `parent`.
+#   - Use the most specific label that fits. Use the parent when no sub-label covers it, when you are not sure which
+#     one, or to label quickly; be more specific with a sub-label when you can (the user's words, 2026-11-04).
+#   - Counting a class counts its sub-classes too (a road_line point is a road point). Where point sets overlap along
+#     one branch (a road set holding its lines), the most specific label is the point's; overlaps across branches
+#     (road and curb) are conflicts.
+#   - Moving a class to another parent changes what it rolls up to, without relabelling anything.
+#   - The file lists the classes in tree order (a parent before its children); menus show them that way.
+#
+# color     one hue family per kind (2026-11-05, the user's request: those in the same subcategory look alike):
+#           ground's surfaces each have their own hue (road blue, curb red, pavement yellow, drain cyan, grass green)
+#           and their sub-classes are shades of it; vegetation greens, poles purples, structures greys,
+#           temporary things oranges.
+# id        uint8, stable forever. Never reuse or renumber an id; disable a class instead. The tree, not the id,
+#           says what a class belongs to (the old ranges 1-19 ground, 20-29 vegetation, 30-39 poles, 40-49 structures,
+#           50-59 temporary, 60+ other still hold for the classes that had them; the top-level kinds are 100-104).
+# parent    the class this one is a kind of (none: top level)
+# only      line   = only lines (segments, curves, polylines) take it, e.g. the curb's three edges
+#           marker = only markers take it (a position: where a thing is), e.g. a manhole cover
+#           (absent: point sets, lines and markers all take it: its points, its edge or outline, where it stands)
+# status    core      = asked for or decided by the user
 #           proposed  = planning suggestion; the user decides (see the rule named in `rule`)
-# enabled   shown in the palette. Disabled classes stay valid in old label files.
-# group     used to collapse classes for exports and evaluation
+# enabled   shown in the label menus. Disabled classes stay valid in old label files.
 # countable points of this class may carry instance ids (one id per object)
 # key       default hotkey ("shift+N" for the second row). "0" erases to unassessed.
 # selectable  false: points with this class (an annotation label, D-007) are never selected by any tool.
 #             Default true. Set on `other` ("no class") at the user's request (2026-10-20).
-# subset_of   another class's name: this class is a part of that one, and its points are that class's points too
-#             (`road_line` of `road`, the user's request of 2026-10-28). The parent's set keeps them; exports count
-#             the parent with its subsets and report subset points outside the parent.
 
-schema: pclabel.taxonomy/1
-version: "0.4"
-
-groups: [ground, vegetation, pole, structure, temporary, other]
+schema: pclabel.taxonomy/2
+version: "0.6"
 
 classes:
-  - {id: 0,  name: unassessed,         group: other,      status: core,     enabled: true,  color: "#8E8E93", key: "0",
+  - {id: 0,   name: unassessed,         status: core,     enabled: true,  color: "#8E8E93", key: "0",
      def: "not yet looked at. Never means 'not X'."}
 
-  # ground
-  - {id: 1,  name: road,               group: ground,     status: core,     enabled: true,  color: "#5E5CE6", key: "1",
-     def: "carriageway surface for vehicles", rule: R-005}
-  - {id: 2,  name: curb,               group: ground,     status: core,     enabled: true,  color: "#FF3B30", key: "2",
+  - {id: 100, name: ground,             status: core,     enabled: true,  color: "#A1887F",
+     def: "the ground surface and what is built into it; use a sub-label where one fits"}
+  - {id: 1,   name: road,               parent: ground,   status: core,     enabled: true,  color: "#3F51B5", key: "1",
+     def: "carriageway surface for vehicles; a line labelled road is the road's edge", rule: R-005}
+  - {id: 10,  name: road_line,          parent: road,     status: core,     enabled: true,  color: "#D6DBFF",
+     def: "painted lines and markings on the road: lane, edge and centre lines, stop lines, arrows, text, zig-zags, parking bay lines; part of the road (added at the user's request 2026-10-28)", rule: R-006}
+  - {id: 11,  name: gutter,             parent: road,     status: proposed, enabled: true,  color: "#7986CB",
+     def: "concrete channel or gutter strip between the road and the kerb", rule: Q-10}
+  - {id: 12,  name: parking,            parent: road,     status: proposed, enabled: true,  color: "#5C8DF6",
+     def: "parking bays and car park surfaces"}
+  - {id: 8,   name: driveway,           parent: road,     status: core,     enabled: true,  color: "#283593",
+     def: "vehicle crossing over the pavement; a kind of road (the user, 2026-11-04)", rule: R-010}
+  - {id: 9,   name: ramp,               parent: road,     status: core,     enabled: true,  color: "#8E7CC3",
+     def: "sloped surface between the pavement and the road, e.g. behind a lowered kerb at a crossing (added at the user's request 2026-10-22; a kind of road, the user 2026-11-04; extent pending)", rule: R-007}
+  - {id: 2,   name: curb,               parent: ground,   status: core,     enabled: true,  color: "#E53935", key: "2",
      def: "raised kerb unit; exact extent pending", rule: R-004}
-  - {id: 3,  name: curb_lowered,       group: ground,     status: proposed, enabled: true,  color: "#FF9F0A", key: "shift+1",
+  - {id: 3,   name: curb_lowered,       parent: curb,     status: proposed, enabled: true,  color: "#FF7043", key: "shift+1",
      def: "kerb unit at a dropped/ramped section (crossings, driveways)", rule: R-007}
-  - {id: 4,  name: pavement,           group: ground,     status: core,     enabled: true,  color: "#FFD60A", key: "3",
+  - {id: 13,  name: curb_top,           parent: curb,     status: proposed, enabled: true,  color: "#FF8A80", only: line,
+     def: "line: the kerb's lip, the top edge of its face (ROCK TOP_OF_CURB)", rule: R-004}
+  - {id: 14,  name: curb_bottom,        parent: curb,     status: proposed, enabled: true,  color: "#B71C1C", only: line,
+     def: "line: the kerb's toe, where its face meets the road or gutter (ROCK BOTTOM_OF_CURB)", rule: R-004}
+  - {id: 15,  name: curb_back,          parent: curb,     status: proposed, enabled: true,  color: "#D81B60", only: line,
+     def: "line: the back of the kerb unit, its joint with the pavement or verge (ROCK BACK_OF_CURB)", rule: R-004}
+  - {id: 4,   name: pavement,           parent: ground,   status: core,     enabled: true,  color: "#FFD60A", key: "3",
      def: "paved surface for pedestrians/cyclists: footpaths, park connectors, cycling and shared paths", rule: R-002}
-  - {id: 5,  name: drain,              group: ground,     status: proposed, enabled: true,  color: "#00C7BE", key: "4", countable: true,
-     def: "drainage: kerb inlets, gratings, open channels, drain covers", rule: R-003}
-  - {id: 6,  name: grass,              group: ground,     status: core,     enabled: true,  color: "#30D158", key: "5",
+  - {id: 5,   name: drain,              parent: ground,   status: proposed, enabled: true,  color: "#00BCD4", key: "4", countable: true,
+     def: "drainage: kerb inlets, gratings, open channels, drain covers, pits", rule: R-003}
+  - {id: 16,  name: cover,              parent: ground,   status: proposed, enabled: true,  color: "#26A69A", only: marker,
+     def: "marker: a manhole or utility cover (its points keep the class of the surface it is in)", rule: R-005}
+  - {id: 17,  name: hard_surface,       parent: ground,   status: proposed, enabled: true,  color: "#BCAAA4",
+     def: "other paved ground, neither road nor pavement: pads, aprons, concrete areas"}
+  - {id: 6,   name: grass,              parent: ground,   status: core,     enabled: true,  color: "#9CCC65", key: "5",
      def: "turf, low ground cover, bare soil in verges", rule: R-011}
-  - {id: 7,  name: island,             group: ground,     status: proposed, enabled: false, color: "#FF6482",
+  - {id: 7,   name: island,             parent: ground,   status: proposed, enabled: false, color: "#F06292",
      def: "top of a raised traffic island / median (only if R-008 chooses a separate class)", rule: R-008}
-  - {id: 8,  name: driveway,           group: ground,     status: proposed, enabled: false, color: "#AC8E68",
-     def: "vehicle crossing over the pavement (only if R-010 chooses a separate class)", rule: R-010}
-  - {id: 9,  name: ramp,               group: ground,     status: core,     enabled: true,  color: "#F7A6D5",
-     def: "sloped walking surface between the pavement and the road, e.g. behind a lowered kerb at a crossing (added at the user's request 2026-10-22; extent pending)", rule: R-007}
-  - {id: 10, name: road_line,          group: ground,     status: core,     enabled: true,  color: "#E6FF00", subset_of: road,
-     def: "painted lines and markings on the road: lane, edge and centre lines, stop lines, arrows, text, zig-zags; part of the road (added at the user's request 2026-10-28)", rule: R-006}
 
-  # vegetation
-  - {id: 20, name: shrub_hedge,        group: vegetation, status: proposed, enabled: true,  color: "#9BCB3C", key: "shift+2",
+  - {id: 101, name: vegetation,         status: core,     enabled: true,  color: "#43A047",
+     def: "plants; use a sub-label where one fits"}
+  - {id: 20,  name: shrub_hedge,        parent: vegetation, status: proposed, enabled: true, color: "#7CB342", key: "shift+2",
      def: "shrubs, hedges, planted beds above ground cover", rule: R-011}
-  - {id: 21, name: tree_trunk,         group: vegetation, status: core,     enabled: true,  color: "#A0522D", key: "6", countable: true,
+  - {id: 23,  name: tree,               parent: vegetation, status: proposed, enabled: true, color: "#2E7D32", countable: true,
+     def: "one tree (R-015's tree directory); a marker labelled tree is where it stands", rule: R-015}
+  - {id: 21,  name: tree_trunk,         parent: tree,     status: core,     enabled: true,  color: "#689F38", key: "6", countable: true,
      def: "trunk and main stems of a tree", rule: R-011}
-  - {id: 22, name: tree_canopy,        group: vegetation, status: core,     enabled: true,  color: "#1B7F3A", key: "7", countable: true,
-     def: "leaves and small branches", rule: R-011}
+  - {id: 22,  name: tree_canopy,        parent: tree,     status: core,     enabled: true,  color: "#66BB6A", key: "7", countable: true,
+     def: "leaves and small branches; a line labelled tree_canopy is the canopy's outline", rule: R-011}
 
-  # poles
-  - {id: 30, name: lamp_post,          group: pole,       status: core,     enabled: true,  color: "#FF2D95", key: "8", countable: true,
+  - {id: 102, name: pole,               status: core,     enabled: true,  color: "#AB47BC", countable: true,
+     def: "pole-like objects; use a sub-label where one fits", rule: R-012}
+  - {id: 30,  name: lamp_post,          parent: pole,     status: core,     enabled: true,  color: "#E040FB", key: "8", countable: true,
      def: "street lamp pole including arm and lamp head", rule: R-012}
-  - {id: 31, name: traffic_light_pole, group: pole,       status: proposed, enabled: true,  color: "#BF5AF2", key: "shift+3", countable: true,
+  - {id: 31,  name: traffic_light_pole, parent: pole,     status: proposed, enabled: true,  color: "#7E57C2", key: "shift+3", countable: true,
      def: "traffic signal pole including arms and signal heads", rule: R-012}
-  - {id: 32, name: other_pole,         group: pole,       status: proposed, enabled: true,  color: "#64D2FF", key: "shift+4", countable: true,
-     def: "sign posts, bollards, camera poles, other pole-like objects", rule: R-012}
+  - {id: 32,  name: other_pole,         parent: pole,     status: proposed, enabled: true,  color: "#CE93D8", key: "shift+4", countable: true,
+     def: "sign posts, bollards, camera poles, utility poles, other pole-like objects", rule: R-012}
 
-  # structures
-  - {id: 40, name: building_wall,      group: structure,  status: proposed, enabled: false, color: "#C7C7CC",
-     def: "building facades and boundary walls"}
-  - {id: 41, name: fence_railing,      group: structure,  status: proposed, enabled: true,  color: "#D4A373",
-     def: "railings, pedestrian guardrails, fences"}
-  - {id: 42, name: roof_shelter,       group: structure,  status: proposed, enabled: true,  color: "#7D7AFF",
+  - {id: 103, name: structure,          status: core,     enabled: true,  color: "#9E9E9E",
+     def: "built structures and furniture; use a sub-label where one fits"}
+  - {id: 40,  name: building_wall,      parent: structure, status: proposed, enabled: true, color: "#CFD8DC",
+     def: "building facades and boundary walls of buildings; a line labelled building_wall is a footprint"}
+  - {id: 45,  name: wall,               parent: structure, status: proposed, enabled: true, color: "#90A4AE",
+     def: "free-standing and retaining walls"}
+  - {id: 41,  name: fence_railing,      parent: structure, status: proposed, enabled: true, color: "#BCB4AC",
+     def: "railings, hand rails, pedestrian guardrails, fences"}
+  - {id: 43,  name: barrier,            parent: structure, status: proposed, enabled: true, color: "#ECEFF1",
+     def: "crash barriers, guard rails along the road, concrete road barriers"}
+  - {id: 42,  name: roof_shelter,       parent: structure, status: proposed, enabled: true, color: "#607D8B",
      def: "covered-linkway roofs, bus shelters, canopies (structure, not vegetation)"}
-  - {id: 43, name: barrier,            group: structure,  status: proposed, enabled: false, color: "#E5E5EA",
-     def: "crash barriers, concrete road barriers"}
-  - {id: 44, name: street_furniture,   group: structure,  status: proposed, enabled: true,  color: "#FFB340", countable: true,
+  - {id: 46,  name: bridge,             parent: structure, status: proposed, enabled: true, color: "#B0BEC5",
+     def: "overhead pedestrian bridges and other bridges"}
+  - {id: 44,  name: street_furniture,   parent: structure, status: proposed, enabled: true, color: "#78909C", countable: true,
      def: "benches, bins, hydrants, cabinets, bicycle racks"}
 
-  # temporary / moving
-  - {id: 50, name: vehicle,            group: temporary,  status: proposed, enabled: true,  color: "#0A84FF", key: "shift+5", countable: true,
+  - {id: 104, name: temporary,          status: core,     enabled: true,  color: "#FF9800",
+     def: "temporary and moving things; use a sub-label where one fits", rule: R-013}
+  - {id: 50,  name: vehicle,            parent: temporary, status: proposed, enabled: true, color: "#F57C00", key: "shift+5", countable: true,
      def: "parked or stationary vehicles", rule: R-013}
-  - {id: 51, name: person,             group: temporary,  status: proposed, enabled: true,  color: "#FF453A", key: "shift+6", countable: true,
+  - {id: 51,  name: person,             parent: temporary, status: proposed, enabled: true, color: "#FFB74D", key: "shift+6", countable: true,
      def: "people", rule: R-013}
-  - {id: 52, name: temporary_object,   group: temporary,  status: proposed, enabled: true,  color: "#FF9500", key: "shift+7", countable: true,
+  - {id: 52,  name: temporary_object,   parent: temporary, status: proposed, enabled: true, color: "#FF6F00", key: "shift+7", countable: true,
      def: "cones, barricades, incident equipment, construction items", rule: R-013}
-  - {id: 53, name: ghost,              group: temporary,  status: proposed, enabled: true,  color: "#BDB2FF", key: "shift+8",
+  - {id: 53,  name: ghost,              parent: temporary, status: proposed, enabled: true, color: "#FFE0B2", key: "shift+8",
      def: "streaks left by objects that moved during the scan", rule: R-013}
 
-  # other
-  - {id: 60, name: noise,              group: other,      status: proposed, enabled: true,  color: "#3A3A3C", key: "shift+9",
+  - {id: 60,  name: noise,              status: proposed, enabled: true,  color: "#424242", key: "shift+9",
      def: "isolated points, mixed pixels off any surface, below-ground multipath, sky noise", rule: R-014}
-  - {id: 61, name: other,              group: other,      status: core,     enabled: true,  color: "#F2F2F7", key: "9",
+  - {id: 61,  name: other,              status: core,     enabled: true,  color: "#F5F5F5", key: "9",
      selectable: false,
      def: "assessed, but fits no enabled class (log an observation if it recurs); 'no class': never selected"}
 
 # Per-point flags (uint8 bitfield, independent of the class)
 flags:
   - {bit: 0, name: ambiguous,   def: "labeller unsure; excluded from scoring by default; should have a decision-needed observation"}
-  - {bit: 1, name: marking,     def: "painted marking on this surface (road, curb or pavement)", rule: R-006}
+  - {bit: 1, name: marking,     def: "painted marking on this surface (curb or pavement; paint on the road is road_line)", rule: R-006}
   - {bit: 2, name: under_cover, def: "under a roof or canopy; RGB and intensity behave differently"}
   - {bit: 3, name: exclude,     def: "exclude from scoring (artefacts, scan edge, known bad data)"}
   - {bit: 4, name: reviewed,    def: "checked in a review pass"}
