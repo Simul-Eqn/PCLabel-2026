@@ -21,7 +21,7 @@ def road_patch(scan, taxonomy):
 
 
 def test_recovers_crossfall_and_grade(tilted_street, taxonomy):
-    """SPEC §3: 2.5 % crossfall and 1 % grade recovered to within 0.05 %; RMS at the noise level."""
+    """2.5 % crossfall and 1 % grade recovered to within 0.05 %; RMS at the noise level."""
     scan, p = tilted_street
     pts = scan.xyz[road_patch(scan, taxonomy)].astype(np.float64) + scan.offset
     f = frame_from_points(pts, "road")

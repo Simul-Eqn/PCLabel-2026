@@ -20,8 +20,11 @@ from pathlib import Path
 
 import numpy as np
 
+from pclabel.analysis import curves
 from pclabel.store.annotations import jsonable
-from pclabel.store.importer import write_json_atomic
+from pclabel.store.project import source_doc
+from pclabel.store.util import write_json_atomic
+from pclabel.taxonomy import hex_rgb
 
 SCHEMA = "pclabel.vector-export/1"
 UNLABELLED = "UNLABELLED"
@@ -40,12 +43,10 @@ def aci_of(hex_color: str) -> int:
     """The AutoCAD colour index (1-255) nearest to ``#rrggbb``."""
     from pclabel.store.label_import import aci_rgb
 
-    h = hex_color.lstrip("#")
-    c = np.array([int(h[i : i + 2], 16) for i in (0, 2, 4)], float)
+    c = np.array(hex_rgb(hex_color), float)
     best, best_d = 7, 1e18
     for k in range(1, 256):
-        g = aci_rgb(k).lstrip("#")
-        d = float(np.sum((np.array([int(g[i : i + 2], 16) for i in (0, 2, 4)], float) - c) ** 2))
+        d = float(np.sum((np.array(hex_rgb(aci_rgb(k)), float) - c) ** 2))
         if d < best_d:
             best, best_d = k, d
     return best
@@ -135,8 +136,7 @@ def write_geojson(path, items, project, taxonomy=None) -> dict:
         props = {"id": x.id, "name": x.name, "kind": x.kind, "label": lab,
                  "label_path": taxonomy.path_of(lab) if (taxonomy is not None and lab) else ([lab] if lab else []),
                  "layer": layer_name(lab), "path": dirs, "uncertain": bool(x.uncertain), "closed": closed,
-                 "length_m": float(np.linalg.norm(np.diff(v, axis=0), axis=1).sum()) + (
-                     float(np.linalg.norm(v[-1] - v[0])) if closed and len(v) > 2 else 0.0),
+                 "length_m": curves.length(v, closed),
                  "assisted": assisted(x)}  # fmt: skip
         if getattr(x, "source", None):
             props["source"] = jsonable(x.source)
@@ -144,12 +144,11 @@ def write_geojson(path, items, project, taxonomy=None) -> dict:
             props["attributes"] = jsonable(x.attributes)
         feats.append({"type": "Feature", "id": x.id, "geometry": geom, "properties": props})
         by_kind[x.kind] = by_kind.get(x.kind, 0) + 1
-    src = project.meta.get("source", {})
     doc = {
         "type": "FeatureCollection",
         "pclabel": {"schema": SCHEMA,
                     "coordinates": "scan frame (local metres, z up), not longitude/latitude: an unknown local CRS",
-                    "source": {"file": Path(src.get("path", "")).name, "sha256": src.get("sha256"), "n_valid": project.n},
+                    "source": source_doc(project),
                     "offset": [float(v) for v in project.offset]},  # fmt: skip
         "features": feats,
     }

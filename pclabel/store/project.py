@@ -7,13 +7,21 @@ from pathlib import Path
 
 import numpy as np
 
-from pclabel.store.importer import SCAN_METADATA_FIELDS, SCHEMA, write_json_atomic
+from pclabel.store.importer import SCAN_METADATA_FIELDS, SCHEMA
+from pclabel.store.util import write_json_atomic
 
 FRAMES_SCHEMA = "pclabel.frames/1"
 
 
+def source_doc(project) -> dict:
+    """The scan a file belongs to, as every export writes it: {file, sha256, n_valid} (``project``: a Project, or
+    anything with its ``meta`` and ``n``)."""
+    src = project.meta.get("source", {})
+    return {"file": Path(src.get("path", "")).name, "sha256": src.get("sha256"), "n_valid": project.n}
+
+
 class Project:
-    """Open a project directory. Point columns are read-only memmaps (labels change only via the journal, M3)."""
+    """Open a project directory. Point columns are read-only memmaps; labels live in the annotations, never in the columns."""
 
     def __init__(self, path: str | Path):
         self.path = Path(path)

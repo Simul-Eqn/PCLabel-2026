@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from pclabel.render.camera import boxes_visible, frustum_planes
+from pclabel.analysis.geometry import boxes_visible, frustum_planes
 from pclabel.tools.selection import project_boxes
 
 

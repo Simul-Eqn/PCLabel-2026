@@ -41,7 +41,7 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 from pclabel.analysis import curves
-from pclabel.tools.curbtrace import CurbTraceParams, section
+from pclabel.tools.curbtrace import CurbTraceParams, Section, section
 
 
 @dataclass(frozen=True)
@@ -58,31 +58,18 @@ class KerbFitParams:
     outlier: float = 0.05  # m: an anchor this far off the curve through its neighbours is clutter
     neighbourhood: float = 0.9  # m along the line either way: the neighbours that test an anchor
     road_offset: float = 0.35  # m: the section starts this far on the road side of the line
+    road_behind: float = 0.25  # m: and looks this much further onto the road (the curb tracer's ``behind``)
     top_band: float = 0.20  # m beyond the first high bin: the kerb top's height is the median surface there
     top_tolerance: float = 0.02  # m: the top of the face is the first bin this close to the kerb top's height
     max_bridge: float = 8.0  # m: a stretch with no full-height kerb up to this long is carried across from the kerb
     # on either side (a lowered kerb at a driveway or crossing); in a longer one the line keeps to where it was
 
 
-def _uniform(vertices, step: float, closed: bool) -> np.ndarray:
-    """Points evenly spaced, about ``step`` apart, along the line (by length; the vertices themselves are not kept,
-    so a densely sampled curve gives sections ``step`` apart too)."""
-    v = np.asarray(vertices, np.float64).reshape(-1, 3)
-    if closed and len(v) > 2:
-        v = np.vstack([v, v[:1]])
-    s = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(v, axis=0), axis=1))]
-    k = max(2, int(round(s[-1] / step)) + 1)
-    t = np.linspace(0.0, s[-1], k)
-    if closed and len(vertices) > 2:
-        t = t[:-1]
-    return np.column_stack([np.interp(t, s, v[:, j]) for j in range(3)])
-
-
 def _sections(xyz, tiles, pts, tangents, axis, sign, p: KerbFitParams, filters):
     """(lip points (n, 3), NaN where none; step heights (n,)) for the kerb on one side (``sign`` +1: left)."""
     n = np.asarray(axis, np.float64) / np.linalg.norm(axis)
     cp = CurbTraceParams(step=p.step, curb_height=p.curb_height, side="left" if sign > 0 else "right",
-                         search=p.road_offset + p.window, behind=0.25, follow="lip")  # fmt: skip
+                         search=p.road_offset + p.window, behind=p.road_behind, follow="lip")  # fmt: skip
     out = np.full((len(pts), 3), np.nan)
     hts = np.full(len(pts), np.nan)
     unseen = np.zeros(len(pts), bool)
@@ -93,9 +80,9 @@ def _sections(xyz, tiles, pts, tangents, axis, sign, p: KerbFitParams, filters):
             continue
         s = sign * left / ln
         r = section(xyz, tiles, q - p.road_offset * s, n, d, cp, filters)
-        if r is None or "why" in r:
+        if not isinstance(r, Section):
             continue
-        if not r.get("top_seen", True):  # only the face scanned: its highest point is not the top edge
+        if not r.top_seen:  # only the face scanned: its highest point is not the top edge
             unseen[i] = True
             continue
         lip, h = _top_of_face(r, n, p)
@@ -104,21 +91,21 @@ def _sections(xyz, tiles, pts, tangents, axis, sign, p: KerbFitParams, filters):
     return out, hts, unseen
 
 
-def _top_of_face(r, n, p: KerbFitParams):
+def _top_of_face(r: Section, n, p: KerbFitParams):
     """(point, step height) where the face ends and the kerb's top begins: the first bin past the toe within
     ``top_tolerance`` of the top's height (the median surface ``top_band`` beyond the tracer's lip). On a sloped or
     rounded face the first bin ``curb_height`` above the road (the tracer's lip) can be anywhere up the face."""
-    centres, surf = r["profile"]
-    band = (centres > r["a_lip"]) & (centres <= r["a_lip"] + p.top_band) & ~np.isnan(surf)
+    centres, surf = r.profile
+    band = (centres > r.a_lip) & (centres <= r.a_lip + p.top_band) & ~np.isnan(surf)
     if band.sum() < 2:
-        return r["lip"], r["height"]
+        return r.lip, r.height
     top = float(np.median(surf[band]))
-    cand = np.flatnonzero((centres >= r["a_toe"]) & ~np.isnan(surf) & (surf >= top - p.top_tolerance))
+    cand = np.flatnonzero((centres >= r.a_toe) & ~np.isnan(surf) & (surf >= top - p.top_tolerance))
     if not cand.size:
-        return r["lip"], r["height"]
+        return r.lip, r.height
     a_top = float(centres[cand[0]]) - (centres[1] - centres[0]) / 2
-    dh = top - r["h_lip"]
-    return r["lip"] + (a_top - r["a_lip"]) * r["across"] + dh * n, r["height"] + dh
+    dh = top - r.h_lip
+    return r.lip + (a_top - r.a_lip) * r.across + dh * n, r.height + dh
 
 
 def _outliers(s, e, use, p: KerbFitParams, total, closed) -> np.ndarray:
@@ -215,7 +202,7 @@ def fit(xyz, tiles, vertices, axis, p: KerbFitParams = KerbFitParams(), closed: 
     [(from m, length m)], side, sections, anchors, low_steps, outliers, no_edge, height_median, off_anchors_rms,
     off_anchors_max (m, the result from the anchors), largest_move, mean_move (m, from the old line), params}."""
     ax = np.asarray(axis, np.float64) / np.linalg.norm(axis)
-    pts = _uniform(vertices, p.step, closed)
+    pts = curves.even_points(vertices, p.step, closed)
     m = len(pts)
     if m < 3:
         raise ValueError("the line is too short to fit")
@@ -242,7 +229,7 @@ def fit(xyz, tiles, vertices, axis, p: KerbFitParams = KerbFitParams(), closed: 
     med = float(np.median(hts[has]))
     low = has & (hts < p.min_height_ratio * med)
     use = has & ~low
-    s = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(pts, axis=0), axis=1))]
+    s = curves.arc_length(pts)
     total = s[-1] + (float(np.linalg.norm(pts[0] - pts[-1])) if closed else 0.0)
     outliers = 0
     for _ in range(2):

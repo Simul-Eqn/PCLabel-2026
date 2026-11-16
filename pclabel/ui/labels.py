@@ -43,7 +43,9 @@ from PySide6.QtWidgets import (
 
 from pclabel.render.shaders import MODE_LABELS
 from pclabel.store.annotations import PALETTE
-from pclabel.store.importer import write_json_atomic
+from pclabel.store.project import source_doc
+from pclabel.store.util import write_json_atomic
+from pclabel.taxonomy import hex_rgb
 from pclabel.tools.labelmap import LABEL_MAP_SCHEMA, LabelMapParams, label_map
 from pclabel.ui.docks import _spin
 
@@ -51,11 +53,6 @@ NO_LABEL = ""  # point sets, segments and curves without a label (own or inherit
 GROUP = Qt.ItemDataRole.UserRole + 1  # a legend row for a class not in use itself, above classes in use
 NO_LABEL_COLOR = "#9e9e9e"
 LEGEND_WIDTH = 240  # pixels: the legend strip on the right of the map image
-
-
-def _rgb(hex_color: str) -> tuple:
-    h = hex_color.lstrip("#")
-    return tuple(int(h[i : i + 2], 16) for i in (0, 2, 4))
 
 
 class LabelsDock(QDockWidget):
@@ -216,7 +213,7 @@ class LabelsController(QObject):
     def color_table(self, codes) -> np.ndarray:
         table = np.zeros((256, 4), np.uint8)
         for k, c in codes.items():
-            table[c, :3] = _rgb(self.color(k))
+            table[c, :3] = hex_rgb(self.color(k))
             table[c, 3] = 255
         return table
 
@@ -399,7 +396,7 @@ class LabelsController(QObject):
         lab = self._model().label_of(item.id)[0]
         if lab in self.hidden:
             return None
-        return tuple(v / 255 for v in _rgb(self.color(lab))) + (1.0,)
+        return tuple(v / 255 for v in hex_rgb(self.color(lab))) + (1.0,)
 
     def sync(self, force: bool = False):
         """Bring the legend (unless a click on it is being handled) and, in the labels view, the renderer's label codes
@@ -536,7 +533,6 @@ class LabelsController(QObject):
 
     def _document(self, job, res, seconds) -> dict:
         w = self.w
-        src = w.project.meta.get("source", {})
         class_ids = {c["name"]: int(c["id"]) for c in w.taxonomy.classes}
         flags = {f["name"]: int(f["bit"]) for f in w.taxonomy.flags}
         legend = []
@@ -547,7 +543,7 @@ class LabelsController(QObject):
         vectors = [dict(info, map_xy=np.round(uv, 4).tolist()) for info, uv in zip(job["vectors"], res["vectors_uv"])]
         return {
             "schema": LABEL_MAP_SCHEMA,
-            "source": {"file": Path(src.get("path", "")).name, "sha256": src.get("sha256"), "n_valid": w.project.n},
+            "source": source_doc(w.project),
             "offset": [float(v) for v in w.project.offset],
             "plane": job["frame"].to_json(),
             "transform": res["transform"],

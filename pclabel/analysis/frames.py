@@ -1,4 +1,4 @@
-"""Height frames: the axis heights are measured along (SPEC §3, "flatten from selection").
+"""Height frames: the axis heights are measured along.
 
 A frame is a plane: ``h(p) = (p - origin) . normal``. The scan frame uses z. A plane frame comes from a robust plane
 fit to selected points (least squares, then drop residuals beyond ``trim_mad`` x MAD and refit, ``iterations``
@@ -117,7 +117,7 @@ def frame_from_points(points_world: np.ndarray, name: str, params: PlaneFitParam
         "along_azimuth_deg": float(np.degrees(np.arctan2(a[1], a[0]))),
         "grade_percent": slope_percent(n, a),
         "crossfall_percent": slope_percent(n, across),
-        "suggested_min_period_m": 4.0 * f["rms"],  # below about 4 sigma a wrap shows mostly noise (SPEC §2.1)
+        "suggested_min_period_m": 4.0 * f["rms"],  # below about 4 sigma a wrap shows mostly noise
     }
     tilt, rms = report["tilt_deg"], report["rms_m"]
     if tilt > GROUND_TILT_DEG or rms > GROUND_RMS_M:

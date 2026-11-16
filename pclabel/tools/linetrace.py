@@ -27,6 +27,8 @@ from dataclasses import asdict, dataclass, replace
 
 import numpy as np
 
+from pclabel.analysis.geometry import direction_axes
+from pclabel.tools.tracing import drive
 from pclabel.tools.volume import VolumeParams, select_volume
 
 KINDS = ("solid", "dashed")
@@ -42,6 +44,7 @@ class LineTraceParams:
     threshold: float | None = None  # intensity (0..1) at or above which a point is paint; None: from the start
     road_from: float = 0.30  # m across from the click: where the road's intensity is sampled for the threshold
     road_to: float = 0.60
+    start_length: float = 0.40  # m along the line: the box at the start that the threshold is taken from
     min_points: int = 5
     min_contrast: float = 3.0  # the paint's median must be this many road MADs (and at least 0.01) above the road's
     stretch: float = 2.0  # m: a solid line's gaps up to this are bridged (and recorded)
@@ -49,17 +52,6 @@ class LineTraceParams:
     dash_join: float = 1.0  # m: a dashed line's shorter gaps are inside a dash (sparse or worn paint), bridged
     max_turn: float = 20.0  # degrees per step
     max_length: float = 300.0  # m
-
-
-def _axes(axis, direction):
-    n = np.asarray(axis, np.float64)
-    n /= np.linalg.norm(n)
-    d = np.asarray(direction, np.float64)
-    d = d - np.dot(d, n) * n
-    if np.linalg.norm(d) < 1e-9:
-        raise ValueError("the two points are on top of each other (seen along the height axis)")
-    d /= np.linalg.norm(d)
-    return n, d, np.cross(n, d)
 
 
 def _box(xyz, tiles, centre, n, d, length, width, band, filters):
@@ -71,9 +63,9 @@ def _box(xyz, tiles, centre, n, d, length, width, band, filters):
 
 def start_threshold(xyz, intensity, tiles, start, axis, direction, p: LineTraceParams, filters=None) -> dict:
     """The paint's and the road's intensity at the start, and the threshold halfway between them."""
-    n, d, _ = _axes(axis, direction)
+    n, d, _ = direction_axes(axis, direction)
     c = np.asarray(start, np.float64)
-    idx, u, v, _ = _box(xyz, tiles, c, n, d, 0.4, 2 * p.road_to, p.band, filters)
+    idx, u, v, _ = _box(xyz, tiles, c, n, d, p.start_length, 2 * p.road_to, p.band, filters)
     i = np.asarray(intensity[idx], np.float64) / 65535.0
     paint = np.abs(v) <= p.line_width / 2
     sides = [(v >= p.road_from) & (v <= p.road_to), (v <= -p.road_from) & (v >= -p.road_to)]
@@ -94,7 +86,7 @@ def trace(xyz, intensity, tiles, start, toward, axis, p: LineTraceParams = LineT
     with paint ({centre, u_lo, u_hi, points, piece, bridged}); returns {"stopped", "threshold"}."""
     if p.kind not in KINDS:
         raise ValueError(f"kind must be one of {KINDS}")
-    n, d, _ = _axes(axis, np.asarray(toward, np.float64) - np.asarray(start, np.float64))
+    n, d, _ = direction_axes(axis, np.asarray(toward, np.float64) - np.asarray(start, np.float64))
     thr = p.threshold
     if thr is None:
         thr = start_threshold(xyz, intensity, tiles, start, n, d, p, filters)["threshold"]
@@ -158,16 +150,8 @@ def run_trace(xyz, intensity, tiles, start, toward, axis, p: LineTraceParams = L
               progress=None) -> dict:  # fmt: skip
     """The whole trace as pieces (one for a solid line, one per dash for a dashed one): {pieces: [(m, 3) local],
     bridged: [m of each bridged gap], sections, stopped, threshold, params}."""
-    secs, end = [], {"stopped": "", "threshold": p.threshold}
-    gen = trace(xyz, intensity, tiles, start, toward, axis, p, filters)
-    try:
-        while True:
-            secs.append(next(gen))
-            if progress is not None and progress(secs) is False:
-                end = {"stopped": "stopped by the labeller", "threshold": p.threshold}
-                break
-    except StopIteration as e:
-        end = e.value
+    secs, end = drive(trace(xyz, intensity, tiles, start, toward, axis, p, filters), progress,
+                      {"stopped": "stopped by the labeller", "threshold": p.threshold})
     pieces = []
     for k in sorted({s["piece"] for s in secs}):
         ss = [s for s in secs if s["piece"] == k]

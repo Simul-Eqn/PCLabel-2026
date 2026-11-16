@@ -1,7 +1,7 @@
-"""Identify trees by a band of their trunk (``tools.trees``; R-015, proposed), and poles the same way (R-017,
-proposed 2026-11-04): the "Tree or pole" box in the 3D select panel.
+"""Identify trees by a band of their trunk (``tools.trees``), and poles the same way (docs/LABELLING_STANDARD.md):
+the "Tree or pole" box in the 3D select panel.
 
-- Choose what it is (tree, lamp_post, traffic_light_pole, other_pole, or just pole), Shift+U (Select ▸ "Tree or
+- Choose what it is (tree, or a kind of pole: lta_lamp_post, lamp_post, traffic_light_pole, other_pole, or just pole), Shift+U (Select ▸ "Tree or
   pole"), then click the ground at the foot of the trunk or pole: its height along the height axis is the object's
   ground. A cylinder 1.00-1.10 m above it (the box's band, adjustable) is placed there and 3D select takes over: move
   it onto the trunk or pole with W A S D (or click it: in this mode a click only slides the cylinder across the axis,
@@ -26,11 +26,9 @@ from pclabel.store.annotations import Marker, PointSet
 from pclabel.tools.trees import TreeParams, fit_trunk, next_name
 from pclabel.ui.docks import EXTRA_DECIMALS, _spin
 
-LABEL = "tree_trunk"  # the label a saved tree's band gets (a taxonomy name, not an id)
 TREE = "tree"  # what a saved object is by default; its marker's label
 TREES = "trees"  # the default directory saved trees go into (made at the top level when missing)
 POLES = "poles"  # ... and poles
-POLE = "pole"  # the taxonomy class whose kinds the box offers besides trees
 NEW = "new"  # the combo's data for that directory when it does not exist yet
 POSITION = "position"  # the name of an object's marker
 
@@ -114,8 +112,9 @@ class TreeController(QObject):
         """Tree, then the pole classes (pole and its kinds), as the taxonomy has them."""
         tax = getattr(self.w, "taxonomy", None)
         names = [TREE]
-        if tax is not None and tax.by_name(POLE) is not None:
-            names += [POLE] + tax.descendants(POLE)
+        pole = tax.tool_label("pole_kinds") if tax is not None else None
+        if pole and tax.by_name(pole) is not None:
+            names += [pole] + tax.descendants(pole)
         keep = self.what.currentText()
         self.what.clear()
         self.what.addItems(names)
@@ -241,7 +240,7 @@ class TreeController(QObject):
         known = {c["name"] for c in w.taxonomy.classes}
         mk = m.add(Marker(np.asarray(record["position"], np.float64), _marker_source(record, fit)), POSITION)
         mk.label = what if what in known else ""
-        band_label = LABEL if what == TREE else what
+        band_label = w.taxonomy.tool_label("tree_band") if what == TREE else what
         part = "trunk" if what == TREE else "pole"
         ps = m.add(PointSet(sel.copy(), [dict(op) for op in w.selection_ops] + [record]), f"{part} {b0:.2f} to {b1:.2f} m")
         if band_label in known:

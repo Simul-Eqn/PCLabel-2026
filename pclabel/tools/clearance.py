@@ -23,6 +23,8 @@ import numpy as np
 from scipy import ndimage
 from scipy.spatial import cKDTree
 
+from pclabel.analysis import curves
+
 SIDES = ("both", "left", "right")
 
 
@@ -37,31 +39,6 @@ class ClearanceParams:
     spacing: float = 0.1  # m: the line is sampled this finely to find each point's nearest place on it
 
 
-def _sample(line, spacing):
-    """The polyline sampled every ``spacing``, with the arc length and the unit direction at each sample."""
-    v = np.asarray(line, np.float64)
-    seg = np.diff(v, axis=0)
-    L = np.linalg.norm(seg, axis=1)
-    keep = L > 1e-9
-    v = np.vstack([v[:1], v[1:][keep]])
-    seg, L = seg[keep], L[keep]
-    if not len(seg):
-        raise ValueError("the reference line has no length")
-    pts, dirs, s = [], [], []
-    acc = 0.0
-    for a, d, ln in zip(v[:-1], seg, L):
-        k = max(1, int(np.ceil(ln / spacing)))
-        t = np.arange(k) / k
-        pts.append(a + t[:, None] * d)
-        dirs.append(np.repeat((d / ln)[None], k, 0))
-        s.append(acc + t * ln)
-        acc += ln
-    pts.append(v[-1:])
-    dirs.append((seg[-1] / L[-1])[None])
-    s.append(np.array([acc]))
-    return np.vstack(pts), np.vstack(dirs), np.concatenate(s), acc
-
-
 def check(xyz, tiles, line, axis, p: ClearanceParams = ClearanceParams(), candidates=None, progress=None) -> dict:
     """Points of ``xyz`` (local) inside the envelope along ``line`` (local (m, 3)). ``candidates``: sorted store
     indices to check (e.g. the vegetation point sets), or None for every point near the line (by tile).
@@ -70,7 +47,7 @@ def check(xyz, tiles, line, axis, p: ClearanceParams = ClearanceParams(), candid
         raise ValueError(f"side must be one of {SIDES}")
     n = np.asarray(axis, np.float64)
     n /= np.linalg.norm(n)
-    samp, dirs, arc, length = _sample(line, p.spacing)
+    samp, dirs, arc, length = curves.sample_along(line, p.spacing)
     flat = samp - np.outer(samp @ n, n)  # the line seen along the height axis
     tree = cKDTree(flat)
     reach = p.half_width + p.spacing

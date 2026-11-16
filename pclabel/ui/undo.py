@@ -1,4 +1,4 @@
-"""Undo and redo for the session (SPEC §4 "History"): the selection, the fitted planes and the annotations.
+"""Undo and redo for the session: the selection, the fitted planes and the annotations.
 
 Before a change, the app records what it is about to change: a *checkpoint* holds the kind of state ("selection",
 "frames", "annotations"), a label for the menu and a snapshot of that state. Undo takes the newest checkpoint,
@@ -7,7 +7,7 @@ change clears the redo stack.
 
 Snapshots share what is never changed in place (selection index arrays, point-set indices), so most are small; the
 stack keeps at most ``limit`` entries and ``max_bytes`` of such arrays, dropping the oldest. The history lasts for
-the session. Point labels (M3) are undone through the journal instead.
+the session; labels live on annotation items, so undoing an item undoes its labels.
 """
 
 from __future__ import annotations

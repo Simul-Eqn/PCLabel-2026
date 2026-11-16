@@ -23,6 +23,32 @@ DEFAULT_PATH = CONFIG_DIR / "taxonomy.yaml"
 SCHEMAS = ("pclabel.taxonomy/1", "pclabel.taxonomy/2")
 ONLY = ("line", "marker")  # the item kinds a class can be kept to
 LINE_KINDS = ("segment", "curve", "polyline")  # items that are lines
+# the labels tools give what they make, unless the taxonomy file's ``tools`` section says otherwise ("" = no label)
+TOOL_LABELS = {
+    "curb_trace_lip": "curb",  # the curb tracer's line along the kerb's top edge: the standard's curb line
+    "curb_trace_toe": "",  # its line along the foot of the kerb: not in the standard, a helper line if saved
+    "marking_trace": "road_line",
+    "tree_band": "tree_trunk",  # the tree tool's band of a trunk (a pole's band takes the pole's class)
+    "pole_kinds": "pole",  # the tree tool offers this class and its kinds besides trees
+    "cover": "cover",
+    "clearance": ["vegetation", "tree"],  # the clearance check's "vegetation" points: these classes and their kinds
+}
+NOT_FOR_NEW = {"import": "for imported labels only", "retired": "retired: not in the labelling standard"}
+
+
+def ancestors_in(parents: dict, name: str) -> list:
+    """Walk ``parents`` ({class: its parent}) up from ``name``: the parent, its parent, ... (nearest first)."""
+    out = []
+    while name in parents:
+        name = parents[name]
+        out.append(name)
+    return out
+
+
+def hex_rgb(hex_color: str) -> tuple:
+    """``#rrggbb`` as (r, g, b), 0..255: the one colour parser (taxonomy colours, label colours, exports)."""
+    h = hex_color.lstrip("#")
+    return tuple(int(h[i : i + 2], 16) for i in (0, 2, 4))
 
 
 def fits(only, kind: str) -> bool:
@@ -48,6 +74,11 @@ class Taxonomy:
     version: str
     classes: tuple[dict, ...]
     flags: tuple[dict, ...]
+    tools: dict = None  # the file's ``tools`` section: {tool key: label}, over TOOL_LABELS
+
+    def tool_label(self, key: str):
+        """The label a tool gives what it makes (``TOOL_LABELS`` keys), from the file's ``tools`` section if set."""
+        return (self.tools or {}).get(key, TOOL_LABELS[key])
 
     def class_id(self, name: str) -> int:
         for c in self.classes:
@@ -76,11 +107,7 @@ class Taxonomy:
 
     def ancestors(self, name: str) -> list:
         """The class's parent, its parent's parent, ... (nearest first); [] for a top-level class or another label."""
-        p, out = self.parents(), []
-        while name in p:
-            name = p[name]
-            out.append(name)
-        return out
+        return ancestors_in(self.parents(), name)
 
     def path_of(self, name: str) -> list:
         """The class with its ancestors, from the top: ``["ground", "road", "road_line"]``."""
@@ -110,14 +137,15 @@ class Taxonomy:
         """Whether this label can go on an item of this kind (labels that are not classes go anywhere)."""
         return fits(self.only(name), kind)
 
-    def tree_order(self, enabled_only: bool = False) -> list:
+    def tree_order(self, enabled_only: bool = False, also: tuple = ()) -> list:
         """[(class dict, depth)] depth first: each class right after its parent (unassessed left out). A disabled
-        class is left out with ``enabled_only``, and so is everything below it."""
+        class is left out with ``enabled_only``, and so is everything below it, unless its ``status`` is in
+        ``also`` (e.g. ``("import",)`` for the DXF import's label boxes)."""
         out = []
 
         def add(name, depth):
             c = self.by_name(name)
-            if enabled_only and not c.get("enabled", True):
+            if enabled_only and not c.get("enabled", True) and c.get("status") not in also:
                 return
             out.append((c, depth))
             for k in self.children(name):
@@ -127,16 +155,18 @@ class Taxonomy:
             add(k, 0)
         return out
 
-    def subset_of(self) -> dict:
-        """Kept for callers of schema 1: the same as ``parents``."""
-        return self.parents()
+    def not_for_new_labels(self, name: str) -> str | None:
+        """Why a class should not be given to new labels ("for imported labels only", "retired"), or None."""
+        c = self.by_name(name)
+        if c is None:
+            return None
+        return NOT_FOR_NEW.get(c.get("status"))
 
     def color_table(self) -> "list[tuple[int, int, int]]":
         """256 RGB entries indexed by class id (grey for unused ids)."""
         table = [(128, 128, 128)] * 256
         for c in self.classes:
-            h = c["color"].lstrip("#")
-            table[int(c["id"])] = (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+            table[int(c["id"])] = hex_rgb(c["color"])
         return table
 
 
@@ -175,6 +205,9 @@ def load_taxonomy(path: str | Path | None = None) -> Taxonomy:
                 raise ValueError(f"{path}: the parents of {child} go round in a circle")
             seen.add(p)
             p = parent[p]
+    unknown = sorted(set(doc.get("tools") or {}) - set(TOOL_LABELS))
+    if unknown:
+        raise ValueError(f"{path}: unknown tools {unknown} (known: {sorted(TOOL_LABELS)})")
     for c in classes:
         o = c.get("only")
         if o is not None and not all(k in ONLY for k in (o if isinstance(o, list) else [o])):
@@ -185,4 +218,5 @@ def load_taxonomy(path: str | Path | None = None) -> Taxonomy:
         version=str(doc.get("version", "")),
         classes=classes,
         flags=tuple(doc.get("flags", ())),
+        tools=dict(doc.get("tools") or {}),
     )

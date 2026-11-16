@@ -23,7 +23,7 @@ from dataclasses import asdict, dataclass
 import numba as nb
 import numpy as np
 
-from pclabel.tools.volume import frame_axes
+from pclabel.analysis.geometry import disk, frame_axes
 
 MIN_DENSITY = 2000.0  # points per m² (points about 2.2 cm apart); see the module docstring
 
@@ -65,11 +65,6 @@ def _cells(x, y, x0, y0, cell, nx, col):
         col[k] = np.int32(int((y[k] - y0) / cell) * nx + int((x[k] - x0) / cell))
 
 
-def _disk(r: int) -> np.ndarray:
-    yy, xx = np.mgrid[-r : r + 1, -r : r + 1]
-    return ((xx**2 + yy**2) <= r * r).astype(float)
-
-
 def density_grid(xyz, indices, axis, along, origin, cell: float = 0.25, radius: float = 0.5) -> DensityGrid:
     """Count a set's points (sorted store indices) in columns across the height axis ``axis`` (``along`` and
     ``origin``, local, fix the grid)."""
@@ -91,9 +86,9 @@ def density_grid(xyz, indices, axis, along, origin, cell: float = 0.25, radius: 
     _cells(x, y, x0, y0, cell, nx, col)
     count = np.bincount(col, minlength=nx * ny).reshape(ny, nx)
     occ = count > 0
-    disk = _disk(max(1, int(round(radius / cell))))
-    pts = ndimage.convolve(count.astype(float), disk, mode="constant")
-    cols = ndimage.convolve(occ.astype(float), disk, mode="constant")
+    kernel = disk(max(1, int(round(radius / cell)))).astype(float)
+    pts = ndimage.convolve(count.astype(float), kernel, mode="constant")
+    cols = ndimage.convolve(occ.astype(float), kernel, mode="constant")
     density = np.where(occ, pts / np.maximum(cols, 1) / cell**2, np.nan)
     return DensityGrid(idx, col, count, density, x0, y0, cell, radius)
 

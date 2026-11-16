@@ -20,10 +20,12 @@ labeller's corrections to it are evidence for tuning them. Heights are along the
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, fields, replace
 
 import numpy as np
 
+from pclabel.analysis.geometry import direction_axes
+from pclabel.tools.tracing import drive
 from pclabel.tools.volume import VolumeParams, select_volume
 
 SIDES = ("auto", "left", "right")
@@ -51,32 +53,56 @@ class CurbTraceParams:
     low_percentile: float = 20.0  # a bin's surface height: this percentile of its points' heights (below clutter)
     follow: str = "toe"  # "toe": step along the toe (both edges measured); "lip": along the kerb's top edge only,
     # which needs no visible road beside the kerb (a toe hidden from the scanner, a gutter full of leaves)
+    box_below: float = 0.5  # m: a section's box reaches this far below its centre (the road beside the kerb)
+    box_above: float = 0.8  # m: and at least this far above it (more for a high curb_height: 3 x it + 0.3)
 
 
-def _axes(axis, direction):
-    n = np.asarray(axis, np.float64)
-    n /= np.linalg.norm(n)
-    d = np.asarray(direction, np.float64)
-    d = d - np.dot(d, n) * n
-    nd = np.linalg.norm(d)
-    if nd < 1e-9:
-        raise ValueError("the two points are on top of each other (seen along the height axis)")
-    d /= nd
-    return n, d, np.cross(n, d)  # left of the direction
+@dataclass
+class Section:
+    """One cross-section's kerb step (local coordinates). ``a_toe``, ``a_lip`` and ``h_lip`` are across and up from
+    the section's centre; ``profile`` is (bin centres across, each bin's surface height); ``across`` points from the
+    road towards the kerb."""
+
+    toe: np.ndarray
+    lip: np.ndarray
+    height: float
+    face: float
+    seen: bool  # every bin between toe and lip has points
+    top_seen: bool  # False: only the face was scanned, and the lip is the top of the face seen
+    road: float
+    points: int
+    a_toe: float
+    a_lip: float
+    h_lip: float
+    across: np.ndarray
+    profile: tuple
+    piece: int = 0  # set by the trace: the piece of line it belongs to
+
+    def to_dict(self) -> dict:
+        return {f.name: getattr(self, f.name) for f in fields(self)}
 
 
-def section(xyz, tiles, centre, axis, direction, p: CurbTraceParams, filters=None) -> dict | None:
-    """One cross-section at ``centre`` (local, on the road beside the kerb): the toe and the lip, or None (with a
-    reason in ``why``) when there is no kerb step there."""
-    n, d, left = _axes(axis, direction)
+@dataclass
+class NoStep:
+    """A cross-section with no kerb step: why not, and the most the surface rose (if anything was seen)."""
+
+    why: str
+    rise: float | None = None
+
+
+def section(xyz, tiles, centre, axis, direction, p: CurbTraceParams, filters=None) -> Section | NoStep:
+    """One cross-section at ``centre`` (local, on the road beside the kerb): the toe and the lip, or why there is no
+    kerb step there."""
+    n, d, left = direction_axes(axis, direction)
     s = -left if p.side == "right" else left
     width = p.search + p.behind
     base = np.asarray(centre, np.float64) + s * (p.search - p.behind) / 2  # the box is centred on its base
-    vp = VolumeParams(shape="box", length=p.step, width=width, bottom=-0.5, top=max(0.8, 3 * p.curb_height + 0.3))
+    vp = VolumeParams(shape="box", length=p.step, width=width, bottom=-p.box_below,
+                      top=max(p.box_above, 3 * p.curb_height + 0.3))
     # the box's v axis is cross(n, d) = left; its centre is shifted towards the kerb side, so it is symmetric
     idx = select_volume(xyz, tiles, base, n, d, vp, filters)
     if idx.size < p.min_points * 4:
-        return {"why": "no points"}
+        return NoStep("no points")
     q = np.asarray(xyz[idx], np.float64) - np.asarray(centre, np.float64)
     a = q @ s  # across, towards the kerb
     h = q @ n
@@ -97,7 +123,7 @@ def section(xyz, tiles, centre, axis, direction, p: CurbTraceParams, filters=Non
     lip_only = p.follow == "lip"
     if near.sum() < 2:
         if not lip_only or np.all(np.isnan(surf)):
-            return {"why": "no road beside the start"}
+            return NoStep("no road beside the start")
         road = float(np.nanmin(surf))  # following the top edge: the lowest surface seen will do as the road
     else:
         road = float(np.median(surf[near]))
@@ -125,43 +151,41 @@ def section(xyz, tiles, centre, axis, direction, p: CurbTraceParams, filters=Non
             top_seen = False
         if last is None:
             if not lip_only:
-                return {"why": "no road before the step"}
+                return NoStep("no road before the step")
             before = occ_all[centres[occ_all] < centres[j]]
             if not before.size:
-                return {"why": "no road before the step"}
+                return NoStep("no road before the step")
             last = int(before[np.argmin(surf[before])])  # the lowest surface before the rise stands for the toe
         t = last
         a_toe = centres[t] + p.bin / 2
         a_lip = centres[j] - p.bin / 2 if top_seen else centres[j] + p.bin / 2
         if a_lip - a_toe > p.max_face and not lip_only:
-            return {"why": f"the face is {a_lip - a_toe:.2f} m wide (more than {p.max_face:.2f} m)"}
+            return NoStep(f"the face is {a_lip - a_toe:.2f} m wide (more than {p.max_face:.2f} m)")
         seen = bool(np.all(np.isin(np.arange(t + 1, j), occ_all)))  # every bin between toe and lip has points
         h_toe = float(surf[t])
         h_lip = float(np.median(surf[top[:3]])) if top_seen else float(np.nanmax(high[t + 1 : j + 1]))
         c = np.asarray(centre, np.float64)
-        return {"toe": c + a_toe * s + h_toe * n, "lip": c + a_lip * s + h_lip * n, "height": h_lip - h_toe,
-                "face": a_lip - a_toe, "seen": seen, "top_seen": top_seen, "road": road, "points": int(idx.size),
-                "a_toe": a_toe, "a_lip": a_lip, "h_lip": h_lip, "across": s, "profile": (centres, surf)}  # fmt: skip
-        # (a_*, h_lip and the profile are across and up from the section's centre)
+        return Section(c + a_toe * s + h_toe * n, c + a_lip * s + h_lip * n, h_lip - h_toe, a_lip - a_toe, seen,
+                       top_seen, road, int(idx.size), a_toe, a_lip, h_lip, s, (centres, surf))
     rise = float(np.nanmax(surf[occ]) - road) if len(occ) else 0.0
-    return {"why": f"no step of {p.curb_height:.2f} m within {p.search:.2f} m", "rise": rise}
+    return NoStep(f"no step of {p.curb_height:.2f} m within {p.search:.2f} m", rise)
 
 
 def find_start(xyz, tiles, start, axis, direction, p: CurbTraceParams, filters=None) -> dict:
     """Where and on which side the kerb is, from a start click: on the road beside the kerb (either side), or on the
     kerb's top (then the start moves onto the road below, ``moved``). Returns {side, start (local), section, moved},
     or {why} saying what was seen (the biggest rise on each side)."""
-    n, d, left = _axes(axis, direction)
+    n, d, left = direction_axes(axis, direction)
     c = np.asarray(start, np.float64)
     sides = SIDES[1:] if p.side == "auto" else (p.side,)
     found, rises = [], {}
     for side in sides:  # the start on the road
         sec = section(xyz, tiles, c, n, d, replace(p, side=side), filters)
-        if "why" in sec:
-            rises[side] = sec.get("rise")
+        if isinstance(sec, NoStep):
+            rises[side] = sec.rise
         else:
             s = -left if side == "right" else left
-            found.append((float(np.dot(sec["toe"] - c, s)), side, c, sec, False))
+            found.append((float(np.dot(sec.toe - c, s)), side, c, sec, False))
     if not found and p.side == "auto":  # the start on the kerb's top: the road is down one side of it
         for side in SIDES[1:]:
             s = -left if side == "right" else left
@@ -169,7 +193,7 @@ def find_start(xyz, tiles, start, axis, direction, p: CurbTraceParams, filters=N
                 c2 = c + off * s - p.curb_height * 1.5 * n  # down on the road, if it is there
                 other = "left" if side == "right" else "right"  # the kerb is back towards the click
                 sec = section(xyz, tiles, c2, n, d, replace(p, side=other), filters)
-                if "why" not in sec and -0.05 <= float(np.dot(sec["lip"] - c2, -s)) <= off + 0.05:  # back at the click
+                if isinstance(sec, Section) and -0.05 <= float(np.dot(sec.lip - c2, -s)) <= off + 0.05:  # back at the click
                     found.append((off, other, c2, sec, True))
                     break
             if found:
@@ -181,7 +205,7 @@ def find_start(xyz, tiles, start, axis, direction, p: CurbTraceParams, filters=N
     _, side, c2, sec, moved = min(found, key=lambda f: abs(f[0]))
     if moved:  # on the road 0.3 m from the toe found, at its height, as if clicked there
         s = -left if side == "right" else left
-        c2 = sec["toe"] - 0.3 * s
+        c2 = sec.toe - 0.3 * s
     return {"side": side, "start": c2, "section": sec, "moved": moved}
 
 
@@ -194,7 +218,7 @@ def trace(xyz, tiles, start, toward, axis, p: CurbTraceParams = CurbTraceParams(
     if p.follow not in FOLLOW:
         raise ValueError(f"follow must be one of {FOLLOW}")
     key = p.follow  # the edge the trace steps along
-    n, d, _ = _axes(axis, np.asarray(toward, np.float64) - np.asarray(start, np.float64))
+    n, d, _ = direction_axes(axis, np.asarray(toward, np.float64) - np.asarray(start, np.float64))
 
     def signed(a, b):
         """The angle (degrees) from direction a to b about the height axis (+: to the left)."""
@@ -214,9 +238,9 @@ def trace(xyz, tiles, start, toward, axis, p: CurbTraceParams = CurbTraceParams(
     halved = False  # the section in hand is a retry at half a step (a tight curve cuts across in a full one)
     while True:
         sec = section(xyz, tiles, c, n, ahead, p, filters)
-        bad = "why" in sec
+        bad = isinstance(sec, NoStep)
         if not bad and run and not missed:
-            st = sec[key] - run[-1]
+            st = getattr(sec, key) - run[-1]
             st -= np.dot(st, n) * n
             bad = np.linalg.norm(st) > 1e-6 and abs(signed(ahead, st / np.linalg.norm(st))) > p.max_turn
         if bad and run and not missed and not halved:  # once: half a step on, turned on at the curve's rate
@@ -228,13 +252,13 @@ def trace(xyz, tiles, start, toward, axis, p: CurbTraceParams = CurbTraceParams(
             c = c - np.dot(c - run[-1], n) * n
             continue
         halved = False
-        if "why" in sec:
-            missed.append(sec["why"])
+        if isinstance(sec, NoStep):
+            missed.append(sec.why)
             if first_toe is None or len(missed) * p.step > p.max_gap + 1e-9:
                 return {"stopped": missed[0], "closed": False, "side": p.side}
             c = c + p.step * ahead  # on over the gap, along the curve
             continue
-        toe = sec[key]
+        toe = getattr(sec, key)
         if run and not missed:  # an edge point that turns the line much more than its curve does is an outlier
             st = toe - run[-1]  # (clutter, a drain): a gap
             st -= np.dot(st, n) * n
@@ -248,14 +272,14 @@ def trace(xyz, tiles, start, toward, axis, p: CurbTraceParams = CurbTraceParams(
             piece += 1
             missed = []
             run = []
-        sec["piece"] = piece
+        sec.piece = piece
         if run:
             length += float(np.linalg.norm(toe - run[-1]))
         run.append(toe)
         n_steps += 1
         if first_toe is None:
             first_toe = toe
-        yield sec
+        yield sec.to_dict()
         # the direction from a chord over the last 3 steps, and how fast it turns from the 3 before (noise in single
         # steps averages out; a tight curve is followed by turning on at that rate)
         if len(run) >= 4:
@@ -290,16 +314,8 @@ def run_trace(xyz, tiles, start, toward, axis, p: CurbTraceParams = CurbTracePar
     between pieces, over gaps), stopped, closed, params}. ``progress(sections so far)`` may return False to stop
     (then ``stopped`` says so). ``top_seen`` (k,): False where the kerb's top was not seen (the lip is then the top
     of the face seen)."""
-    secs, end = [], {"stopped": "", "closed": False}
-    gen = trace(xyz, tiles, start, toward, axis, p, filters)
-    try:
-        while True:
-            secs.append(next(gen))
-            if progress is not None and progress(secs) is False:
-                end = {"stopped": "stopped by the labeller", "closed": False, "side": None}
-                break
-    except StopIteration as e:
-        end = e.value
+    secs, end = drive(trace(xyz, tiles, start, toward, axis, p, filters), progress,
+                      {"stopped": "stopped by the labeller", "closed": False, "side": None})
     return {
         "toe": np.array([s["toe"] for s in secs]).reshape(-1, 3),
         "lip": np.array([s["lip"] for s in secs]).reshape(-1, 3),

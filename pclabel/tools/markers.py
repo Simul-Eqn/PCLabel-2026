@@ -17,8 +17,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from pclabel.analysis.geometry import frame_axes
 from pclabel.tools.trees import fit_trunk
-from pclabel.tools.volume import frame_axes
+from pclabel.tools.volume import VolumeParams, select_volume
 
 ACROSS = {"mean": "the mean of the points", "circle": "the centre of a circle fitted to them (poles, trunks)"}
 HEIGHTS = {"mean": "their mean height", "lowest": "their lowest point"}
@@ -44,8 +45,6 @@ def marker_at_click(xyz, tiles, click, axis, params: MarkerParams = MarkerParams
     - along it: the click's height ("mean"), or the lowest point within ``snap_radius + 0.3`` m below the click
       ("lowest": the ground at the foot of what was clicked).
     Returns {"position", "record"}."""
-    from pclabel.tools.volume import VolumeParams, select_volume
-
     n, _, _ = frame_axes(axis, along)
     c = np.asarray(click, np.float64)
     pos = c.copy()

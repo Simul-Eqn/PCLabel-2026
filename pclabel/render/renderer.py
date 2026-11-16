@@ -754,8 +754,3 @@ class PointRenderer:
         """The last frame's depth buffer, (h, w) float32 window depth, row 0 at the top (for selection)."""
         (w, h), fbo, _, _ = self._target
         return np.frombuffer(fbo.read(components=1, attachment=-1, dtype="f4"), np.float32).reshape(h, w)[::-1].copy()
-
-    def read_color(self) -> np.ndarray:
-        """The last frame's point colours (before EDL), (h, w, 3) uint8, row 0 at the top."""
-        (w, h), fbo, _, _ = self._target
-        return np.frombuffer(fbo.read(components=3), np.uint8).reshape(h, w, 3)[::-1]

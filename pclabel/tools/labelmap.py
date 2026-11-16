@@ -20,7 +20,7 @@ from dataclasses import asdict, dataclass
 import numba as nb
 import numpy as np
 
-from pclabel.tools.volume import frame_axes
+from pclabel.analysis.geometry import frame_axes
 
 LABEL_MAP_SCHEMA = "pclabel.label-map/1"
 CONTEXT = 255

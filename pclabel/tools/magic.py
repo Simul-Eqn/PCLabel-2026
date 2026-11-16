@@ -1,5 +1,5 @@
 """Magic select (intensity): from a click on a road marking, select the connected ground area of similar intensity,
-like the magic wand of an image editor, on an intensity picture of the ground (SPEC §11).
+like the magic wand of an image editor, on an intensity picture of the ground.
 
 1. Picture. The ground surface comes from cells as in ground grow (``ground_cell``, 10 cm: the points within
    ``surface_band`` of a cell's 5th percentile height, their median height). Every point within ``surface_tol`` of
@@ -39,6 +39,7 @@ from dataclasses import asdict, dataclass
 import numba as nb
 import numpy as np
 
+from pclabel.analysis.geometry import disk
 from pclabel.tools import sets
 from pclabel.tools.ground import (
     R_GAP,
@@ -232,12 +233,12 @@ def intensity_image(xyz, intensity, tiles, centre, params: MagicSelectParams, cl
 
 def _disc_offsets(r: float):
     """Offsets within r pixels (not the centre), nearest first; ties in a fixed order."""
-    k = int(np.floor(r))
-    dy, dx = np.mgrid[-k : k + 1, -k : k + 1]
-    dy, dx = dy.ravel(), dx.ravel()
+    m = disk(r)
+    k = m.shape[0] // 2
+    m[k, k] = False
+    dy, dx = np.nonzero(m)
+    dy, dx = dy - k, dx - k
     d2 = dy**2 + dx**2
-    keep = (d2 > 0) & (d2 <= r * r + 1e-9)
-    dy, dx, d2 = dy[keep], dx[keep], d2[keep]
     o = np.lexsort((dx, dy, d2))
     return dy[o].astype(np.int64), dx[o].astype(np.int64)
 

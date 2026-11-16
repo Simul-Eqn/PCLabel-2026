@@ -13,6 +13,8 @@ from dataclasses import dataclass
 import numba as nb
 import numpy as np
 
+from pclabel.analysis.geometry import boxes_visible, frustum_planes
+
 
 @nb.njit(nogil=True, cache=True)
 def rasterize_polygon(poly, width, height):
@@ -212,7 +214,7 @@ def select_visible(
     filters: SelectFilters | None = None,
     dilate_px: int = 2,
 ) -> np.ndarray:
-    """Store indices (sorted, int64) of every point inside a screen polygon (SPEC §4), at full resolution.
+    """Store indices (sorted, int64) of every point inside a screen polygon, at full resolution.
 
     Only tiles whose projected box meets the polygon's bounding box are scanned. With ``depth`` only points not
     hidden behind the drawn surface are kept; the depth buffer is min-filtered over ``dilate_px`` pixels first,
@@ -233,8 +235,6 @@ def select_visible(
     x0, y0, x1, y1, _ = project_boxes(lo, hi, mvp, (w, h))
     bx0, by0 = poly.min(0)
     bx1, by1 = poly.max(0)
-    from pclabel.render.camera import boxes_visible, frustum_planes  # numpy only (no GL)
-
     cand = np.flatnonzero(boxes_visible(frustum_planes(mvp), lo, hi) & (x1 >= bx0) & (x0 <= bx1) & (y1 >= by0)
                           & (y0 <= by1))  # fmt: skip
     if filters is not None:

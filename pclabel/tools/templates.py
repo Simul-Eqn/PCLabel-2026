@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass
 
 import numpy as np
 
-from pclabel.tools.volume import frame_axes
+from pclabel.analysis.geometry import frame_axes
 
 SHAPES = ("circle", "rectangle")
 

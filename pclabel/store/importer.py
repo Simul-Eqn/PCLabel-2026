@@ -32,6 +32,7 @@ import numpy as np
 from pclabel import __version__
 from pclabel.io.e57 import default_offset, iter_chunks, read_info
 from pclabel.store.tiles import TilingParams, build_tiles
+from pclabel.store.util import write_json_atomic
 from pclabel.sysinfo import memory_gb
 
 SCHEMA = "pclabel.project/1"
@@ -343,9 +344,3 @@ def _import_into(src: Path, out: Path, name: str, params: ImportParams, job: _Jo
         "scan_metadata": {k: ("static" if k == "capture" else "") for k in SCAN_METADATA_FIELDS},
     }
     write_json_atomic(out / "project.json", meta)
-
-
-def write_json_atomic(path: Path, obj):
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(obj, indent=2), encoding="utf-8")
-    os.replace(tmp, path)

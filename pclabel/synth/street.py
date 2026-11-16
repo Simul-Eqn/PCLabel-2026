@@ -537,18 +537,6 @@ def scanner_origin(p: StreetParams) -> np.ndarray:
     return np.array([sx, sy, _ground(sx, sy, P)[0] + p.scanner_height])
 
 
-def ground_height(p: StreetParams, x, y) -> tuple[np.ndarray, np.ndarray]:
-    """Ground truth surface height and class name per (x, y) (for tests), vectorised over numpy arrays."""
-    P = _param_vector(p)
-    x = np.asarray(x, dtype=np.float64).ravel()
-    y = np.asarray(y, dtype=np.float64).ravel()
-    z = np.empty(x.size)
-    m = np.empty(x.size, np.int64)
-    for i in range(x.size):
-        z[i], m[i], _ = _ground(x[i], y[i], P)
-    return z, np.array([MATERIALS[k][0] for k in m])
-
-
 def _run(p: StreetParams, step_rad: float):
     P = _param_vector(p)
     J = _object_vector(p, P)

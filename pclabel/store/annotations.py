@@ -1,4 +1,4 @@
-"""Annotations: line segments, curves and point sets, organised in a tree of directories (SPEC §13; format in
+"""Annotations: line segments, curves and point sets, organised in a tree of directories (format in
 ARCHITECTURE "annotations").
 
 - **Items** (segments, curves, point sets, and imported polylines) stand on their own: a new item goes to the top
@@ -31,7 +31,10 @@ import numba as nb
 import numpy as np
 
 from pclabel.analysis import curves
-from pclabel.store.importer import write_json_atomic
+from pclabel.taxonomy import ancestors_in
+from pclabel.tools import sets as sets_
+from pclabel.store.project import source_doc
+from pclabel.store.util import write_json_atomic
 
 SCHEMA = "pclabel.annotations/9"  # 2 added `uncertain` on nodes, 3 keeps it on items only, 4 added `label_colors`,
 # 5 added `labels_exported` (exports by label), 6 added `polyline` items (imported labels), 7 added `marker` items,
@@ -83,7 +86,7 @@ class Segment:
     color: str = PALETTE[0]  # used at the top level; inside a directory the directory's colour applies
     label: str = ""  # empty: the nearest enclosing directory's label
     id: str = field(default_factory=new_id)
-    uncertain: bool = False  # the labeller is unsure of the label here (the taxonomy's `ambiguous` flag)
+    uncertain: bool = False  # the labeller is unsure of the label here (the standard's "uncertain" mark)
     kind = "segment"
 
     def length(self) -> float:
@@ -119,7 +122,7 @@ class Curve:
     label: str = ""
     id: str = field(default_factory=new_id)
     closed: bool = False  # a loop: a last piece joins the last node back to the first
-    uncertain: bool = False  # the labeller is unsure of the label here (the taxonomy's `ambiguous` flag)
+    uncertain: bool = False  # the labeller is unsure of the label here (the standard's "uncertain" mark)
     source: dict = field(default_factory=dict)  # the tool that drew it (a tracer, the join tool), as on polylines
     kind = "curve"
 
@@ -403,7 +406,7 @@ class PointSet:
     color: str = PALETTE[0]
     label: str = ""
     id: str = field(default_factory=new_id)
-    uncertain: bool = False  # the labeller is unsure of the label here (the taxonomy's `ambiguous` flag)
+    uncertain: bool = False  # the labeller is unsure of the label here (the standard's "uncertain" mark)
     kind = "points"
 
     def describe(self) -> str:
@@ -536,8 +539,6 @@ class Annotations:
         """Store indices (sorted, unique) of the points in point sets whose label (own or inherited) is one of
         ``labels``."""
         labels = set(labels)
-        from pclabel.tools import sets as sets_
-
         return sets_.union_all([x.indices for x in self.items() if x.kind == "points"
                                 and self.label_of(x.id)[0] in labels])  # fmt: skip
 
@@ -595,16 +596,12 @@ class Annotations:
 
     def points_of(self, node_id: str) -> np.ndarray:
         """Store indices (sorted) of a point set, or of all the point sets in a directory."""
-        from pclabel.tools import sets as sets_
-
         x = self.node(node_id)
         return sets_.union_all([m.indices for m in self.items([x]) if m.kind == "points"])
 
     def set_operation(self, a_id: str, op: str, b_id: str) -> tuple[np.ndarray, dict]:
         """(store indices, record) of A op B, for point sets or directories (all their point sets). ``op``: one of
         SET_OPS."""
-        from pclabel.tools import sets as sets_
-
         a, b = self.points_of(a_id), self.points_of(b_id)
         fn = {"union": sets_.union, "intersection": sets_.intersection, "a_minus_b": sets_.difference,
               "b_minus_a": lambda x, y: sets_.difference(y, x), "xor": sets_.xor}[op]  # fmt: skip
@@ -732,11 +729,10 @@ class Annotations:
     def to_doc(self, project, *, points: str) -> dict:
         """The JSON document. ``points``: "file" (store indices in ``annotations/<id>.npy``, the project's copy) or
         "inline" (source indices in the document, for export)."""
-        src = project.meta.get("source", {})
         return {
             "schema": SCHEMA,
             "coordinates": "scan frame (world), metres; store/local = world - offset",
-            "source": {"file": Path(src.get("path", "")).name, "sha256": src.get("sha256"), "n_valid": project.n},
+            "source": source_doc(project),
             "offset": _pt(project.offset),
             "counter": self.counter,
             "locks": sorted(self.locks),
@@ -825,7 +821,7 @@ class Annotations:
         directory path and where the label comes from), counts, the number of distinct points, and the points
         shared with other labels. ``class_ids`` maps taxonomy class names to ids (in the taxonomy's order), for
         labels that are classes; ``flag_bits`` maps taxonomy flag names to bits, for labels that are flags (e.g.
-        ``marking``, R-006: a flag sits on top of the surface's class, so its points are meant to overlap a class's);
+        ``marking``: a flag sits on top of the surface's class, so its points are meant to overlap a class's);
         ``parents`` maps a class to the class it is a kind of (the taxonomy tree: ``road_line`` of ``road``). A class
         is also counted with the classes below it (``points_with_descendants``, and ``rollup`` for every class in
         use or above one), overlaps along a branch are marked ``nested`` (expected: a road set holding its lines),
@@ -846,17 +842,11 @@ class Annotations:
             by_label.setdefault(label, []).append((x, d))
         order = sorted((k for k in by_label if k),
                        key=lambda k: (k not in class_ids, k not in flag_bits, class_pos.get(k, 0), flag_bits.get(k, 0), k))  # fmt: skip
-        from pclabel.tools import sets as sets_
-
         unions = {k: sets_.union_all([x.indices for x, _ in v if x.kind == "points"]) for k, v in by_label.items()}
         unsure = {k: sets_.union_all([x.indices for x, d in v if x.kind == "points" and d["uncertain"]])
                   for k, v in by_label.items()}  # fmt: skip
         def ancestors(k):
-            out = []
-            while k in parents:
-                k = parents[k]
-                out.append(k)
-            return out
+            return ancestors_in(parents, k)
 
         overlaps = []
         for a_i, a in enumerate(order):
@@ -898,11 +888,10 @@ class Annotations:
                             "points": int(sets_.union_all([unions[s] for s in below]).size)})  # fmt: skip
             return out
 
-        src = project.meta.get("source", {})
         doc = {
             "schema": LABELS_SCHEMA,
             "coordinates": "scan frame (world), metres; store/local = world - offset",
-            "source": {"file": Path(src.get("path", "")).name, "sha256": src.get("sha256"), "n_valid": project.n},
+            "source": source_doc(project),
             "offset": _pt(project.offset),
             "labels": [entry(k) for k in order],
             "unlabelled": entry("") if "" in by_label else None,
@@ -1061,27 +1050,11 @@ def _node_from_doc_body(nd: dict, project, base, same_scan: bool, warnings: list
     return None
 
 
-@nb.njit(parallel=True, nogil=True, cache=True)
-def _match(source_index, wanted, out):
-    for i in nb.prange(source_index.shape[0]):
-        s = np.int64(source_index[i])
-        k = np.searchsorted(wanted, s)
-        out[i] = k < wanted.shape[0] and wanted[k] == s
-
-
-def isin_sorted(values, wanted_sorted) -> np.ndarray:
-    """Boolean mask: which ``values`` are in ``wanted_sorted`` (sorted, unique int64), in parallel."""
-    out = np.empty(len(values), np.bool_)
-    if len(values):
-        _match(np.asarray(values), np.asarray(wanted_sorted, np.int64), out)
-    return out
-
-
 def store_indices_of_sources(project, source_indices) -> np.ndarray:
     """Store indices (sorted) of the points with these source indices: one parallel pass over the source index."""
     wanted = np.unique(np.asarray(source_indices, np.int64))
     if wanted.size == 0:
         return np.empty(0, np.int64)
     hit = np.empty(project.n, np.bool_)
-    _match(np.asarray(project.source_index), wanted, hit)
+    sets_.match_sorted(np.asarray(project.source_index), wanted, hit)
     return np.flatnonzero(hit).astype(np.int64)

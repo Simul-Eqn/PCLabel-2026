@@ -184,7 +184,7 @@ class LabelImportController(QObject):
             self.add(source, dlg.chosen())
 
     def dialog(self, source) -> LabelImportDialog:
-        choices = labelbox.taxonomy_entries(self.w.taxonomy)
+        choices = labelbox.taxonomy_entries(self.w.taxonomy, imports=True)  # the drawing's own kinds too
         self.last_dialog = LabelImportDialog(source, load_profiles(), choices, coverage(source, self.w.project), self.w)
         return self.last_dialog
 

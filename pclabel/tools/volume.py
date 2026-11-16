@@ -1,4 +1,4 @@
-"""3D select (SPEC §4): every point inside a box or a cylinder standing along the height axis, at full resolution.
+"""3D select: every point inside a box or a cylinder standing along the height axis, at full resolution.
 
 The volume stands on a point (``base``, local coordinates). Its axis is the height axis (``axis``: z, or a fitted
 plane's normal) and it reaches from ``bottom`` to ``top`` metres along it, measured from the base. Across the axis
@@ -20,6 +20,8 @@ from dataclasses import dataclass
 import numba as nb
 import numpy as np
 
+from pclabel.analysis.geometry import frame_axes
+
 
 @dataclass(frozen=True)
 class VolumeParams:
@@ -32,21 +34,6 @@ class VolumeParams:
     turn: float = 0.0  # degrees about the axis (box), or about its centre (loop)
     scale: float = 1.0  # loop: about its centre
     inset: float = 0.0  # m, loop: pulled in evenly by this much (negative: pushed out)
-
-
-def frame_axes(axis, along, turn_deg: float = 0.0):
-    """(n, u, v): the unit height axis and two unit directions across it (u: ``along`` turned by ``turn_deg``)."""
-    n = np.asarray(axis, np.float64)
-    n = n / np.linalg.norm(n)
-    a = np.asarray(along, np.float64)
-    a = a - np.dot(a, n) * n
-    if np.linalg.norm(a) < 1e-9:  # along is (nearly) the axis itself
-        a = np.cross(n, [0.0, 1.0, 0.0] if abs(n[1]) < 0.9 else [1.0, 0.0, 0.0])
-    a /= np.linalg.norm(a)
-    b = np.cross(n, a)
-    t = np.radians(turn_deg)
-    u = np.cos(t) * a + np.sin(t) * b
-    return n, u, np.cross(n, u)
 
 
 def _half_extents(p: VolumeParams):

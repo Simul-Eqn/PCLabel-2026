@@ -190,7 +190,7 @@ def test_taxonomy_tree(tmp_path):
 
 
 def test_locked_labels_and_their_points():
-    from pclabel.store.annotations import isin_sorted
+    from pclabel.tools.sets import isin_sorted
 
     t = Annotations()
     road = t.add(PointSet(np.arange(0, 100, dtype=np.int64)))

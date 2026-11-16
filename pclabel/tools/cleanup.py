@@ -25,7 +25,7 @@ import numba as nb
 import numpy as np
 
 from pclabel.tools import sets
-from pclabel.tools.volume import frame_axes
+from pclabel.analysis.geometry import disk, frame_axes
 
 
 @dataclass(frozen=True)
@@ -97,9 +97,7 @@ def clean_selection(xyz, tiles, selection, axis, along, origin, params: CleanPar
     idx = np.concatenate(idx_parts) if idx_parts else np.empty(0, np.int64)
     col = np.concatenate(col_parts) if col_parts else np.empty(0, np.int64)
     hh = np.concatenate(h_parts) if h_parts else np.empty(0)
-    from pclabel.store.annotations import isin_sorted
-
-    is_sel = isin_sorted(idx, sel)
+    is_sel = sets.isin_sorted(idx, sel)
     ok = allowed(idx) if allowed is not None else np.ones(idx.size, bool)
     n_cells = nx * ny
     cnt_sel = np.bincount(col[is_sel], minlength=n_cells).reshape(ny, nx)
@@ -108,14 +106,13 @@ def clean_selection(xyz, tiles, selection, axis, along, origin, params: CleanPar
     covered = cnt_sel > 0
     has = cnt_all > 0
     r = max(1, int(round(p.radius / p.cell)))
-    yy, xx = np.mgrid[-r : r + 1, -r : r + 1]
-    disk = ((xx**2 + yy**2) <= r * r).astype(float)
-    near_cov = ndimage.convolve(covered.astype(float), disk, mode="constant")
-    near_has = ndimage.convolve(has.astype(float), disk, mode="constant")
+    kernel = disk(r).astype(float)
+    near_cov = ndimage.convolve(covered.astype(float), kernel, mode="constant")
+    near_has = ndimage.convolve(has.astype(float), kernel, mode="constant")
     frac = np.divide(near_cov, near_has, out=np.zeros_like(near_cov), where=near_has > 0)
     # the selected surface: own mean, else the mean of the columns around
     own = np.divide(sum_h, cnt_sel, out=np.full(sum_h.shape, np.nan), where=covered)
-    around = np.divide(ndimage.convolve(np.where(covered, own, 0.0), disk, mode="constant"), near_cov,
+    around = np.divide(ndimage.convolve(np.where(covered, own, 0.0), kernel, mode="constant"), near_cov,
                        out=np.full(sum_h.shape, np.nan), where=near_cov > 0)  # fmt: skip
     surface = np.where(covered, own, around)
     footprint = covered | (p.fill_holes & has & (frac >= p.majority) & np.isfinite(surface))

@@ -34,7 +34,7 @@ def test_south_kerb_faces_away_and_errors(dense):
     lip = r["lip"] + off
     assert np.median(np.abs(lip[:, 1] + 3.70)) < 0.03 and np.median(r["height"]) == pytest.approx(0.15, abs=0.01)
     # the wrong side: no kerb there
-    assert "no step" in section(xyz, tiles, on_road(-6, -3.4), (0, 0, 1), (1, 0, 0), CurbTraceParams(side="left"))["why"]
+    assert "no step" in section(xyz, tiles, on_road(-6, -3.4), (0, 0, 1), (1, 0, 0), CurbTraceParams(side="left")).why
     # a higher threshold than the kerb: nothing traced
     r = run_trace(xyz, tiles, on_road(-6, 3.4), on_road(-5.5, 3.4), (0, 0, 1), CurbTraceParams(curb_height=0.2))
     assert len(r["toe"]) == 0 and "no step of 0.20 m" in r["stopped"]

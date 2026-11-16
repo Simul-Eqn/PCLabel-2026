@@ -1,5 +1,5 @@
 """Shader sources (no Qt). All colour modes are computed here from per-point attributes and uniforms, so changing
-a mode, range or period never touches the point data (SPEC §2).
+a mode, range or period never touches the point data.
 
 Height (for the height ramp, the wrap and the slice) is measured along the active height frame:
 ``h = dot(p - u_h_origin, u_h_normal)`` with ``p`` and ``u_h_origin`` in local (store) coordinates. The scan frame

@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pclabel.analysis import curves
 from pclabel.store.annotations import Curve, Marker, PointSet, Polyline
 from pclabel.tools.clearance import ClearanceParams, check
 from pclabel.tools.kerbfit import KerbFitParams
@@ -64,7 +65,6 @@ TOE_COLOR = (1.0, 0.55, 0.1, 1.0)
 LIP_COLOR = (1.0, 0.9, 0.2, 1.0)
 LINE_COLOR = (0.2, 0.95, 1.0, 1.0)
 CLICK_COLOR = (1.0, 1.0, 1.0, 1.0)
-TOE_LABEL, LIP_LABEL, LINE_LABEL = "curb_bottom", "curb_top", "road_line"
 
 
 class TraceDock(QDockWidget):
@@ -108,8 +108,8 @@ class TraceDock(QDockWidget):
         self.c_follow.setToolTip("the top edge only: steps along the kerb's lip and needs no road seen beside the kerb "
                                  "(a toe hidden from the scanner, a gutter); saves only the lip")  # fmt: skip
         lines = QHBoxLayout()
-        self.c_toe = QCheckBox("toe (curb_bottom)")
-        self.c_lip = QCheckBox("lip (curb_top)")
+        self.c_toe = QCheckBox("toe (a helper line, no label)")
+        self.c_lip = QCheckBox("lip (the curb line)")
         for b in (self.c_toe, self.c_lip):
             b.setChecked(True)
             lines.addWidget(b)
@@ -195,9 +195,9 @@ class TraceDock(QDockWidget):
         self.k_cluster = _spin(0.05, 5.0, k.cluster, 0.05, 2, " m")
         self.k_min = _spin(1, 100000, k.min_points, 1, 0)
         self.k_points = QComboBox()
-        self.k_points.addItem("vegetation labels", "vegetation")
+        self.k_points.addItem("vegetation and tree labels", "vegetation")
         self.k_points.addItem("all points", "all")
-        self.k_points.setToolTip("vegetation: the point sets labelled vegetation or a kind of it; all: anything there "
+        self.k_points.setToolTip("vegetation: the point sets labelled vegetation, tree or a kind of them; all: anything there "
                                  "(vehicles and poles too)")  # fmt: skip
         self.k_run = QPushButton("check along the selected line")
         self.k_run.setToolTip("the line selected in Annotations: a segment, curve or polyline along the road")
@@ -493,7 +493,7 @@ class TraceController(QObject):
         pcs = r["pieces"]
         if not pcs:
             return f"no marking found: {r['stopped']}."
-        length = sum(float(np.linalg.norm(np.diff(pc, axis=0), axis=1).sum()) for pc in pcs)
+        length = sum(curves.length(pc) for pc in pcs)
         bridged = f", {len(r['bridged'])} gaps bridged" if r["bridged"] else ""
         return (f"{len(pcs)} piece{'s' * (len(pcs) != 1)}, {length:.1f} m, threshold {r['threshold']:.3f}{bridged}; "
                 f"stopped: {r['stopped']} ({r['seconds']:.1f} s).")
@@ -509,8 +509,9 @@ class TraceController(QObject):
             return
         r = self.runs[-1]["result"]
         if self.runs[-1]["mode"] == "curb":
-            for k in ("toe", "lip", "height", "face", "seen", "piece"):
-                r[k] = r[k][:-1]
+            for k in ("toe", "lip", "height", "face", "seen", "top_seen", "piece"):
+                if k in r:
+                    r[k] = r[k][:-1]
             empty = len(r["toe"]) == 0
         else:
             pcs = r["pieces"]
@@ -557,6 +558,8 @@ class TraceController(QObject):
         m = a.model
         off = np.asarray(w.project.offset, np.float64)
         mode = self.runs[0]["mode"]
+        tax = w.taxonomy
+        toe_label, lip_label = tax.tool_label("curb_trace_toe"), tax.tool_label("curb_trace_lip")
         lines = []  # (name, vertices local, label, source)
         for ri, run in enumerate(self.runs, 1):
             r = run["result"]
@@ -575,11 +578,11 @@ class TraceController(QObject):
                                face_seen=float(r["seen"][sel].mean()))  # fmt: skip
                     tag = f"{ri}.{k + 1}" if len(self.runs) > 1 else f"{k + 1}"
                     if self.dock.c_toe.isChecked() and r["params"].get("follow", "toe") == "toe":
-                        lines.append((f"toe {tag}", r["toe"][sel], TOE_LABEL, dict(src, line="toe")))
+                        lines.append((f"toe {tag}", r["toe"][sel], toe_label, dict(src, line="toe")))
                     if self.dock.c_lip.isChecked():
-                        lines.append((f"lip {tag}", r["lip"][sel], LIP_LABEL, dict(src, line="lip")))
+                        lines.append((f"lip {tag}", r["lip"][sel], lip_label, dict(src, line="lip")))
             else:
-                label = self.dock.l_label.currentText().strip() or LINE_LABEL
+                label = self.dock.l_label.currentText().strip() or tax.tool_label("marking_trace")
                 for k, pc in enumerate(r["pieces"]):
                     if len(pc) < 2:
                         continue
@@ -611,8 +614,6 @@ class TraceController(QObject):
         kind = as_kind or self.dock.save_as.currentData()
         if kind != "curve" or len(vertices) < 2:
             if as_kind == "polyline":
-                from pclabel.analysis import curves
-
                 vertices = np.asarray(vertices, np.float64)[curves.simplify(vertices, 0.002, closed)]
             return Polyline(vertices, closed, src)
         f = self.w.frames[self.w.active_frame]
@@ -647,7 +648,7 @@ class TraceController(QObject):
         what = points or self.dock.k_points.currentData()
         cand = None
         if what == "vegetation":
-            labels = {"vegetation", *w.taxonomy.descendants("vegetation")}
+            labels = {k for top in w.taxonomy.tool_label("clearance") for k in (top, *w.taxonomy.descendants(top))}
             cand = m.points_labelled(labels)
             if not cand.size:
                 self.dock.status.setText("no point sets labelled vegetation (or a kind of it): label some, or check all points")
@@ -707,8 +708,6 @@ class TraceController(QObject):
                    f"({res['length']:.1f} m); the lowest leaves {low['clearance']:.2f} m at {low['along']:.1f} m "
                    f"({res['seconds']:.1f} s)")  # fmt: skip
         self.dock.status.setText(a.dock.status.text())
-
-    # ---- joining pieces ---------------------------------------------------------------------------------------
 
     # ---- smoothing onto the kerb top ----------------------------------------------------------------------------
 
@@ -914,11 +913,11 @@ class TraceController(QObject):
             nums.append(max(nums, default=0) + 1)
             d = m.new_directory(f"cover {nums[-1]:02d}", home.id if home is not None else None)
             if not mk.label:
-                mk.label = "cover"
+                mk.label = self.w.taxonomy.tool_label("cover")
             src = {"tool": "cover_template", "assisted": True, "template": record(p), "marker": mk.id,
                    "axis": [float(x) for x in axis]}  # fmt: skip
             pl = m.add(Polyline(ring, True, src), "outline")
-            pl.label = "cover"
+            pl.label = self.w.taxonomy.tool_label("cover")
             m.move([mk.id, pl.id], d.id)
             made.append(d)
         a._changed(f"{len(made)} cover outline{'s' * (len(made) != 1)}: {made[0].name}" + (" ..." if len(made) > 1 else ""))
@@ -988,4 +987,4 @@ class TraceController(QObject):
     def fill_labels(self):
         labelbox.fill(self.dock.l_label, labelbox.taxonomy_entries(self.w.taxonomy), kinds={"polyline"})
         if not self.dock.l_label.currentText():
-            self.dock.l_label.setCurrentText(LINE_LABEL)
+            self.dock.l_label.setCurrentText(self.w.taxonomy.tool_label("marking_trace"))

@@ -1,4 +1,4 @@
-"""Geometry of drawn curves (SPEC §13): a plane perpendicular to the height axis fitted to clicked points, the
+"""Geometry of drawn curves: a plane perpendicular to the height axis fitted to clicked points, the
 clicked points projected onto it, and a smooth curve through them.
 
 The curve is piecewise cubic Bézier, one piece between consecutive nodes; a closed curve (a loop) has one more piece,
@@ -146,6 +146,46 @@ def resample(vertices, step: float, closed: bool = False) -> np.ndarray:
     return p[:-1] if closed and len(v) > 3 else p
 
 
+def even_points(vertices, step: float, closed: bool = False) -> np.ndarray:
+    """Points evenly spaced, about ``step`` apart, along the line by length. Unlike ``resample`` the vertices are not
+    kept, so a densely sampled line gives points ``step`` apart too. A closed line's first point is not repeated."""
+    v = np.asarray(vertices, np.float64).reshape(-1, 3)
+    if closed and len(v) > 2:
+        v = np.vstack([v, v[:1]])
+    s = arc_length(v)
+    k = max(2, int(round(s[-1] / step)) + 1)
+    t = np.linspace(0.0, s[-1], k)
+    if closed and len(vertices) > 2:
+        t = t[:-1]
+    return np.column_stack([np.interp(t, s, v[:, j]) for j in range(3)])
+
+
+def sample_along(line, spacing: float):
+    """An open line sampled every ``spacing`` along each piece (its vertices among the samples), with the unit
+    direction and the distance along the line at each sample. Returns (points, directions, distances, length)."""
+    v = np.asarray(line, np.float64)
+    seg = np.diff(v, axis=0)
+    L = np.linalg.norm(seg, axis=1)
+    keep = L > 1e-9
+    v = np.vstack([v[:1], v[1:][keep]])
+    seg, L = seg[keep], L[keep]
+    if not len(seg):
+        raise ValueError("the reference line has no length")
+    pts, dirs, s = [], [], []
+    acc = 0.0
+    for a, d, ln in zip(v[:-1], seg, L):
+        k = max(1, int(np.ceil(ln / spacing)))
+        t = np.arange(k) / k
+        pts.append(a + t[:, None] * d)
+        dirs.append(np.repeat((d / ln)[None], k, 0))
+        s.append(acc + t * ln)
+        acc += ln
+    pts.append(v[-1:])
+    dirs.append((seg[-1] / L[-1])[None])
+    s.append(np.array([acc]))
+    return np.vstack(pts), np.vstack(dirs), np.concatenate(s), acc
+
+
 def smooth_line(vertices, scale: float = 1.0, max_shift: float = 0.05, closed: bool = False,
                 step: float = 0.02) -> tuple[np.ndarray, float]:  # fmt: skip
     """(smoothed points ``step`` apart, largest shift): a Gaussian average along the line (sigma ``scale`` m of
@@ -228,9 +268,17 @@ def nodes_within(vertices, tol: float = 0.01, closed: bool = False) -> tuple[lis
         idx = sorted(idx + [k])
 
 
-def length(polyline: np.ndarray) -> float:
+def length(polyline, closed: bool = False) -> float:
+    """The line's length; ``closed``: with the piece from the last vertex back to the first (more than 2 vertices)."""
     p = np.asarray(polyline, np.float64)
-    return float(np.linalg.norm(np.diff(p, axis=0), axis=1).sum()) if len(p) > 1 else 0.0
+    out = float(np.linalg.norm(np.diff(p, axis=0), axis=1).sum()) if len(p) > 1 else 0.0
+    return out + (float(np.linalg.norm(p[-1] - p[0])) if closed and len(p) > 2 else 0.0)
+
+
+def arc_length(polyline) -> np.ndarray:
+    """(m,): the distance along the line to each vertex, from 0."""
+    p = np.asarray(polyline, np.float64)
+    return np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(p, axis=0), axis=1))]
 
 
 def closest(nodes, h_in, h_out, point, samples: int = 64, closed: bool = False) -> tuple[int, float]:

@@ -345,7 +345,6 @@ def fmt_point_rows(project, taxonomy, pick, scan_of_source) -> list[tuple[str, s
         ("source index (export order)", f"{src_i:,}"),
         ("raw record index", f"{raw_i:,}"),
         ("tile", f"{pick.tile}"),
-        ("provenance", "no label operations yet (the journal arrives in M3)"),
     ]
     return rows
 

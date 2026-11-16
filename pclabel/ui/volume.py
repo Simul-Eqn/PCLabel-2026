@@ -37,10 +37,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pclabel.analysis.geometry import frame_axes
 from pclabel.tools.volume import (
     VolumeParams,
     box_spec,
-    frame_axes,
     inset_outline,
     loop_centre,
     loop_spec,

@@ -1,4 +1,4 @@
-"""Vector annotations in the app (SPEC §13): the segment (V) and curve (Shift+V) tools, curve edit mode and the
+"""Vector annotations in the app: the segment (V) and curve (Shift+V) tools, curve edit mode and the
 Annotations panel. The model and its files are ``pclabel.store.annotations``; this module wires them to the viewport
 and the panel.
 
@@ -53,6 +53,7 @@ from PySide6.QtWidgets import (
 
 from pclabel.store.annotations import SET_OPS, CURVE_MODES, Annotations, Curve, Marker, PointSet, Segment, clone_nodes
 from pclabel.tools import sets as sets_
+from pclabel.taxonomy import hex_rgb
 from pclabel.tools.markers import MarkerParams, marker_at_click, place_marker
 from pclabel.ui import labelbox
 from pclabel.ui.docks import _spin
@@ -68,8 +69,7 @@ PICKED = (1.0, 0.2, 0.9, 1.0)  # clicked points, shown on request in curve edit 
 
 
 def rgba(hex_color: str, alpha: float = 1.0) -> tuple:
-    h = hex_color.lstrip("#")
-    return tuple(int(h[i : i + 2], 16) / 255 for i in (0, 2, 4)) + (alpha,)
+    return tuple(v / 255 for v in hex_rgb(hex_color)) + (alpha,)
 
 
 class AnnotationTree(QTreeWidget):
@@ -1020,6 +1020,8 @@ class AnnotationController(QObject):
             self.dock.status.setText("select directories or items to label first")
             return
         label = (self.dock.label.currentText() if label is None else label).strip()
+        if label == labelbox.HEADER:
+            return
         why = self._label_fits(label, [self.model.node(i) for i in ids]) if label else None
         if why:
             self.dock.status.setText(why)
@@ -1029,6 +1031,9 @@ class AnnotationController(QObject):
             self.model.node(i).label = label
         self._changed(f"{len(ids)} entr{'y' if len(ids) == 1 else 'ies'} labelled {label!r}" if label else
                       f"label removed from {len(ids)} entr{'y' if len(ids) == 1 else 'ies'}")  # fmt: skip
+        note = self.w.taxonomy.not_for_new_labels(label) if label else None
+        if note:
+            self.dock.status.setText(self.dock.status.text() + f"\nnote: {label} is {note} (docs/LABELLING_STANDARD.md)")
 
     def _labels_in_order(self, labels) -> list:
         order = {c["name"]: i for i, c in enumerate(self.w.taxonomy.classes)}  # the taxonomy's tree order
@@ -1104,17 +1109,18 @@ class AnnotationController(QObject):
     def _fill_labels(self):
         """The label box: the enabled taxonomy classes as a tree (each indented under its parent; one kept to lines or
         markers greyed out unless the entries selected in the tree are such items), then the flags (e.g. ``marking``:
-        paint off the road keeps the class of the surface it is on, R-006), then other labels in use."""
+        paint off the road keeps the class of the surface it is on), then other labels in use."""
         entries = labelbox.taxonomy_entries(self.w.taxonomy)
         known = {e[0] for e in entries}
-        used = sorted({x.label for x, _ in self.model.walk() if x.label} - known)
+        in_use = sorted({x.label for x, _ in self.model.walk() if x.label} - known)
+        old, free = labelbox.in_use_entries(self.w.taxonomy, in_use)  # old: classes not for new labels, greyed
         kinds = set()
         for i in self.selected_ids():
             try:
                 kinds.add(self.model.node(i).kind)
             except KeyError:
                 pass
-        labelbox.fill(self.dock.label, entries, used, kinds or None)
+        labelbox.fill(self.dock.label, entries, free, kinds or None, old=old)
 
     # ---- set operations on point sets ----------------------------------------------------------------------
 

@@ -1,4 +1,4 @@
-"""Main window: viewport, docks, menus, keymap (SPEC §1, §15) and status bar."""
+"""Main window: viewport, docks, menus, keymap (docs/MANUAL.md) and status bar."""
 
 from __future__ import annotations
 
@@ -27,12 +27,12 @@ from pclabel.render.renderer import INSIDE_BIT, PointSource
 from pclabel.render.shaders import MODE_INTENSITY, MODE_NAMES, MODE_WRAP, MODE_WRAP_SHADED
 from pclabel.render.viewport import Viewport
 from pclabel.settings import Settings
-from pclabel.store.importer import write_json_atomic
-from pclabel.store.project import Project
+from pclabel.store.project import Project, source_doc
+from pclabel.store.util import write_json_atomic
 from pclabel.tools.ground import R_GAP, R_HEIGHT, R_IRANGE, R_ISTEP, R_ROUGH, ground_grow
 from pclabel.tools.magic import magic_select
 from pclabel.tools.normals import NormalGrowResult, normal_grow
-from pclabel.store.annotations import isin_sorted
+from pclabel.tools.sets import isin_sorted
 from pclabel.tools import sets
 from pclabel.tools.selection import DepthTest, SelectFilters, select_visible
 from pclabel.tools.volume import select_loop, select_volume
@@ -173,7 +173,7 @@ class MainWindow(QMainWindow):
         self._grow_timer.setSingleShot(True)
         self._grow_timer.setInterval(350)
         self._grow_timer.timeout.connect(self.run_grow)
-        self.selection_def = None  # how the current selection was made (tool, parameters): recorded by M3
+        self.selection_def = None  # how the current selection was made (tool, parameters); see selection_ops
         self.selection_ops: list[dict] = []  # every operation since the last plain replace (for groups)
         self.history = UndoStack()  # Ctrl+Z / Ctrl+Y: the selection, planes and annotations (this session)
         self._undo_keys = _UndoKeysToTheApp(self)
@@ -1036,9 +1036,7 @@ class MainWindow(QMainWindow):
                                                   "Plane (*.json)")  # fmt: skip
             if not path:
                 return None
-        src = self.project.meta.get("source", {})
-        source = {"file": Path(src.get("path", "")).name, "sha256": src.get("sha256"), "n_valid": self.project.n}
-        write_json_atomic(Path(path), plane_document(f, self.project.offset, source))
+        write_json_atomic(Path(path), plane_document(f, self.project.offset, source_doc(self.project)))
         self.statusBar().showMessage(f"exported {f.name} to {path}", 6000)
         return path
 

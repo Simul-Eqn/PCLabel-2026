@@ -1,4 +1,4 @@
-"""Ground grow: from a seed point, select the connected ground surface (SPEC §11 region grow, on a cell grid).
+"""Ground grow: from a seed point, select the connected ground surface (region grow on a cell grid).
 
 1. Cells. Every point around the seed is binned into square cells, and each cell keeps its first
    ``cell_points`` points (a uniform sample of the cell, because tiles are shuffled). Capping per cell, not per
@@ -24,7 +24,8 @@
 4. Points. Every full-resolution point in a grown cell within ``surface_tol`` of the cell's surface is selected.
    Points below the surface (drains, multipath) and above it (vehicles, canopy) are not.
 
-All parameters are thresholds under study; the result carries them, and labelling records them (M3).
+All parameters are thresholds under study; the result carries them, and a point set saved from it keeps them in its
+provenance.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ from dataclasses import asdict, dataclass
 import numba as nb
 import numpy as np
 
+from pclabel.analysis.geometry import disk
 from pclabel.tools import sets
 
 
@@ -306,12 +308,6 @@ def cell_grid(xyz, intensity, tiles, seed, params: GroundGrowParams, clip=None, 
                     seen.reshape(ny, nx), int(cnt.sum()))  # fmt: skip
 
 
-def _disk(r: float) -> np.ndarray:
-    k = int(np.ceil(r))
-    yy, xx = np.mgrid[-k : k + 1, -k : k + 1]
-    return (xx**2 + yy**2) <= r * r + 1e-9
-
-
 def grow_cells(grid: CellGrid, seed, params: GroundGrowParams):
     """(region, info): grown cells with bridged markings, and figures about the grow."""
     from scipy import ndimage
@@ -343,11 +339,11 @@ def grow_cells(grid: CellGrid, seed, params: GroundGrowParams):
     r = p.marking_width / 2 / grid.cell
     added = np.zeros_like(grown)
     if r >= 0.5 and grown.any():
-        disk = _disk(r)
-        closed = ndimage.binary_closing(grown, structure=disk, border_value=0) | ndimage.binary_fill_holes(grown)
+        kernel = disk(r)
+        closed = ndimage.binary_closing(grown, structure=kernel, border_value=0) | ndimage.binary_fill_holes(grown)
         cand = closed & ~grown & valid & (grid.rough <= p.max_roughness)
         if cand.any():
-            big = _disk(max(r, 1.5 / grid.cell))  # local surface height from grown cells around (up to 1.5 m)
+            big = disk(max(r, 1.5 / grid.cell))  # local surface height from grown cells around (up to 1.5 m)
             s0 = np.where(grown, surf, 0.0)
             num = ndimage.convolve(s0, big.astype(float), mode="constant")
             den = ndimage.convolve(grown.astype(float), big.astype(float), mode="constant")

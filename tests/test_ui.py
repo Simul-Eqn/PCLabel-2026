@@ -1478,9 +1478,11 @@ def test_markers_and_the_label_tree(window):
     """Ctrl+M: a marker where the selection is (the mean, or a circle's centre; the mean height or the lowest point),
     in the selected directory, one undo step. The label box shows the taxonomy as a tree and keeps a line-only label
     off a marker. The tree tool saves a pole with its marker; trees saved before markers get theirs."""
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
 
     from pclabel.store.annotations import PointSet
+    from pclabel.ui import labelbox
     from pclabel.ui.labelbox import DEPTH
 
     app = QApplication.instance()
@@ -1518,12 +1520,22 @@ def test_markers_and_the_label_tree(window):
     assert box.itemData(box.findText("road_line"), DEPTH) == 2 and box.itemData(box.findText("road"), DEPTH) == 1
     a.dock.tree.clearSelection()
     a._item_of(mk2.id).setSelected(True)
-    assert not box.model().item(box.findText("curb_top")).isEnabled()
+    assert not box.model().item(box.findText("curb")).isEnabled()
     assert box.model().item(box.findText("cover")).isEnabled() and box.model().item(box.findText("lamp_post")).isEnabled()
-    a.set_label("curb_top")
+    a.set_label("curb")
     assert a.model.node(mk2.id).label == "" and "for lines only" in a.dock.status.text()
     a.set_label("lamp_post")
     assert a.model.node(mk2.id).label == "lamp_post"
+    # a class the standard does not use (here retired) still applies, with a note, and shows greyed under a heading
+    a.set_label("drain")
+    assert a.model.node(mk2.id).label == "drain" and "retired" in a.dock.status.text()
+    a._fill_labels()
+    head = box.findText(labelbox.HEADER)
+    assert head >= 0 and not box.model().item(head).isEnabled() and box.findText("drain") > head
+    assert "RETIRED" in box.itemData(box.findText("drain"), Qt.ItemDataRole.ToolTipRole)
+    a.set_label(labelbox.HEADER)  # the heading is never a label
+    assert a.model.node(mk2.id).label == "drain"
+    a.set_label("lamp_post")
     # the labels view (B) draws the marker in its label's colour, and back in its directory's after
     from pclabel.ui.annotate import rgba
 
@@ -1573,7 +1585,7 @@ def test_markers_and_the_label_tree(window):
     assert a.move_markers(0.1) == 0 and "select markers" in a.dock.status.text()
     # the tree tool, for a pole: the band labelled with the pole's class, and its marker
     tr.fill_what()
-    assert [tr.what.itemText(i) for i in range(tr.what.count())] == ["tree", "pole", "lamp_post", "traffic_light_pole",
+    assert [tr.what.itemText(i) for i in range(tr.what.count())] == ["tree", "pole", "lta_lamp_post", "lamp_post", "traffic_light_pole",
                                                                       "other_pole"]  # fmt: skip
     tr.what.setCurrentText("lamp_post")
     tr.fill_directories(keep="new")
@@ -1948,7 +1960,7 @@ def test_tree_tool_band_fit_and_keys_in_the_fields(window):
 
 def test_trace_panel_curb_and_marking(window, monkeypatch):
     """Ctrl+T: two clicks run the tracer in a worker (logged in trace_log.jsonl); its result is drawn, a step can be taken back, Enter in the view
-    saves a directory of polylines labelled curb_bottom / curb_top, marked assisted with the parameters. Ctrl+Shift+T:
+    saves a directory of lines (the lip labelled curb, the toe unlabelled), marked assisted with the parameters. Ctrl+Shift+T:
     a marking's pieces labelled road_line. (The tracers themselves are tested on a dense street in their own files.)"""
     import threading
 
@@ -1969,7 +1981,8 @@ def test_trace_panel_curb_and_marking(window, monkeypatch):
         x = np.arange(6) * params.step
         toe = np.c_[start[0] + x, np.full(6, start[1] + 0.3), np.full(6, start[2])]
         res = {"toe": toe, "lip": toe + [0, 0.02, 0.15], "height": np.full(6, 0.15), "face": np.full(6, 0.02),
-               "seen": np.ones(6, bool), "piece": np.array([0, 0, 0, 1, 1, 1]), "stopped": "no step", "closed": False,
+               "seen": np.ones(6, bool), "top_seen": np.ones(6, bool), "piece": np.array([0, 0, 0, 1, 1, 1]),
+               "stopped": "no step", "closed": False,
                "params": {"step": params.step, "curb_height": params.curb_height}}  # fmt: skip
         progress([{"toe": t, "lip": t, "piece": 0} for t in toe[:2]])
         return res
@@ -1991,7 +2004,7 @@ def test_trace_panel_curb_and_marking(window, monkeypatch):
     lines, _ = tr.overlay(window.project.offset)
     assert len(lines) == 4  # toe and lip of each piece
     QApplication.sendEvent(vp, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Backspace, Qt.KeyboardModifier.NoModifier))
-    assert len(tr.runs[0]["result"]["toe"]) == 5  # a step taken back
+    assert len(tr.runs[0]["result"]["toe"]) == 5 and len(tr.runs[0]["result"]["top_seen"]) == 5  # a step taken back
     n0 = len(a.model.root)
     a.dock.tree.clearSelection()
     QApplication.sendEvent(vp, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier))
@@ -2001,7 +2014,7 @@ def test_trace_panel_curb_and_marking(window, monkeypatch):
     assert names == ["toe 1", "lip 1", "toe 2", "lip 2"]  # piece 2 has 2 steps left
     toe = d.children[0]
     # saved as editable curves with no plane, within 1 cm of the traced vertices
-    assert toe.label == "curb_bottom" and d.children[1].label == "curb_top" and toe.kind == "curve" and toe.mode == "free"
+    assert toe.label == "" and d.children[1].label == "curb" and toe.kind == "curve" and toe.mode == "free"  # the standard
     assert toe.source["tool"] == "curb_trace" and toe.source["assisted"] and toe.source["params"]["curb_height"] == 0.06
     assert toe.source["curve_fit"]["largest_off"] <= 0.01 and toe.source["curve_fit"]["tolerance"] == 0.01
     assert toe.source["heights"]["median"] == 0.15 and np.allclose(toe.nodes[0], p0 + [0, 0.3, 0] + window.project.offset)
