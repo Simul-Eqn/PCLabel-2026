@@ -712,3 +712,13 @@ def write_street_e57(scan: SynthScan, path: str | Path, *, invalid_fraction: flo
         taxonomy_sha256=np.array(scan.taxonomy_sha256),
     )
     return path
+
+
+def store_order(xyz, max_points: int, *columns):
+    """Points as a project stores them: tiled (at most ``max_points`` per tile) and reordered. Returns (xyz in store
+    order, the tile table, each of ``columns`` in store order), the arrays contiguous."""
+    from pclabel.store.tiles import TilingParams, build_tiles
+
+    xyz = np.asarray(xyz, np.float32)
+    tiles, order = build_tiles(xyz, TilingParams(max_points=max_points))
+    return (np.ascontiguousarray(xyz[order]), tiles, *(np.ascontiguousarray(np.asarray(c)[order]) for c in columns))

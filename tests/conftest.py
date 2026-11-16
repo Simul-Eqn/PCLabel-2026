@@ -54,17 +54,26 @@ def street(street_params, taxonomy):
 
 
 @pytest.fixture(scope="session")
+def street_1m(taxonomy):
+    """A 1M-point synthetic street in store order, shared by the grow, magic select and geometric grow tests:
+    {xyz, inten, tiles, mat (material codes), params}."""
+    from pclabel.synth import store_order
+
+    s = make_street(n_target=1_000_000, seed=3)
+    xyz, tiles, inten, mat = store_order(s.xyz, 50_000, s.intensity, s.material)
+    return {"xyz": xyz, "inten": inten, "tiles": tiles, "mat": mat, "params": s.params}
+
+
+@pytest.fixture(scope="session")
 def dense_street(taxonomy):
     """A denser synthetic street (2M points) tiled as a project stores it, for the tracers: (xyz, intensity, tiles,
     offset, on_road(x, y) -> local point on the surface there)."""
     import numpy as np
 
-    from pclabel.store.tiles import TilingParams, build_tiles
+    from pclabel.synth import store_order
 
     s = make_street(StreetParams(n_target=2_000_000), taxonomy)  # kerb toes at |y| = 3.70, 0.15 m; drains at x = +-5
-    tiles, order = build_tiles(s.xyz, TilingParams(max_points=40_000))
-    xyz = np.ascontiguousarray(s.xyz[order])
-    inten = np.ascontiguousarray(s.intensity[order])
+    xyz, tiles, inten = store_order(s.xyz, 40_000, s.intensity)
     w = xyz.astype(np.float64) + s.offset
 
     def on_road(x, y, r=0.25):

@@ -5,8 +5,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from pclabel.store.tiles import TilingParams, build_tiles
-from pclabel.synth import is_material, make_street
+from pclabel.synth import is_material, store_order
 from pclabel.tools.ground import GroundGrowParams, ground_grow
 from pclabel.tools.selection import SelectFilters
 
@@ -15,16 +14,10 @@ P = GroundGrowParams(cell=0.2, max_gap=0.6, intensity_range=1.0)
 
 
 @pytest.fixture(scope="module")
-def scene(taxonomy):
-    s = make_street(n_target=1_000_000, seed=3)
-    tiles, order = build_tiles(s.xyz, TilingParams(max_points=50_000))
-    xyz = np.ascontiguousarray(s.xyz[order])
-    mat = s.material[order]
-    road = is_material(mat, "road")
-    d = np.where(road, np.hypot(xyz[:, 0] + 5, xyz[:, 1] + 1.5), np.inf)
-    seed = xyz[np.argmin(d)].astype(np.float64)  # on the road, near the scanner
-    return {"xyz": xyz, "inten": s.intensity[order], "tiles": tiles, "mat": mat, "seed": seed,
-            "params": s.params}  # fmt: skip
+def scene(street_1m):
+    xyz, mat = street_1m["xyz"], street_1m["mat"]
+    d = np.where(is_material(mat, "road"), np.hypot(xyz[:, 0] + 5, xyz[:, 1] + 1.5), np.inf)
+    return dict(street_1m, seed=xyz[np.argmin(d)].astype(np.float64))  # on the road, near the scanner
 
 
 def selected(scene, params):
@@ -101,8 +94,8 @@ def patch(parts, max_points=10_000_000):
     """Store-ordered arrays from [(xyz (n, 3), intensity 0..1 (n,)), ...]."""
     xyz = np.vstack([p[0] for p in parts]).astype(np.float32)
     inten = (np.concatenate([p[1] for p in parts]) * 65535).astype(np.uint16)
-    tiles, order = build_tiles(xyz, TilingParams(max_points=max_points))
-    return np.ascontiguousarray(xyz[order]), inten[order], tiles
+    xyz, tiles, inten = store_order(xyz, max_points, inten)
+    return xyz, inten, tiles
 
 
 def flat(rng, x0, x1, y0, y1, density, z=0.0, inten=0.05):

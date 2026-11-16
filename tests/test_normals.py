@@ -5,18 +5,15 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from pclabel.store.tiles import TilingParams, build_tiles
-from pclabel.synth import is_material, make_street
+from pclabel.synth import is_material, store_order
 from pclabel.tools.normals import NormalGrowParams, build_voxels, normal_grow
 
 P = NormalGrowParams(voxel=0.05, normal_radius=0.15, connect=0.075, radius=8.0)  # the synthetic scan is sparse
 
 
 @pytest.fixture(scope="module")
-def scene(taxonomy):
-    s = make_street(n_target=1_000_000, seed=3)
-    tiles, order = build_tiles(s.xyz, TilingParams(max_points=50_000))
-    return {"xyz": np.ascontiguousarray(s.xyz[order]), "tiles": tiles, "mat": s.material[order]}
+def scene(street_1m):
+    return street_1m
 
 
 def pick(scene, name, near):
@@ -32,8 +29,8 @@ def test_normals_of_a_plane_are_its_normal(scene):
     a /= np.linalg.norm(a)
     b = np.cross(n, a)
     pts = (rng.uniform(-2, 2, (200_000, 1)) * a + rng.uniform(-2, 2, (200_000, 1)) * b).astype(np.float32)
-    tiles, order = build_tiles(pts, TilingParams(max_points=50_000))
-    v = build_voxels(np.ascontiguousarray(pts[order]), tiles, np.zeros(3), replace(P, radius=2.0))
+    pts, tiles = store_order(pts, 50_000)
+    v = build_voxels(pts, tiles, np.zeros(3), replace(P, radius=2.0))
     ok = (v.keys != -1) & np.isfinite(v.curvature)
     inner = ok & np.all(np.abs(v.centroid) < 1.7, axis=1)
     assert np.percentile(np.abs(v.normal[inner] @ n), 1) > 0.999 and np.percentile(v.curvature[inner], 99) < 1e-3

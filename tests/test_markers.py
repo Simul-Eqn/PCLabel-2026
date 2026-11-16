@@ -50,7 +50,7 @@ def test_tilted_height_axis_and_errors():
 
 
 def test_marker_at_a_click_snaps_to_a_pole_and_drops_to_the_ground():
-    from pclabel.store.tiles import TilingParams, build_tiles
+    from pclabel.synth import store_order
     from pclabel.tools.markers import marker_at_click
 
     rng = np.random.default_rng(5)
@@ -58,8 +58,7 @@ def test_marker_at_a_click_snaps_to_a_pole_and_drops_to_the_ground():
     ground = np.c_[rng.uniform(0, 4, 20000), rng.uniform(-3, 1, 20000), rng.normal(-0.002, 0.002, 20000)]
     ground = ground[np.hypot(ground[:, 0] - 2.0, ground[:, 1] + 1.0) > 0.12]
     xyz = np.vstack([pole, ground]).astype(np.float32)
-    tiles, order = build_tiles(xyz, TilingParams(max_points=5000))
-    xyz = np.ascontiguousarray(xyz[order])
+    xyz, tiles = store_order(xyz, 5000)
     click = np.array([2.0 - 0.12, -1.0, 1.0])  # on the pole's near side, 1 m up
     at = marker_at_click(xyz, tiles, click, (0, 0, 1))
     assert np.allclose(at["position"], click) and at["record"]["across"] == "click"

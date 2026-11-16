@@ -5,7 +5,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from pclabel.store.tiles import TilingParams, build_tiles
+from pclabel.synth import store_order
 from pclabel.tools.cleanup import CleanParams, apply_clean, clean_selection
 from pclabel.tools.selection import SelectFilters
 
@@ -22,8 +22,7 @@ def area():
                  rng.uniform(0, 3.0, 4000)]  # fmt: skip
     far = np.c_[rng.uniform(20, 20.1, 30), rng.uniform(0, 0.1, 30), np.zeros(30)]  # a speck, 10 m away
     xyz = np.vstack([np.c_[xy, z], pole, far]).astype(np.float32)
-    tiles, order = build_tiles(xyz, TilingParams(max_points=40_000))
-    xyz = np.ascontiguousarray(xyz[order])
+    xyz, tiles = store_order(xyz, 40_000)
     # the selection: a low cut (z <= 2 cm) over the area, plus the speck
     sel = np.flatnonzero((xyz[:, 2] <= 0.02) & (xyz[:, 0] < 10.5) | (xyz[:, 0] > 19))
     return xyz, tiles, sel

@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from pclabel.store.tiles import TilingParams, build_tiles
+from pclabel.synth import store_order
 from pclabel.tools.clearance import ClearanceParams, check
 
 
@@ -21,9 +21,7 @@ def scene():
     side = blob((30, 31), (6, 7), (3.0, 3.5), 500)
     person = blob((25, 25.4), (-1, -0.6), (1.0, 1.7), 300)
     xyz = np.vstack([road, low, high, side, person]).astype(np.float32)
-    tiles, order = build_tiles(xyz, TilingParams(max_points=20_000))
-    xyz = np.ascontiguousarray(xyz[order])
-    return xyz, tiles
+    return store_order(xyz, 20_000)
 
 
 def test_branches_in_the_envelope(scene):

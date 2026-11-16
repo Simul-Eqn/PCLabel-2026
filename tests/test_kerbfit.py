@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from pclabel.analysis import curves
-from pclabel.store.tiles import TilingParams, build_tiles
+from pclabel.synth import store_order
 from pclabel.tools.kerbfit import KerbFitParams, fit
 
 
@@ -30,8 +30,7 @@ def kerb():
     pit = (x > 4.0) & (x < 4.9) & (y > 3.35) & (y < 3.70)
     z[pit] = -0.08
     xyz = np.c_[x, y, z + 0.003 * rng.standard_normal(len(x))].astype(np.float32)
-    tiles, order = build_tiles(xyz, TilingParams(max_points=20_000))
-    return np.ascontiguousarray(xyz[order]), tiles
+    return store_order(xyz, 20_000)
 
 
 def test_a_wavy_kerb_top_line_is_smoothed_onto_the_kerb_and_carried_over_the_lowered_kerb(kerb):

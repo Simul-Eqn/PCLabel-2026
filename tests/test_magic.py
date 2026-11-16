@@ -6,24 +6,19 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from pclabel.store.tiles import TilingParams, build_tiles
-from pclabel.synth import is_material, make_street
+from pclabel.synth import is_material, store_order
 from pclabel.tools.magic import MagicSelectParams, magic_select
 
 P = MagicSelectParams(radius=8.0)
 
 
 @pytest.fixture(scope="module")
-def scene(taxonomy):
-    s = make_street(n_target=1_000_000, seed=3)
-    tiles, order = build_tiles(s.xyz, TilingParams(max_points=50_000))
-    xyz = np.ascontiguousarray(s.xyz[order])
-    mat = s.material[order]
+def scene(street_1m):
+    xyz, mat = street_1m["xyz"], street_1m["mat"]
     marking = is_material(mat, "marking")
     dash = marking & (np.abs(xyz[:, 1]) < 0.1) & (xyz[:, 0] > -3) & (xyz[:, 0] < 0)  # the centre dash x -3..0
     d = np.where(dash, np.hypot(xyz[:, 0] + 1.5, xyz[:, 1]), np.inf)
-    return {"xyz": xyz, "inten": s.intensity[order], "tiles": tiles, "mat": mat, "marking": marking, "dash": dash,
-            "seed": xyz[np.argmin(d)].astype(np.float64)}  # fmt: skip
+    return dict(street_1m, marking=marking, dash=dash, seed=xyz[np.argmin(d)].astype(np.float64))
 
 
 def selected(scene, params, seed=None, **kw):
@@ -84,8 +79,8 @@ def patch(parts, max_points=200_000):
     """Store-ordered arrays from [(xyz (n, 3), intensity 0..1 (n,)), ...]."""
     xyz = np.vstack([p[0] for p in parts]).astype(np.float32)
     inten = (np.clip(np.concatenate([p[1] for p in parts]), 0, 1) * 65535).astype(np.uint16)
-    tiles, order = build_tiles(xyz, TilingParams(max_points=max_points))
-    return np.ascontiguousarray(xyz[order]), inten[order], tiles
+    xyz, tiles, inten = store_order(xyz, max_points, inten)
+    return xyz, inten, tiles
 
 
 def flat(rng, x0, x1, y0, y1, density, inten, z=0.0):
