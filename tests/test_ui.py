@@ -703,7 +703,7 @@ def test_3d_select_with_keys_and_locks(window):
     a.points_from_selection()
     ps = a.model.root[-1]
     ps.label = "road"
-    a._changed()
+    a.changed()
     vol.dock.shape.setCurrentIndex(vol.dock.shape.findData("box"))
     vol.place(sel_base)  # the box that made the first selection
     a.set_lock("road", True)
@@ -716,7 +716,7 @@ def test_3d_select_with_keys_and_locks(window):
     wait()
     assert np.isin(ps.indices, window.selection).all()
     ps.label = "other"  # no class: never selected, without any lock
-    a._changed()
+    a.changed()
     vol.confirm("replace")
     wait()
     assert not np.isin(ps.indices, window.selection).any()
@@ -1135,9 +1135,9 @@ def test_clean_up_merge_and_clips(window):
     assert len(a.model.root) == n_before
     window.redo()
     merged = a.model.root[-1]
-    a._checkpoint("delete B")
+    a.checkpoint("delete B")
     a.model.remove(pb.id)  # B deleted while the box is open: the lists follow
-    a._changed()
+    a.changed()
     assert d.ops_b.findData(pb.id) == -1 and d.ops_a.currentData() == pa.id
     window.undo()
     merged = a.model.node(merged.id)
@@ -1332,7 +1332,7 @@ def test_labels_view_and_label_map(window, tmp_path):
     p0 = xyz[road[0]].astype(np.float64) + window.project.offset
     seg = a.model.add(Segment(p0, p0 + [3.0, 0.0, 0.0]))
     seg.label = "curb"
-    a._changed()
+    a.changed()
     act["B"].trigger()
     assert window.display.mode.currentData() == MODE_LABELS and lc.dock.view.isChecked()
     r = window.viewport.renderer
@@ -1504,7 +1504,7 @@ def test_markers_and_the_label_tree(window):
     a.dock.marker_across.setCurrentIndex(a.dock.marker_across.findData("circle"))
     a.dock.marker_height.setCurrentIndex(a.dock.marker_height.findData("lowest"))
     d = a.model.new_directory("poles here")
-    a._changed()
+    a.changed()
     a._item_of(d.id).setSelected(True)  # into the directory selected in the tree, like Ctrl+G
     mk2 = a.marker_from_selection()
     assert mk2 in a.model.node(d.id).children and mk2.source["across"] == "circle"
@@ -1611,7 +1611,7 @@ def test_markers_and_the_label_tree(window):
     rec = {"tool": "tree", "position": [6.0, 7.5, 0.1], "radius": 0.18, "girth": 1.13, "rms": 0.01,
            "points_fitted": 50, "points_dropped": 0, "coverage": 0.5}  # fmt: skip
     a.model.move([a.model.add(PointSet(band.copy(), [rec]), "trunk 1.00 to 1.10 m").id], old.id)
-    a._changed()
+    a.changed()
     assert tr.add_earlier_markers() >= 1
     first = a.model.node(old.id).children[0]
     assert first.kind == "marker" and first.label == "tree" and first.position.tolist() == [6.0, 7.5, 0.1]
@@ -1739,7 +1739,7 @@ def test_mark_labels_uncertain(window):
     a.points_from_selection()
     ps = a.model.root[-1]
     ps.label = "ramp"
-    a._changed()
+    a.changed()
     assert "ramp" in [a.dock.label.itemText(i) for i in range(a.dock.label.count())]  # the new class
     item = a._item_of(ps.id)
     assert item.checkState(2) == Qt.CheckState.Unchecked
@@ -1808,7 +1808,7 @@ def test_duplicate(window):
     from pclabel.store.annotations import PointSet
 
     loose = a.model.add(PointSet(np.arange(5, dtype=np.int64)))
-    a._changed()
+    a.changed()
     n_root = len(a.model.root)
     a.dock.tree.clearSelection()
     for x in (d, ps, loose):  # ps is inside d: copied once, with it
@@ -1843,7 +1843,7 @@ def test_rename_inside_a_directory(window):
     inner = a.new_directory("rename inner")
     seg = a.model.add(Segment(np.zeros(3), np.ones(3)))
     window.set_selection(np.arange(10, 20, dtype=np.int64), {"tool": "test", "op": "replace"})
-    a._changed()
+    a.changed()
     a.dock.tree.clearSelection()
     a._item_of(inner.id).setSelected(True)
     act["Ctrl+G"].trigger()
@@ -2064,7 +2064,7 @@ def test_clearance_along_a_line(window):
     w = np.asarray(p.xyz, np.float64) + p.offset
     g = np.median(w[(np.abs(w[:, 1] - 5.0) < 0.3) & (np.abs(w[:, 0] - 3.0) < 0.3), 2])
     seg = a.model.add(Segment(np.array([0.0, 5.0, g]), np.array([12.0, 5.0, g])), "along the verge")
-    a._changed()
+    a.changed()
     a.dock.tree.clearSelection()
     assert tr.clearance() is None and "select one line" in tr.dock.status.text()  # nothing selected
     tr.dock.k_width.setValue(3.0)
@@ -2095,7 +2095,7 @@ def test_cover_outlines_and_marker_attributes(window):
     window.activate_frame(0)
     p0 = np.asarray(window.project.xyz[200], np.float64) + window.project.offset
     mk = a.model.add(Marker(p0, {"tool": "marker", "across": "circle", "points": 50, "radius": 0.31}), "MH 1")
-    a._changed()
+    a.changed()
     a.dock.tree.clearSelection()
     a._item_of(mk.id).setSelected(True)
     assert a.edit_attributes("asset_id: MH-0001\ntype: sewer\nbad line\nempty:") == {"asset_id": "MH-0001", "type": "sewer"}
@@ -2180,7 +2180,7 @@ def test_join_traced_pieces(window):
         pl = a.model.add(Polyline(v, False, {"tool": "curb_trace", "assisted": True}), name)
         pl.label = lab
         a.model.move([pl.id], d.id)
-    a._changed()
+    a.changed()
     n0 = len(a.model.root)
     a.dock.tree.clearSelection()
     a._item_of(d.id).setSelected(True)
@@ -2217,7 +2217,7 @@ def test_convert_lines_and_edit_a_polyline(window):
     pl = a.model.add(Polyline(v, False, {"tool": "curb_trace", "assisted": True}), "lip 1")
     pl.label = "curb_top"
     a.model.move([pl.id], d.id)
-    a._changed()
+    a.changed()
     a.dock.tree.clearSelection()
     a._item_of(d.id).setSelected(True)
     (c,) = a.convert_selected("curve")
@@ -2264,7 +2264,7 @@ def test_smooth_selected_lines(window):
     d = a.model.new_directory("lines 97")
     c = a.model.add(Curve.from_line(v, [0, 0, 1], window.project.offset, tolerance=0.005), "wavy")
     a.model.move([c.id], d.id)
-    a._changed()
+    a.changed()
     a.dock.tree.clearSelection()
     a._item_of(d.id).setSelected(True)
     (s,) = a.smooth_selected()
@@ -2299,7 +2299,7 @@ def test_smooth_onto_the_kerb_top(window, monkeypatch):
     c = a.model.add(Curve.from_line(v, [0, 0, 1], o, tolerance=0.005, source={"tool": "curb_trace", "edited": True}), "top")
     c.label = "curb_top"
     pl = a.model.add(Polyline(v[:3], False, {}), "short")
-    a._changed()
+    a.changed()
     seen = {}
 
     def fake_fit(xyz, tiles, verts, axis, params, closed, filters, progress):

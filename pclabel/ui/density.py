@@ -258,8 +258,8 @@ class DensityController(QObject):
             return None
         a = self.w.annot
         name = f"{self.name} dense ≥{info['params']['min_density']:g}/m²"
-        a._checkpoint(f"new point set {name}")
+        a.checkpoint(f"new point set {name}")
         ps = a.model.add(PointSet(dense, [self._record(info)]), name=name)
-        a._changed(f"{name}: {dense.size:,} points")
+        a.changed(f"{name}: {dense.size:,} points")
         self.dock.result.setText(a.dock.status.text())
         return ps

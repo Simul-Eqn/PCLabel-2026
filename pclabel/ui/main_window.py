@@ -27,6 +27,7 @@ from pclabel.render.renderer import INSIDE_BIT, PointSource
 from pclabel.render.shaders import MODE_CLASS, MODE_INTENSITY, MODE_NAMES, MODE_WRAP, MODE_WRAP_SHADED
 from pclabel.render.viewport import Viewport
 from pclabel.settings import Settings
+from pclabel.ops.selection import combine
 from pclabel.store.project import Project, source_doc
 from pclabel.store.util import write_json_atomic
 from pclabel.tools.ground import R_GAP, R_HEIGHT, R_IRANGE, R_ISTEP, R_ROUGH, ground_grow
@@ -558,7 +559,7 @@ class MainWindow(QMainWindow):
         indices = np.asarray(indices, np.int64)
         if filtered and self.viewport.renderer is not None and indices.size:
             indices = self._filters().apply(self.project.xyz, indices)
-        self.selection, dropped = self._unlocked(indices) if filtered else (indices, 0)
+        self.selection, dropped = combine(indices, indices, "replace", self.locked_points()) if filtered else (indices, 0)
         self._grow_state = None
         self.selection_def = definition
         self.selection_ops = [definition]
@@ -585,14 +586,6 @@ class MainWindow(QMainWindow):
             m = self.annot.model
             self._locked = (self.annot.version, m.points_labelled(m.locked_labels(self.never_selected())))
         return self._locked[1]
-
-    def _unlocked(self, idx):
-        """(idx without locked points, how many were left out)."""
-        lk = self.locked_points()
-        if lk.size == 0 or idx.size == 0:
-            return idx, 0
-        keep = ~isin_sorted(idx, lk)
-        return idx[keep], int(idx.size - keep.sum())
 
     def _set_overlay(self):
         """Tint exactly the drawn points that are selected (a GPU-side bit; no subsampling)."""
@@ -777,17 +770,9 @@ class MainWindow(QMainWindow):
         names = {"select_shape": f"{definition.get('shape', 'shape')} selection, {definition.get('depth', '')}",
                  "select_volume": "extrude select" if definition.get("shape") == "loop" else "3D select"}  # fmt: skip
         self.checkpoint("selection", f"{names.get(definition['tool'], definition['tool'])} ({op})")
-        dropped = 0
-        if op != "subtract":
-            idx, dropped = self._unlocked(idx)
-        if op == "add":
-            self.selection = sets.union(self.selection, idx)
-        elif op == "subtract":
-            self.selection = sets.difference(self.selection, idx)
-        else:
-            self.selection = idx
+        self.selection, dropped = combine(self.selection, idx, op, self.locked_points())
         self._grow_state = None  # a shape changed the selection: parameter changes no longer re-grow
-        self.selection_def = dict(definition, points=int(idx.size))
+        self.selection_def = dict(definition, points=int(idx.size) - dropped)  # the points it found, locked ones out
         self.selection_ops = ([] if op == "replace" else self.selection_ops) + [self.selection_def]
         self._set_overlay()
         self._show_selection_count(seconds, dropped)
@@ -916,14 +901,8 @@ class MainWindow(QMainWindow):
                     name = "magic select" if st["tool"] == "magic" else "grow select"
                     self.checkpoint("selection", f"{name} ({st['op']})", before=st["before"])
                     st["recorded"] = True
-                found = self._visible(res.indices)
-                found, dropped = (found, 0) if st["op"] == "subtract" else self._unlocked(found)
-                if st["op"] == "add":
-                    self.selection = sets.union(st["base"], found)
-                elif st["op"] == "subtract":
-                    self.selection = sets.difference(st["base"], found)
-                else:
-                    self.selection = found
+                self.selection, dropped = combine(st["base"], self._visible(res.indices), st["op"],
+                                                  self.locked_points())  # fmt: skip
                 i = res.info
                 seed_w = st["seed"] + self.project.offset
                 tool = "magic_select" if st["tool"] == "magic" else "grow_select"

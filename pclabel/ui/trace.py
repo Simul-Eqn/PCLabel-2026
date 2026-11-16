@@ -536,12 +536,12 @@ class TraceController(QObject):
             self.dock.status.setText("nothing to save: the pieces are too short")
             return None
         into = a._directory_for_new()
-        a._checkpoint(f"save a {mode} trace")
+        a.checkpoint(f"save a {mode} trace")
         run0 = self.runs[0]
         d = trace_ops.add_lines(a.model, lines, trace_ops.STEMS[mode], into.id if into is not None else None,
                                 lambda v, src: self._line_item(v, False, src, run_axis=run0))  # fmt: skip
         self.runs = []
-        a._changed(f"{d.name}: {len(lines)} line{'s' * (len(lines) != 1)} saved (drawn by the tracer: marked assisted)")
+        a.changed(f"{d.name}: {len(lines)} line{'s' * (len(lines) != 1)} saved (drawn by the tracer: marked assisted)")
         self.dock.status.setText(f"saved {d.name}")
         self._redraw()
         return d
@@ -623,10 +623,10 @@ class TraceController(QObject):
             self.dock.status.setText(f"nothing inside the envelope along {res['line']} ({res['length']:.1f} m, "
                                      f"{res['seconds']:.1f} s); the scan shows only what it captured")  # fmt: skip
             return
-        a._checkpoint("clearance check")
+        a.checkpoint("clearance check")
         d = trace_ops.add_clearance(a.model, res, self.w.project.offset)
         low = min(places, key=lambda p: p["clearance"])
-        a._changed(f"{d.name}: {len(places)} place{'s' * (len(places) != 1)} inside the envelope along {res['line']} "
+        a.changed(f"{d.name}: {len(places)} place{'s' * (len(places) != 1)} inside the envelope along {res['line']} "
                    f"({res['length']:.1f} m); the lowest leaves {low['clearance']:.2f} m at {low['along']:.1f} m "
                    f"({res['seconds']:.1f} s)")  # fmt: skip
         self.dock.status.setText(a.dock.status.text())
@@ -700,7 +700,7 @@ class TraceController(QObject):
         if not done:
             self.dock.status.setText("; ".join(msgs) or "nothing fitted")
             return
-        a._checkpoint(f"smooth {len(done)} line{'s' * (len(done) != 1)} onto the kerb top")
+        a.checkpoint(f"smooth {len(done)} line{'s' * (len(done) != 1)} onto the kerb top")
         stats = []
         for iid, r in done:
             try:
@@ -718,7 +718,7 @@ class TraceController(QObject):
                 a.editing, a.active = new, None
             stats.append(r)
         n_b = sum(len(r["bridged"]) for r in stats)
-        a._changed(f"{len(stats)} line{'s' * (len(stats) != 1)} smoothed onto the kerb top: "
+        a.changed(f"{len(stats)} line{'s' * (len(stats) != 1)} smoothed onto the kerb top: "
                    f"{sum(r['anchors'] for r in stats)} kerb tops measured, the line within "
                    f"{max(r['off_anchors_rms'] for r in stats) * 100:.1f} cm (rms) of them, moved up to "
                    f"{max(r['largest_move'] for r in stats) * 100:.0f} cm; {n_b} stretch{'es' * (n_b != 1)} carried "
@@ -752,7 +752,7 @@ class TraceController(QObject):
             results.append((lab, xs, out))
         home = m.parent(items[0].id)
         stem = home.name if home is not None else "lines"
-        a._checkpoint(f"join {len(items)} lines")
+        a.checkpoint(f"join {len(items)} lines")
         d = m.new_directory(f"{stem} joined", m.parent(home.id).id if home is not None and m.parent(home.id) is not None else None)
         if home is not None:  # beside the directory the lines came from
             sib = a.model._siblings(home.id)
@@ -781,7 +781,7 @@ class TraceController(QObject):
                     continue
                 if not dd.children and dd.id != d.id:
                     m.remove(di)
-        a._changed(f"{d.name}: {len(items)} lines joined into {n_out} ({n_bridged} gap{'s' * (n_bridged != 1)} bridged, "
+        a.changed(f"{d.name}: {len(items)} lines joined into {n_out} ({n_bridged} gap{'s' * (n_bridged != 1)} bridged, "
                    f"{n_dropped} repeated vertices dropped)" + ("; the originals kept" if keep else ""))  # fmt: skip
         self.dock.status.setText(a.dock.status.text())
         return d.children
@@ -812,12 +812,12 @@ class TraceController(QObject):
         if not mks:
             self.dock.status.setText("select markers in Annotations first (e.g. Ctrl+M on a cover's points)")
             return []
-        a._checkpoint(f"cover outline{'s' * (len(mks) != 1)}")
+        a.checkpoint(f"cover outline{'s' * (len(mks) != 1)}")
         made = []
         for mk in mks:
             ring, p, axis = self._outline_for(mk)
             made.append(trace_ops.add_cover(m, mk, ring, asdict(p), axis, self.w.taxonomy.tool_label("cover")))
-        a._changed(f"{len(made)} cover outline{'s' * (len(made) != 1)}: {made[0].name}" + (" ..." if len(made) > 1 else ""))
+        a.changed(f"{len(made)} cover outline{'s' * (len(made) != 1)}: {made[0].name}" + (" ..." if len(made) > 1 else ""))
         return made
 
     def reshape_outlines(self) -> int:
@@ -829,7 +829,7 @@ class TraceController(QObject):
         if not outs:
             self.dock.status.setText("select cover outlines (or their directories) first")
             return 0
-        a._checkpoint(f"reshape {len(outs)} outline{'s' * (len(outs) != 1)}")
+        a.checkpoint(f"reshape {len(outs)} outline{'s' * (len(outs) != 1)}")
         n = 0
         for pl in outs:
             try:
@@ -840,7 +840,7 @@ class TraceController(QObject):
             pl.vertices = ring
             pl.source = dict(pl.source, template=asdict(p), axis=[float(x) for x in axis])
             n += 1
-        a._changed(f"{n} outline{'s' * (n != 1)} reshaped")
+        a.changed(f"{n} outline{'s' * (n != 1)} reshaped")
         return n
 
     # ---- drawing ----------------------------------------------------------------------------------------------

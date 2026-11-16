@@ -286,12 +286,12 @@ class SplitController(QObject):
             return None
         rough, _, info = self.last
         a = self.w.annot
-        a._checkpoint(f"split {ps.name}")
+        a.checkpoint(f"split {ps.name}")
         smooth, rough_set = a.model.split_point_set(ps.id, rough, {"tool": "split", **info["params"]})
         self._clear()
         self.source_id, self.features, self.last = None, None, None
         self.dock.source.setText("")
-        a._changed(f"{ps.name} split: {smooth.name} ({smooth.indices.size:,}), {rough_set.name} "
+        a.changed(f"{ps.name} split: {smooth.name} ({smooth.indices.size:,}), {rough_set.name} "
                    f"({rough_set.indices.size:,})")  # fmt: skip
         self.dock.result.setText(a.dock.status.text())
         return smooth, rough_set

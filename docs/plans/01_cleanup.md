@@ -97,7 +97,12 @@ the same project files, since the user labels while the code changes).
   the geometric grow, pieces and split import it instead of each other's private names. Each keeps its own short
   insert loop: a shared `claim` cost 50 % on pieces. `bench/bench_voxels.py` on streets 1, before / after: grow
   1.96 / 1.90-1.94 s, pieces 0.090 / 0.090-0.103 s, split 0.52 / 0.49-0.50 s, identical results.
-- Next: C9 to C11, then C13.
+- C9: done. `AnnotationController.checkpoint(label)` / `changed(status)` are the public way every controller changes
+  the annotations (they were private and called from 22 places); `ops/selection.combine` is how any tool's result
+  joins the selection (locks kept out, subtraction ignores them); the label map's JSON document is
+  `tools/labelmap.map_document`. Left in the UI, being thin already: placing markers (`tools/markers` does the
+  work) and the map's PNG (written with QImage; the pipeline needs its own PNG writer, plan 02).
+- Next: C10, C11, then C13.
 
 Rules for every step:
 

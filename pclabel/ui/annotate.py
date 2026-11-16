@@ -472,7 +472,9 @@ class AnnotationController(QObject):
         if self.project is not None:
             self.model.save(self.project)
 
-    def _checkpoint(self, label: str):
+    def checkpoint(self, label: str):
+        """Before changing the model: keep the tree as it is for undo (one step, named ``label``). Every change to the
+        annotations, from any controller, is ``checkpoint``, then the change to ``model``, then ``changed``."""
         self.w.checkpoint("annotations", label)
 
     def snapshot(self):
@@ -495,7 +497,7 @@ class AnnotationController(QObject):
                 self.dock.edit_closed.setChecked(c.closed)
                 if self.active is not None and self.active >= len(c.nodes):
                     self.active = None
-        self._changed()
+        self.changed()
 
     def _frame(self):
         return self.w.frames[self.w.active_frame]
@@ -503,7 +505,8 @@ class AnnotationController(QObject):
     def _world(self, local):
         return np.asarray(local, np.float64) + self.project.offset
 
-    def _changed(self, status: str | None = None):
+    def changed(self, status: str | None = None):
+        """After changing the model: save the annotations, redraw the tree and the view, and show ``status``."""
         self.version += 1
         self.save()
         self.rebuild_tree()
@@ -521,10 +524,10 @@ class AnnotationController(QObject):
         self.pending.append((p, int(self.project.source_index[store_index])))
         if self.vp.tool == "segment" and len(self.pending) == 2:
             (a, sa), (b, sb) = self.pending
-            self._checkpoint("new segment")
+            self.checkpoint("new segment")
             s = self.model.add(Segment(self._world(a), self._world(b), [sa, sb]))
             self.pending = []
-            self._changed(f"{s.name}: {s.describe()}")
+            self.changed(f"{s.name}: {s.describe()}")
             return
         n = len(self.pending)
         self.dock.status.setText(f"{n} point{'s' * (n != 1)}: " + (
@@ -556,11 +559,11 @@ class AnnotationController(QObject):
             return
         f = self._frame()
         pts = np.array([self._world(p) for p, _ in self.pending])
-        self._checkpoint("new closed loop" if closed else "new curve")
+        self.checkpoint("new closed loop" if closed else "new curve")
         mode = self.dock.curve_mode.currentData()
         c = self.model.add(Curve.fit(pts, f.normal, f.origin, f.name, [s for _, s in self.pending], mode, closed))
         self.pending = []
-        self._changed()
+        self.changed()
         self.edit(c)
         self.dock.status.setText(f"{c.name}: {self._plane_report(c)}")
 
@@ -606,19 +609,19 @@ class AnnotationController(QObject):
             self.dock.edit_closed.setChecked(False)
             self.dock.status.setText("a closed loop needs at least three points")
             return
-        self._checkpoint(f"{'close' if on else 'open'} {c.name}")
+        self.checkpoint(f"{'close' if on else 'open'} {c.name}")
         c.set_closed(on)
         self._curve_changed()
-        self._changed(f"{c.name}: {'closed loop' if on else 'open curve'}")
+        self.changed(f"{c.name}: {'closed loop' if on else 'open curve'}")
 
     def set_curve_mode(self, mode: str):
         c = self.editing
         if c is None or mode == c.mode:
             return
-        self._checkpoint(f"plane of {c.name}")
+        self.checkpoint(f"plane of {c.name}")
         c.set_mode(mode)
         self._curve_changed()
-        self._changed(f"{c.name}: {self._plane_report(c)}")
+        self.changed(f"{c.name}: {self._plane_report(c)}")
 
     def done(self):
         if self.editing is None:
@@ -628,7 +631,7 @@ class AnnotationController(QObject):
         self.dock.edit_box.hide()
         if self.vp.tool == "curve_edit":
             self.vp.set_tool(None)
-        self._changed()
+        self.changed()
 
     def _curve_changed(self):
         self._lines.pop(self.editing.id, None)
@@ -646,7 +649,7 @@ class AnnotationController(QObject):
         if self.editing is None:
             return
         if not self._dragging:
-            self._checkpoint(f"{'move a point of' if side == 0 else 'gradient of'} {self.editing.name}")
+            self.checkpoint(f"{'move a point of' if side == 0 else 'gradient of'} {self.editing.name}")
             self._dragging = True
         self._mark_edited(self.editing)
         if side == 0:
@@ -667,12 +670,12 @@ class AnnotationController(QObject):
         if c is None or self.project is None:
             return
         p = self._world(self.project.xyz[store_index])
-        self._checkpoint(f"add a point to {c.name}")
+        self.checkpoint(f"add a point to {c.name}")
         self._mark_edited(c)
         i = c.insert(p, int(self.project.source_index[store_index]))
         self.active = None
         self._curve_changed()
-        self._changed(f"{c.name}: point {i + 1} of {len(c.nodes)} added; {self._plane_report(c)}")
+        self.changed(f"{c.name}: point {i + 1} of {len(c.nodes)} added; {self._plane_report(c)}")
 
     def remove_node(self, i: int | None = None):
         c = self.editing
@@ -682,7 +685,7 @@ class AnnotationController(QObject):
         if len(c.nodes) <= 2:
             self.dock.status.setText("a curve keeps at least two points")
             return
-        self._checkpoint(f"remove a point from {c.name}")
+        self.checkpoint(f"remove a point from {c.name}")
         try:
             c.remove(i)
         except ValueError as e:
@@ -691,11 +694,11 @@ class AnnotationController(QObject):
         self._mark_edited(c)
         self.active = None
         self._curve_changed()
-        self._changed(f"{c.name}: point {i + 1} removed, {len(c.nodes)} left")
+        self.changed(f"{c.name}: point {i + 1} removed, {len(c.nodes)} left")
 
     def auto_gradient(self):
         if self.editing is not None and self.active is not None:
-            self._checkpoint(f"automatic gradient on {self.editing.name}")
+            self.checkpoint(f"automatic gradient on {self.editing.name}")
             self.editing.make_auto(self.active)
             self._curve_changed()
             self.save()
@@ -768,7 +771,7 @@ class AnnotationController(QObject):
         ea, eb = self.dock.join_first_end.currentData(), self.dock.join_second_end.currentData()
         gap = float(np.linalg.norm(np.subtract(*self._join_ends())))
         names = (a.name, b.name)
-        self._checkpoint(f"join {names[0]} and {names[1]}")
+        self.checkpoint(f"join {names[0]} and {names[1]}")
         try:
             c = self.model.join_curves(a.id, ea, b.id, eb, self.dock.join_close.isChecked())
         except ValueError as e:
@@ -777,7 +780,7 @@ class AnnotationController(QObject):
         self.joining = None
         self.dock.join_box.hide()
         self._lines.clear()
-        self._changed(f"{names[0]} ({ea}) joined to {names[1]} ({eb}) across {gap:.2f} m: {c.describe()}; "
+        self.changed(f"{names[0]} ({ea}) joined to {names[1]} ({eb}) across {gap:.2f} m: {c.describe()}; "
                       f"{self._plane_report(c)}")  # fmt: skip
         return c
 
@@ -814,11 +817,11 @@ class AnnotationController(QObject):
             self.dock.status.setText("nothing selected")
             return
         into = None if top_level else self._directory_for_new()
-        self._checkpoint("new point set")
+        self.checkpoint("new point set")
         ps = self.model.add(PointSet(sel.copy(), [dict(op) for op in self.w.selection_ops]))
         if into is not None:
             self.model.move([ps.id], into.id)
-        self._changed(f"{ps.name}: {sel.size:,} points" + (f", in {into.name}" if into is not None else ", at the top level"))
+        self.changed(f"{ps.name}: {sel.size:,} points" + (f", in {into.name}" if into is not None else ", at the top level"))
         self.dock.show()
         self.dock.raise_()
 
@@ -843,7 +846,7 @@ class AnnotationController(QObject):
         rec = dict(res["record"], height_axis=f.name, axis=[float(v) for v in f.normal],
                    selection=[dict(op) for op in self.w.selection_ops])  # fmt: skip
         into = None if top_level else self._directory_for_new()
-        self._checkpoint("new marker")
+        self.checkpoint("new marker")
         mk = self.model.add(Marker(self._world(res["position"]), rec))
         if into is not None:
             self.model.move([mk.id], into.id)
@@ -855,7 +858,7 @@ class AnnotationController(QObject):
                      f"circumference; the plain mean was {rec['mean_off_centre'] * 100:.1f} cm off its centre")  # fmt: skip
             if rec["points_dropped"]:
                 text += f"; {rec['points_dropped']:,} points off the circle left out"
-        self._changed(text + (f", in {into.name}" if into is not None else ", at the top level"))
+        self.changed(text + (f", in {into.name}" if into is not None else ", at the top level"))
         self.dock.show()
         self.dock.raise_()
         return mk
@@ -893,9 +896,9 @@ class AnnotationController(QObject):
             k, v = (s.strip() for s in line.split(":", 1))
             if k and v:
                 attrs[k] = v
-        self._checkpoint(f"attributes of {mk.name}")
+        self.checkpoint(f"attributes of {mk.name}")
         mk.attributes = attrs
-        self._changed(f"{mk.name}: " + (", ".join(f"{k} {v}" for k, v in attrs.items()) or "no attributes"))
+        self.changed(f"{mk.name}: " + (", ".join(f"{k} {v}" for k, v in attrs.items()) or "no attributes"))
         return attrs
 
     def move_markers(self, dh: float | None = None) -> int:
@@ -907,14 +910,14 @@ class AnnotationController(QObject):
             self.dock.status.setText("select markers (or directories holding them) to move first")
             return 0
         dh = float(self.dock.marker_dz.value() if dh is None else dh)
-        self._checkpoint(f"move {len(mks)} marker{'s' * (len(mks) != 1)}")
+        self.checkpoint(f"move {len(mks)} marker{'s' * (len(mks) != 1)}")
         names = set()
         for m in mks:
             n, name = self._marker_axis(m)
             names.add(name)
             m.position = np.asarray(m.position, np.float64) + dh * n
             m.source = dict(m.source, moved=[*m.source.get("moved", []), {"along": name, "by": dh}])
-        self._changed(f"{len(mks)} marker{'s' * (len(mks) != 1)} moved {dh:+.3f} m along {', '.join(sorted(names))}")
+        self.changed(f"{len(mks)} marker{'s' * (len(mks) != 1)} moved {dh:+.3f} m along {', '.join(sorted(names))}")
         return len(mks)
 
     def set_marker_axis(self) -> int:
@@ -926,12 +929,12 @@ class AnnotationController(QObject):
             return 0
         f = self._frame()
         n = [float(v) for v in f.normal]
-        self._checkpoint(f"{len(mks)} marker{'s' * (len(mks) != 1)} on {f.name}")
+        self.checkpoint(f"{len(mks)} marker{'s' * (len(mks) != 1)} on {f.name}")
         for m in mks:
             old = m.source.get("height_axis")
             m.source = dict(m.source, height_axis=f.name, axis=n,
                             axis_changes=[*m.source.get("axis_changes", []), {"from": old, "to": f.name}])  # fmt: skip
-        self._changed(f"{len(mks)} marker{'s' * (len(mks) != 1)} now on the height axis {f.name} (positions kept)")
+        self.changed(f"{len(mks)} marker{'s' * (len(mks) != 1)} now on the height axis {f.name} (positions kept)")
         return len(mks)
 
     def click_marker(self, p_local):
@@ -951,7 +954,7 @@ class AnnotationController(QObject):
         if label and not self.w.taxonomy.fits(label, "marker"):
             label = ""  # e.g. a line-only label in the box
         into = self._directory_for_new()
-        self._checkpoint("new marker (click)")
+        self.checkpoint("new marker (click)")
         mk = self.model.add(Marker(self._world(res["position"]), rec))
         mk.label = label
         if into is not None:
@@ -962,7 +965,7 @@ class AnnotationController(QObject):
         if rec["across"] == "circle":
             text += f", radius {rec['radius']:.3f} m, {rec['coverage']:.0%} of the circumference"
         text += (f", labelled {label}" if label else "") + (f"; {rec['note']}" if rec.get("note") else "")
-        self._changed(text + (f", in {into.name}" if into is not None else ""))
+        self.changed(text + (f", in {into.name}" if into is not None else ""))
         return mk
 
     def _label_fits(self, label: str, nodes) -> str | None:
@@ -991,9 +994,9 @@ class AnnotationController(QObject):
     def new_directory(self, name: str | None = None):
         sel = [self.model.node(i) for i in self.selected_ids()]
         parent = sel[0].id if len(sel) == 1 and sel[0].kind == "directory" else None
-        self._checkpoint("new directory")
+        self.checkpoint("new directory")
         d = self.model.new_directory(name, parent)
-        self._changed(f"{d.name} created")
+        self.changed(f"{d.name} created")
         item = self._item_of(d.id)
         if item is not None and name is None:
             self.dock.tree.editItem(item, 0)  # type its name
@@ -1004,9 +1007,9 @@ class AnnotationController(QObject):
             self.move(ids, dest)
 
     def move(self, ids, dest):
-        self._checkpoint(f"move {len(ids)} entr{'y' if len(ids) == 1 else 'ies'}")
+        self.checkpoint(f"move {len(ids)} entr{'y' if len(ids) == 1 else 'ies'}")
         self.model.move(ids, dest)
-        self._changed()
+        self.changed()
 
     def _selected_items(self) -> list:
         """Items selected in the tree, with the items inside selected directories."""
@@ -1026,10 +1029,10 @@ class AnnotationController(QObject):
         if why:
             self.dock.status.setText(why)
             return
-        self._checkpoint(f"label {label!r}" if label else "remove label")
+        self.checkpoint(f"label {label!r}" if label else "remove label")
         for i in ids:
             self.model.node(i).label = label
-        self._changed(f"{len(ids)} entr{'y' if len(ids) == 1 else 'ies'} labelled {label!r}" if label else
+        self.changed(f"{len(ids)} entr{'y' if len(ids) == 1 else 'ies'} labelled {label!r}" if label else
                       f"label removed from {len(ids)} entr{'y' if len(ids) == 1 else 'ies'}")  # fmt: skip
         note = self.w.taxonomy.not_for_new_labels(label) if label else None
         if note:
@@ -1066,12 +1069,12 @@ class AnnotationController(QObject):
             (self.model.unlocked.discard if on else self.model.unlocked.add)(label)
         else:
             (self.model.locks.add if on else self.model.locks.discard)(label)
-        self._changed(f"{label!r} {'locked: its points cannot be selected' if on else 'unlocked'}")
+        self.changed(f"{label!r} {'locked: its points cannot be selected' if on else 'unlocked'}")
 
     def set_locks_on(self, on: bool):
         """All locks on or off (the choice of labels is kept)."""
         self.model.locks_on = bool(on)
-        self._changed("locks on: locked labels cannot be selected" if on else "locks off: everything can be selected")
+        self.changed("locks on: locked labels cannot be selected" if on else "locks off: everything can be selected")
 
     def set_uncertain(self, on: bool | None = None):
         """Mark the selected items uncertain (None: uncertain, or sure if all already are). Directories cannot be."""
@@ -1082,11 +1085,11 @@ class AnnotationController(QObject):
                                      if picked else "select point sets, segments or curves first")  # fmt: skip
             return
         on = not all(n.uncertain for n in nodes) if on is None else bool(on)
-        self._checkpoint("uncertain" if on else "sure")
+        self.checkpoint("uncertain" if on else "sure")
         for n in nodes:
             n.uncertain = on
         names = ", ".join(n.name for n in nodes[:3]) + (f" and {len(nodes) - 3} more" if len(nodes) > 3 else "")
-        self._changed(f"{names}: label {'uncertain' if on else 'sure'}")
+        self.changed(f"{names}: label {'uncertain' if on else 'sure'}")
 
     def _class_ids(self) -> dict:
         return {c["name"]: int(c["id"]) for c in self.w.taxonomy.classes if int(c["id"]) != 0}
@@ -1196,9 +1199,9 @@ class AnnotationController(QObject):
         if idx.size == 0:
             self.dock.ops_result.setText(f"{name} is empty: nothing saved")
             return None
-        self._checkpoint(f"new point set {name}")
+        self.checkpoint(f"new point set {name}")
         ps = self.model.add(PointSet(idx, [rec]), name=name)
-        self._changed(f"{name}: {idx.size:,} points")
+        self.changed(f"{name}: {idx.size:,} points")
         self.dock.ops_result.setText(self.dock.status.text())
         return ps
 
@@ -1234,7 +1237,7 @@ class AnnotationController(QObject):
         scale, mx = self.dock.smooth_scale.value(), self.dock.smooth_max.value()
         tr = getattr(self.w, "trace", None)
         tol = tr.dock.fit_tol.value() if tr is not None else 0.01
-        self._checkpoint(f"smooth {len(items)} line{'s' * (len(items) != 1)}")
+        self.checkpoint(f"smooth {len(items)} line{'s' * (len(items) != 1)}")
         out = [self.model.smooth(x.id, scale, mx, tol) for x in items]
         for x in items:
             self._lines.pop(x.id, None)
@@ -1244,7 +1247,7 @@ class AnnotationController(QObject):
                     self.editing, self.active = y, None
         recs = [y.source["smoothed"][-1] for y in out]
         w0, w1 = sum(r["wiggle_deg"][0] for r in recs), sum(r["wiggle_deg"][1] for r in recs)
-        self._changed(f"{len(out)} line{'s' * (len(out) != 1)} smoothed over {scale:.2f} m: turning {w0:.0f}° -> "
+        self.changed(f"{len(out)} line{'s' * (len(out) != 1)} smoothed over {scale:.2f} m: turning {w0:.0f}° -> "
                       f"{w1:.0f}°, points moved up to {max(r['largest_shift'] for r in recs) * 100:.1f} cm, "
                       f"{sum(r['points'] for r in recs)} points -> {sum(len(y.nodes) for y in out)}")  # fmt: skip
         return out
@@ -1263,13 +1266,13 @@ class AnnotationController(QObject):
         if self.editing is not None and self.editing.id in {x.id for x in items}:
             self.done()
         f = self._frame()
-        self._checkpoint(f"{len(items)} {frm}s to {to}s")
+        self.checkpoint(f"{len(items)} {frm}s to {to}s")
         out = [self.model.convert(x.id, to, tolerance, f.normal, f.origin, f.name) for x in items]
         for x in items:
             self._lines.pop(x.id, None)
         n_before = sum(len(x.vertices) if frm == "polyline" else len(x.nodes) for x in items)
         n_after = sum(len(y.nodes) if to == "curve" else len(y.vertices) for y in out)
-        self._changed(f"{len(out)} {frm}{'s' * (len(out) != 1)} to {to}s within {tolerance * 100:.1f} cm: "
+        self.changed(f"{len(out)} {frm}{'s' * (len(out) != 1)} to {to}s within {tolerance * 100:.1f} cm: "
                       f"{n_before} points became {n_after}")  # fmt: skip
         return out
 
@@ -1282,13 +1285,13 @@ class AnnotationController(QObject):
             if not c.isValid():
                 return
             color = c.name()
-        self._checkpoint("colour")
+        self.checkpoint("colour")
         inside = 0
         for i in ids:
             x = self.model.node(i)
             x.color = color
             inside += x.kind != "directory" and self.model.parent(i) is not None
-        self._changed(f"{inside} item(s) inside a directory keep its colour" if inside else None)
+        self.changed(f"{inside} item(s) inside a directory keep its colour" if inside else None)
 
     def delete_selected(self, confirm: bool = True):
         ids = self.selected_ids()
@@ -1299,7 +1302,7 @@ class AnnotationController(QObject):
                 self.w, "Delete", f"Delete {len(ids)} selected entr{'y' if len(ids) == 1 else 'ies'} "
                 f"({n_items} item{'s' * (n_items != 1)} in all)?") != QMessageBox.StandardButton.Yes:  # fmt: skip
             return
-        self._checkpoint(f"delete {len(ids)} entr{'y' if len(ids) == 1 else 'ies'}")
+        self.checkpoint(f"delete {len(ids)} entr{'y' if len(ids) == 1 else 'ies'}")
         for i in ids:
             try:
                 self.model.remove(i)
@@ -1307,7 +1310,7 @@ class AnnotationController(QObject):
                 pass  # already gone with its directory
         if self.editing is not None and self.editing.id not in {m.id for m in self.model.items()}:
             self.done()
-        self._changed()
+        self.changed()
 
     def rename_selected(self):
         """Type a new name for the one entry selected in the tree (F2, from anywhere in the window): a directory or an
@@ -1337,10 +1340,10 @@ class AnnotationController(QObject):
         if not ids:
             self.dock.status.setText("select directories or items to duplicate first")
             return
-        self._checkpoint(f"duplicate {len(ids)} entr{'y' if len(ids) == 1 else 'ies'}")
+        self.checkpoint(f"duplicate {len(ids)} entr{'y' if len(ids) == 1 else 'ies'}")
         copies = self.model.duplicate(ids)
         self.dock.tree.clearSelection()  # the copies are selected instead, e.g. to drag them elsewhere
-        self._changed(", ".join(c.name for c in copies[:3]) + (f" and {len(copies) - 3} more" if len(copies) > 3 else ""))
+        self.changed(", ".join(c.name for c in copies[:3]) + (f" and {len(copies) - 3} more" if len(copies) > 3 else ""))
         for c in copies:
             item = self._item_of(c.id)
             if item is not None:
@@ -1371,9 +1374,9 @@ class AnnotationController(QObject):
             if not path:
                 return
         n0 = len(self.model.items())
-        self._checkpoint("import")
+        self.checkpoint("import")
         warnings = self.model.import_file(path, self.project)
-        self._changed("\n".join([f"imported {len(self.model.items()) - n0} items", *warnings]))
+        self.changed("\n".join([f"imported {len(self.model.items()) - n0} items", *warnings]))
 
     # ---- panel ------------------------------------------------------------------------------------------------
 
@@ -1452,10 +1455,10 @@ class AnnotationController(QObject):
                 return
             on = item.checkState(2) == Qt.CheckState.Checked
             if on != x.uncertain:
-                self._checkpoint(f"{x.name}: {'uncertain' if on else 'sure'}")
+                self.checkpoint(f"{x.name}: {'uncertain' if on else 'sure'}")
                 x.uncertain = on
                 # rebuilt once Qt is done with this item (rebuilding now would delete it under the signal)
-                QTimer.singleShot(0, lambda: self._changed(f"{x.name}: label {'uncertain' if on else 'sure'}"))
+                QTimer.singleShot(0, lambda: self.changed(f"{x.name}: label {'uncertain' if on else 'sure'}"))
             return
         if col == 1:  # the label typed in the tree
             label = item.text(1).strip()
@@ -1465,13 +1468,13 @@ class AnnotationController(QObject):
                 QTimer.singleShot(0, self.rebuild_tree)  # put the label shown back
                 return
             if label != x.label:
-                self._checkpoint(f"label {label!r}" if label else "remove label")
+                self.checkpoint(f"label {label!r}" if label else "remove label")
                 x.label = label
                 QTimer.singleShot(0, self._changed)  # rebuilding the tree now would delete the item under the editor
             return
         name = item.text(0).strip()
         if col == 0 and name and name != x.name:
-            self._checkpoint(f"rename {x.name}")
+            self.checkpoint(f"rename {x.name}")
             x.name = name
             self.save()
 

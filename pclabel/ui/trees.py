@@ -225,7 +225,7 @@ class TreeController(QObject):
         record = tree_ops.band_record(self.ground, self.ground_h, frame_name, axis, self.band(), fit,
                                       w.project.offset, what, self.params())  # fmt: skip
         a = w.annot
-        a._checkpoint(f"save a {what}")
+        a.checkpoint(f"save a {what}")
         trees = self._target()
         tree = tree_ops.add_object(a.model, trees, record, sel, w.selection_ops, w.taxonomy)
         name, part = tree.name, "trunk" if what == TREE else "pole"
@@ -233,7 +233,7 @@ class TreeController(QObject):
         text = (f"{name}: {sel.size:,} points; marker at ({x:.3f}, {y:.3f}, {z:.3f}); radius {fit['radius']:.3f} m, girth "
                 f"{fit['girth']:.2f} m; fit {fit['rms'] * 100:.1f} cm rms, {fit['coverage']:.0%} of the circumference"
                 + (f"; {fit['dropped']:,} points off the {part} left out of the fit" if fit["dropped"] else ""))  # fmt: skip
-        a._changed(text)
+        a.changed(text)
         self.fill_directories(keep=trees.id)
         self.status.setText(text)
         return tree
@@ -250,11 +250,11 @@ class TreeController(QObject):
         if not todo:
             self.status.setText("every saved tree has its marker")
             return 0
-        a._checkpoint(f"add markers to {len(todo)} trees")
+        a.checkpoint(f"add markers to {len(todo)} trees")
         for home, rec in todo:
             tree_ops.add_marker(a.model, home, rec, w.taxonomy)  # the marker first, as for a new tree
         text = f"added {len(todo)} marker{'s' * (len(todo) != 1)} to trees saved before, from their bands' positions"
-        a._changed(text)
+        a.changed(text)
         self.status.setText(text)
         return len(todo)
 

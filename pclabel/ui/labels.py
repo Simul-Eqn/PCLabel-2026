@@ -43,10 +43,9 @@ from PySide6.QtWidgets import (
 
 from pclabel.render.shaders import MODE_LABELS
 from pclabel.store.annotations import PALETTE
-from pclabel.store.project import source_doc
 from pclabel.store.util import write_json_atomic
 from pclabel.taxonomy import hex_rgb
-from pclabel.tools.labelmap import LABEL_MAP_SCHEMA, LabelMapParams, label_map
+from pclabel.tools.labelmap import LabelMapParams, label_map, map_document
 from pclabel.ui.docks import _spin
 
 NO_LABEL = ""  # point sets, segments and curves without a label (own or inherited)
@@ -519,7 +518,9 @@ class LabelsController(QObject):
         png = Path(job["path"])
         if png.suffix.lower() != ".png":
             png = png.with_suffix(".png")
-        doc = self._document(job, res, seconds)
+        doc = map_document(self.w.project, self.w.taxonomy, res, job["codes"], {k: self.color(k) for k in job["codes"]},
+                           job["frame"], job["vectors"], Path(job["path"]).with_suffix(".png").name,
+                           LEGEND_WIDTH if job["legend"] else 0, job["context"], seconds)  # fmt: skip
         image = self._image(res["rgba"], doc["legend"] if job["legend"] else None)
         if not image.save(str(png)):
             self.dock.status.setText(f"could not write {png}")
@@ -530,32 +531,6 @@ class LabelsController(QObject):
         t = res["transform"]
         self.dock.status.setText(f"{t['width']:,} x {t['height']:,} px at {100 * t['pixel']:g} cm on {job['frame'].name}"
                                  f", {seconds:.1f} s: {png} (and {side.name})")  # fmt: skip
-
-    def _document(self, job, res, seconds) -> dict:
-        w = self.w
-        class_ids = {c["name"]: int(c["id"]) for c in w.taxonomy.classes}
-        flags = {f["name"]: int(f["bit"]) for f in w.taxonomy.flags}
-        legend = []
-        for lab, code in job["codes"].items():
-            legend.append({"label": lab, "color": self.color(lab), "code": code, "class_id": class_ids.get(lab),
-                           "flag_bit": flags.get(lab), "pixels": res["pixels"].get(code, 0),
-                           "points_drawn": res["points"].get(code, 0)})  # fmt: skip
-        vectors = [dict(info, map_xy=np.round(uv, 4).tolist()) for info, uv in zip(job["vectors"], res["vectors_uv"])]
-        return {
-            "schema": LABEL_MAP_SCHEMA,
-            "source": source_doc(w.project),
-            "offset": [float(v) for v in w.project.offset],
-            "plane": job["frame"].to_json(),
-            "transform": res["transform"],
-            "image": {"png": Path(job["path"]).with_suffix(".png").name, "map_columns": res["transform"]["width"],
-                      "legend_strip": LEGEND_WIDTH if job["legend"] else 0},  # fmt: skip
-            "params": dict(res["params"], context=job["context"]),
-            "overlaps": "smaller point sets are drawn over larger ones; segments and curves over the points",
-            "legend": legend,
-            "vectors": vectors,
-            "seconds": round(seconds, 2),
-            "created": time.strftime("%Y-%m-%d %H:%M:%S"),
-        }
 
     def _image(self, rgba, legend) -> QImage:
         h, wd = rgba.shape[:2]

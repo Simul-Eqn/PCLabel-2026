@@ -196,9 +196,9 @@ class LabelImportController(QObject):
             a.dock.status.setText("nothing imported: no layer ticked")
             return None
         n = sum(len(d.children) for d in top.children)
-        a._checkpoint(f"import labels {source.path.name}")
+        a.checkpoint(f"import labels {source.path.name}")
         a.model.root.append(top)
         labelled = sum(len(d.children) for d in top.children if d.label)
-        a._changed(f"imported {n:,} features in {len(top.children)} layers from {source.path.name} "
+        a.changed(f"imported {n:,} features in {len(top.children)} layers from {source.path.name} "
                    f"({labelled:,} with a label)")  # fmt: skip
         return top

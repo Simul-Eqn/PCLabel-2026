@@ -195,3 +195,33 @@ def label_map(xyz_local, offset, normal, origin, along, layers, vectors, colors,
         "params": {k: (None if not np.isfinite(v) else v) if isinstance(v, float) else v
                    for k, v in asdict(p).items()},  # fmt: skip
     }
+
+
+def map_document(project, taxonomy, res: dict, codes: dict, colors: dict, frame, vectors: list, png_name: str,
+                 legend_strip: int, context: bool, seconds: float) -> dict:  # fmt: skip
+    """The label map's JSON sidecar (schema ``pclabel.label-map/1``) for ``res`` (``label_map``'s result) drawn with
+    ``codes`` ({label: code}) in ``colors`` ({label: #rrggbb}) on ``frame`` (a HeightFrame); ``vectors``: the drawn
+    lines' info, in the order of ``res["vectors_uv"]``."""
+    import time
+
+    from pclabel.store.project import source_doc
+
+    class_ids = {c["name"]: int(c["id"]) for c in taxonomy.classes}
+    flags = {f["name"]: int(f["bit"]) for f in taxonomy.flags}
+    legend = [{"label": lab, "color": colors[lab], "code": code, "class_id": class_ids.get(lab),
+               "flag_bit": flags.get(lab), "pixels": res["pixels"].get(code, 0),
+               "points_drawn": res["points"].get(code, 0)} for lab, code in codes.items()]  # fmt: skip
+    return {
+        "schema": LABEL_MAP_SCHEMA,
+        "source": source_doc(project),
+        "offset": [float(v) for v in project.offset],
+        "plane": frame.to_json(),
+        "transform": res["transform"],
+        "image": {"png": png_name, "map_columns": res["transform"]["width"], "legend_strip": legend_strip},
+        "params": dict(res["params"], context=context),
+        "overlaps": "smaller point sets are drawn over larger ones; segments and curves over the points",
+        "legend": legend,
+        "vectors": [dict(info, map_xy=np.round(uv, 4).tolist()) for info, uv in zip(vectors, res["vectors_uv"])],
+        "seconds": round(seconds, 2),
+        "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
