@@ -110,7 +110,7 @@ compare with the expected source indices.
   journal/ops.jsonl       one line per operation (below)
   journal/data/<op>.npz   indices and previous values per operation
   frames.json             height frames, schema pclabel.frames/1 (below)
-  annotations.json        segments, curves, polylines, markers and point sets in directories, schema pclabel.annotations/7 (below)
+  annotations.json        segments, curves, polylines, markers and point sets in directories, schema pclabel.annotations/9 (below)
   annotations/<id>.npy    a point set's store indices (int64, sorted)
   surfaces/<name>.npz     reference / relief surfaces (grid origin, cell, heights, mask, parameters)
   regions.json            assessed regions (polygon, z range, per-class status) and patrol records
@@ -150,10 +150,11 @@ relative to the offset), `size` f8 (quadtree node edge, m), `start count` u8 (st
 
 Frames never change stored coordinates (D-006). Algorithms can read this file to use the same "height above road".
 
-**`annotations.json` and exported annotations, schema `pclabel.annotations/7`** (2 added `uncertain` on nodes,
+**`annotations.json` and exported annotations, schema `pclabel.annotations/9`** (2 added `uncertain` on nodes,
 2026-10-22; 3 keeps it on items only, 2026-10-26; 4 added `label_colors`, 2026-10-28; 5 added `labels_exported`,
 2026-10-29; 6 added `polyline` items, 2026-11-04; 7 added `marker` items, 2026-11-04, and reads schema 6's one-vertex
-polylines as markers. Schema 1 files still read,
+polylines as markers; 8 added a marker's `attributes`, 2026-11-05; 9 added the curve plane mode `free` and a
+curve's `source`, 2026-11-06. Schema 1 files still read,
 with nothing uncertain; in schema 2 files an uncertain directory passes its mark to the items that take its label;
 schema 3 files read with no label colours. Written atomically; it replaced `pclabel.groups/1`, which is no longer
 read):
@@ -175,8 +176,11 @@ read):
     - `plane`: `{mode, normal, point, tilt_deg, height_axis: {name, normal, origin}, height (mode "axis" only)}`.
       The plane is `dot(p − point, normal) = 0`. Its mode is `ends` (through the first and last clicked points,
       turned to fit the others), `axis` (perpendicular to the height axis at the points' mean height) or `fit`
-      (the least-squares plane through all the clicked points). A curve
-      document without `mode` (drawn before modes existed) is read as `axis`.
+      (the least-squares plane through all the clicked points) or `free` (no plane: the nodes are the clicked
+      points; `normal` is the height axis and `point` the first node, the plane handles are dragged level in). A
+      curve document without `mode` (drawn before modes existed) is read as `axis`.
+    - `source` (schema 9, only when a tool drew it): as a polyline's (the tracers, `line_join`), plus `curve_fit:
+      {tolerance, largest_off, vertices, nodes}` (how closely the curve follows the traced line it replaced).
     - `nodes`; `handles_in` and `handles_out` (positions, not offsets); `manual` (per node: handles set by the
       labeller); `closed` (a loop: one more piece from the last node back to the first); `picked` (the clicked
       points before projection); `picked_source_indices`; `length_m`.
@@ -185,13 +189,34 @@ read):
   - `polyline` (imported labels, e.g. a DXF's lines): `vertices` (exact, straight pieces between them), `closed`
     (an outline), `length_m`, `source` (where it came from: for a DXF `{format: "dxf", file, sha256, layer, entity,
     handle}`, plus `mesh_face` for a polyface mesh's face, `radius` for a circle or arc).
+  - On a curve or polyline's `source` (schema 9): `converted: {from: "polyline", vertices}` or `{from: "curve", mode,
+    nodes, tolerance}` (Annotations "to curves" / "to polylines"; a polyline from a curve also gets the curve's
+    height axis as `axis`), and `edited: true` once the labeller changed a tool's line in curve edit mode;
+    `smoothed: [{scale, max_shift, largest_shift, wiggle_deg: [before, after], points}]`, one per "smooth";
+    `kerb_fit: [{params (KerbFitParams), height_axis, side, sections, anchors, low_steps, outliers, no_edge,
+    top_unseen, height_median, off_anchors_rms, off_anchors_max, largest_move, mean_move, bridged [[from m, m]],
+    kept [[from m, m]], seconds}]`, one per "smooth onto the kerb top" (which also sets `assisted: true`).
   - `marker` (a position: where a thing is): `position`, `source`. Placed from selected points (Ctrl+M):
     `{tool: "marker", across: "mean" | "circle", height: "mean" | "lowest", points, spread (m, rms across the
     height axis), height_range, height_axis, axis, selection (the selection operations)}`, and for a circle `trim,
     radius, girth, rms, points_fitted, points_dropped, coverage (share of the circumference), mean_off_centre (m:
     how far the points' mean was from the circle's centre)}`. Placed by the tree tool: `{tool: "tree", object,
     across: "circle", height: "ground", points, points_dropped, radius, girth, rms, coverage, ground, ground_h, band,
-    height_axis, axis}`. Imported from a DXF: as a polyline's source, plus `block`, `scale`, `rotation_deg`.
+    height_axis, axis}`. Imported from a DXF: as a polyline's source, plus `block`, `scale`, `rotation_deg`. Placed
+    by the clearance check: `{tool: "clearance", assisted: true, params, line, line_id, points_checked, height_axis,
+    axis, clearance (m above the line), points, along, across}`. Moves and height-axis changes add `moved [{along,
+    by}]` and `axis_changes [{from, to}]`.
+    `attributes` (schema 8): an asset's fields as strings, e.g. `{asset_id: "LP-0012", type: "..."}`.
+  - Lines drawn by a tool (polylines) keep the tool in `source`: the curb tracer `{tool: "curb_trace", assisted:
+    true, params (CurbTraceParams), start, toward, height_axis, axis, stopped, run, piece, line: "toe" | "lip",
+    heights {median, min, max}, face_seen}`; the marking tracer `{tool: "line_trace", assisted: true, params
+    (LineTraceParams, with the threshold used), start, toward, height_axis, axis, stopped, run, piece, bridged [m]}`;
+    a cover outline `{tool: "cover_template", assisted: true, template (OutlineParams), marker (its id), axis}`;
+    joined pieces `{tool: "line_join", assisted (if any piece was), params (JoinParams), from [names], from_ids,
+    bridged [m], dropped {name: vertices}, height_axis}`. The curb tracer's params include `follow` ("toe" | "lip").
+  - `trace_log.jsonl` in the project directory: one JSON line per tracer run (saved or not): `{time, mode, start,
+    toward (world), height_axis, axis, params, stopped, seconds, steps, pieces, height_median | threshold}` or
+    `error`.
   - `points`: `count`, `provenance` (the selection operations), and either `file` (the project's copy: store
     indices in `annotations/<id>.npy`) or `source_indices` (an export: sorted source indices, the export order).
 - **Label import profiles** (`config/label_imports/*.yaml`, schema `pclabel.label-import-profile/1`): `{schema,
@@ -417,7 +442,9 @@ As built in M1 (`pclabel/render/`). `renderer.py` uses moderngl only and runs in
 | observations | JSONL as stored, plus markdown in the OBSERVATIONS.md template |
 | threshold / statistics reports | JSON, CSV, markdown (SPEC §10) |
 | frames / surfaces | JSON / npz, so algorithms can use the same "height above road" |
-| annotations | JSON, schema `pclabel.annotations/7` (above): segments, curves, polylines, markers and point sets (source indices) in directories; all, the selected entries, or by label: only the items whose label (own or inherited; "" for none) is in `labels_exported`, each in its directories (which keep their names and labels but only those items), so the file imports with the same labels |
+| vectors (CAD) | DXF, ASCII R12 (AC1009): a layer per label (upper-cased; `UNLABELLED`), in the label's colour (nearest AutoCAD colour index); segments as LINE, curves and polylines as 3D POLYLINE (closed where they are), markers as POINT; scan-frame coordinates with the offset; point sets left out (`io/vector_export.py`) |
+| vectors (GIS) | GeoJSON FeatureCollection, `pclabel {schema: "pclabel.vector-export/1", coordinates (scan frame, local metres: not longitude/latitude), source, offset}`; a LineString (closed: first point repeated) or Point per item with `{id, name, kind, label, label_path (the taxonomy path), layer, path (directories), uncertain, closed, length_m, assisted (drawn by a tool), source, attributes}` |
+| annotations | JSON, schema `pclabel.annotations/9` (above): segments, curves, polylines, markers and point sets (source indices) in directories; all, the selected entries, or by label: only the items whose label (own or inherited; "" for none) is in `labels_exported`, each in its directories (which keep their names and labels but only those items), so the file imports with the same labels |
 | label map | PNG (the map, then a 240 px legend strip on the right) and a JSON sidecar, schema `pclabel.label-map/1`: `source`, `offset`, `plane` (the frame), `transform {plane_normal, plane_origin (world), map_x, map_y, pixel, width, height (the map's columns and rows, without the strip), top_left (map metres), pixel_to_world}` (world = plane_origin + (top_left[0] + (col + 0.5) pixel) map_x + (top_left[1] − (row + 0.5) pixel) map_y), `image {png, map_columns, legend_strip}`, `params {pixel, dot, line_width, margin, h_min, h_max (null: none), max_side, context}`, `overlaps` (the drawing order), `legend [{label, color, code, class_id, flag_bit, pixels, points_drawn}]`, `vectors [{name, kind, label, closed, uncertain, map_xy}]` (map metres), `seconds`, `created` |
 | a plane | JSON, schema `pclabel.plane/1`: `name`, `equation {a, b, c, d}` (`a x + b y + c z + d = 0`, unit normal up, scan coordinates: the left side is the height above the plane), `z_of_xy {p, q, r}`, `normal`, `origin`, `along`, `fit` (the frame's report), `source`, `offset` |
 

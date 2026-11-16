@@ -116,6 +116,7 @@ class Display:
     flat_color: tuple = (0.80, 0.80, 0.78)
     gamma: float = 0.6
     intensity_range: tuple = (0.0, 1.0)  # stretched to black..white before gamma
+    intensity_hide: bool = False  # hide points outside intensity_range (in every colour mode)
     height_range: tuple = (0.0, 10.0)
     period: float = 0.03
     h0: float = 0.0
@@ -496,7 +497,7 @@ class PointRenderer:
         u = self._uniforms(self.prog, {
             "u_mvp": np.ascontiguousarray(mvp.T, np.float32).tobytes(),
             "u_mode": int(d.mode), "u_gamma": float(d.gamma),
-            "u_irange": tuple(float(v) for v in d.intensity_range),
+            "u_irange": tuple(float(v) for v in d.intensity_range), "u_ihide": int(d.intensity_hide),
             "u_h_normal": tuple(float(v) for v in d.height_normal),
             "u_h_origin": tuple(float(v) for v in np.asarray(d.height_origin, np.float64) - off),
             "u_band_on": int(d.band_on), "u_band": tuple(float(v) for v in d.band),

@@ -10,6 +10,8 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QComboBox, QStyledItemDelegate, QStyleOptionViewItem
 
+from pclabel.taxonomy import only_words
+
 DEPTH = Qt.ItemDataRole.UserRole + 7  # an entry's depth in the tree
 INDENT = 16  # pixels per level
 
@@ -35,7 +37,7 @@ def taxonomy_entries(taxonomy) -> list:
     out = []
     for c, depth in taxonomy.tree_order(enabled_only=True):
         only = c.get("only")
-        tip = c.get("def", "") + (f" ({only}s only)" if only else "")
+        tip = c.get("def", "") + (f" ({only_words(only)} only)" if only else "")
         out.append((c["name"], depth, tip, only))
     out += [(f["name"], 0, f"flag: {f.get('def', '')}", None) for f in taxonomy.flags]
     return out

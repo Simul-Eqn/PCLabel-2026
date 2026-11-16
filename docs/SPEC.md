@@ -673,6 +673,12 @@ parameters.
     (`source.height_axis`, `axis`); its pin is drawn along it. "Use the active height axis" makes the active one (z
     or a fitted plane) the selected markers' own, keeping their positions (the user's choice: switch the axis, do
     not re-place). One undo step; each change is added to `source.axis_changes`.
+  - **Quick markers by clicking** (`Shift+M`, "click to place markers"; 2026-11-05, the user's request): each click
+    on the cloud places a marker, one undo step each, in the selected directory. With "circle centre" it snaps to
+    a circle fitted to the points within 0.40 m of the click and 0.25 m above and below (click a pole anywhere: the
+    marker is on its axis); with "lowest point" it drops to the ground below (the 2nd percentile within 0.7 m).
+    "label them" gives it the label box's label (not a line-only one). Source `{tool: "marker_click", across,
+    height, click, ...the circle fit}`.
   - Labelled like any item; exported with `position` and `source`; counted under `marker` in "export labels".
   - Imported map symbols (a DXF's block references: poles, trees, manholes) are markers; schema 6's one-vertex
     polylines are read as markers.
@@ -863,6 +869,97 @@ parameters.
   (boundary tracing) and refine.
 - **Export:** local-frame JSON and DXF layers. This is the bridge to the sketch plan.
 
+**Road tools after LiDAR360MLS (built 2026-11-05, the user's request: "implement these features in our pclabel system
+too", from `reference/LiDAR360MLS/`, a gnss.ae article on LiDAR360MLS's road tools)** (`tools/curbtrace.py`,
+`tools/linetrace.py`, `tools/clearance.py`, `tools/templates.py`, `io/vector_export.py`, `ui/trace.py`). Their lines
+and markers are marked `assisted` with the tool's parameters: the parameters are the thresholds an algorithm would
+tune, and the labeller's corrections are the evidence (R-018, proposed).
+- **Curb tracer** (`Ctrl+T`; the Trace panel): click the road beside a kerb, then a point further along. In 0.3 m
+  steps, a cross-section across the direction finds the road's height near the click side and, outward, the **toe**
+  (the last 2 cm bin wholly at road level, within 3 cm) and the **lip** (the first bin at least the curb height,
+  0.06 m, above the road, followed by more kerb top). Both are measured (LiDAR360MLS draws the upper line as the
+  lower plus the set height). The next section follows the toes at the start's offset.
+  - **Curb height 0.06 m** (2026-11-05; LiDAR360MLS's default is 0.10 m): the user's Ctrl+T on ExchangeGreen 1 found
+    no kerb. Cross-sections along their two curb curves step 8-10 cm (road to kerb top), under 0.10 m. With 0.06 m
+    every start where the scan has the kerb traced to the 10 m test limit; the rest were on flat stretches (at most
+    2 cm of rise) or with almost no points.
+  - Every run is logged in the project's `trace_log.jsonl` (start, direction, settings, steps, why it stopped).
+  - **Follow the top edge only** ("follow: the top edge only", `follow: "lip"`; 2026-11-05, the user's request): the
+    trace steps along the lip and needs no road seen beside the kerb (the lowest surface before the rise stands for
+    the toe); only the lip is saved; the face width is not checked.
+  - **A kerb top not seen:** a rise with nothing seen for 0.12 m behind it counts (the lip is the top of the face
+    seen, `top_seen: false`): on ExchangeGreen 1 a kerb's face was scanned but not its top.
+  - **Tight curves** (the user's "curb trace 01 wraparound" took several tries): the direction comes from a chord over
+    the last 3 steps and keeps turning at the rate measured from the 3 before (at most half of 30° per step); a step
+    that turns more than 30° off that curve, or finds no step, is tried once more at half a step before it counts
+    as a gap.
+  - **Replaying the user's 21 logged runs on ExchangeGreen 1** (`trace_log.jsonl`, same starts and settings): 334
+    steps (90 m) as they ran; 404 steps (109 m) with the changes above; 544 steps (148 m) following the top edge
+    only. The wraparound's run (18:24:29) went from 32 steps to 45 (top edge only: 51).
+- **Join traced pieces** (the Trace panel; 2026-11-05, the user's request: "a directory of curb traces ... supposed to
+  be joined together"; `tools/linejoin.py`): for the lines selected in Annotations (or in selected directories),
+  label by label: the longest line is kept, a vertex of another within 0.10 m of a kept line repeats it (a retry)
+  and is dropped, what is left splits into pieces (under 0.5 m dropped), then the closest free ends within 1.0 m are
+  joined while the join turns no more than 60° from either line; a line whose ends meet is closed. The result: a
+  directory "<name> joined" beside the first one, a line per joined line, saved as the panel's "save as" says
+  (below; source `line_join`: from, bridged gaps, dropped vertices, assisted if any piece was); the originals and the directories they leave empty go, unless "keep
+  the originals". One undo step. On the user's "curb trace 01" and its wraparound: 22 lip pieces (91 m) into 10
+  lines, 22 toe pieces into 9, bridging 10 gaps of 0.1-0.7 m (mostly 0.6 m drains).
+  - Where a section has no step (a drain inlet, a toe hidden from the scanner) it goes on for up to 1 m and breaks
+    the lines there (never drawn over); a face not seen (no points between toe and lip) is allowed up to 0.40 m and
+    marked; it stops at a lower kerb, a sharper turn than 30° per step, 300 m, or back at its start.
+  - **Side, found automatically** (default, 2026-11-05: the user's Ctrl+T found no kerb with the side left by
+    default): both sides of the start are tried; a start clicked on the kerb's top or the pavement is moved onto
+    the road below. Failing that, it says the biggest rise it saw on each side. A single toe that would turn the
+    line more than 30° is an outlier, skipped as a gap. On streets 1, 20 starts at the user's road points 0.2-0.5 m
+    from their curb lines: 9 reached the 30 m test limit, others stopped at lowered kerbs (3 found no step: at most
+    4 cm of rise); the lip within 1-3 cm of the user's curb lines; kerb heights 0.12-0.19 m.
+  - Settings: step, curb height, side (found, left or right of the direction), search across (1 m), face up to, skip gaps up
+    to, at most; which lines to save. Runs in a worker; drawn as it goes (toe orange, lip yellow).
+  - Space stops, Backspace takes back a step, two more clicks trace on into the same result, Enter saves a directory
+    "curb trace NN" of lines `toe k` (`curb_bottom`) and `lip k` (`curb_top`) per piece, each with its heights.
+  - **Save as curves** (default, 2026-11-06, the user's request: "use curve ... then it can also more easily be
+    edited"; the Trace panel's "save as ... within", for the tracers and the join tool): each line is a curve with
+    **no plane** (mode "free", below), through as few of the traced vertices as keep the curve within 1 cm of every
+    one (Douglas-Peucker at 1 cm, then the vertex furthest off added as a node until all are within; recorded in
+    the source's `curve_fit`: tolerance, largest distance, vertices, nodes). "polylines" keeps every vertex
+    exactly. A planar curve would not do: the user's joined kerb lines on ExchangeGreen 1 are 3-35 cm off any one
+    plane (a 25.5 m kerb top rises 1.18 m). On those lines a curve within 1 cm takes 36-72 nodes for 19-27 m
+    (64-89 traced vertices); within 2 cm, 21-45.
+  - On the synthetic street (2M points): the north kerb (facing the scanner) traced 16 m in 0.13 s, in three pieces
+    broken at the two drains; toe within 3 cm of y = 3.70, lip within 2 cm, height 0.149 m (true 0.15). The south
+    kerb (facing away): the toe is the last road point seen, the lip within 3 cm, height 0.147 m.
+  - On `mobile-colorized-v2-1` (595M points), started 0.3 m beside 30 of ROCK's BOTTOM_OF_CURB lines: 182 m traced in 1.6 s; toe a median 6.5 cm (xy) and 3 mm (height) from ROCK's bottom line, lip 5.0 cm and 4 mm from its top line, kerb 0.142 m high (p10-p90 0.131-0.152); about 10 % of steps more than 4 m from any ROCK curb line (edges ROCK did not draw); runs stopped at rolled faces wider than 0.40 m, sharp turns, and cars at the kerb. The road is followed outward bin by bin (each within 3 cm of the last), so a US gutter's slope is road.
+- **Marking tracer** (`Ctrl+Shift+T`): click the paint, then further along. The threshold is halfway between the
+  paint's median intensity at the click and the road's (the darker side, 0.3–0.6 m away); the start must stand out by
+  3 road MADs. Each 0.25 m step keeps the points within 0.10 m of the road's height and at or above the threshold;
+  their median across is the line's centre if they are no wider than twice the line width.
+  - Solid: gaps up to 2 m (the stretch) are bridged and recorded. Dashed: a piece per dash, from where its paint
+    starts to where it ends; gaps under 1 m are inside a dash; up to 12 m to the next dash.
+  - Settings: solid or dashed, step, line width (0.20 m; narrower keeps a double line apart), search, the threshold
+    (from the start, or set), stretch, next dash within, at most, the label (`road_line`).
+  - On the synthetic street: the dashed centre line's dashes end within 0.1 m of x = 0, 6, 9; the double yellow
+    line's two lines (0.10 m wide, 0.15 m apart) traced separately at y 3.04 and 3.29 (true 3.05, 3.30).
+- **Intensity window** (Display: "hide points outside the intensity range"): only points inside the intensity range
+  are drawn, in any colour mode, to see paint against the road. Display only: selection tools still reach the hidden
+  points; Point info gives a clicked point's intensity.
+- **Clearance along a line** (the Trace panel): select a line in Annotations (a traced toe, a lane line) and check:
+  the points (of vegetation labels, or all) between 0.5 and 5.0 m above the line, within 3.5 m across it (either
+  side, or one), between its ends. Hits within 0.5 m are one place (at least 20 points); each place becomes a marker
+  at its lowest point named "clearance 3.82 m at 10.4 m", with a point set of all the hits, in "clearance NN". The
+  scan shows only what it captured: a stretch with no place may still need looking at.
+- **Cover outlines and asset attributes:** select markers (e.g. Ctrl+M on a cover's points; the circle fit gives
+  its size) and "outline at the selected markers": a closed circle (0.60 m, or the marker's fitted diameter) or
+  rectangle (0.60 x 0.90 m, turned) labelled `cover`, with the marker in a directory "cover NN". "Reshape" redraws
+  the selected outlines with the box's shape, size and rotation. `cover` goes on lines and markers (taxonomy `only:
+  [line, marker]`). "attributes..." in Annotations edits a marker's fields as "key: value" lines (e.g. `asset_id:
+  LP-0012`); the tree shows the id; exports keep them.
+- **Vector export** (Labels panel: "export vectors..."): the segments, curves, polylines and markers with the ticked
+  labels as DXF (a layer per label in its colour, true 3D, the scan's coordinates; R12, which FARO Zone, AutoCAD
+  and Leica software read) or GeoJSON (with id, label and its taxonomy path, directories, uncertain, assisted,
+  source and attributes; local metres, said so in the file). Shapefile and KML left out (the user, 2026-11-05: KML
+  needs longitude and latitude, which the scans do not have; Shapefile a new dependency).
+
 **Imported labels (built 2026-11-04, the user's request: "import different kinds of labels", first ROCK Robotic's
 planimetrics DXF for `mobile-colorized-v2-1`)** (`io/dxf.py`, `store/label_import.py`, `ui/label_import.py`).
 - **File > Import labels (DXF)...** (`Ctrl+Shift+I`): the file is read in a worker thread, then a dialog shows:
@@ -914,6 +1011,9 @@ planimetrics DXF for `mobile-colorized-v2-1`)** (`io/dxf.py`, `store/label_impor
        clicked points at any tilt (normal: their smallest-variance direction), through their centroid. Unlike
        "through the ends", the ends may move a little. Points on a line get the plane through it that is
        flattest on the height axis.
+     - **no plane (3D)** (added 2026-11-06 at the user's request; the tracers' and join tool's curves): the nodes
+       are the clicked points where they are, so a curve follows a kerb up and down a slope. Handles and dragged
+       nodes move level (across the height axis) at their node. The panel reports the nodes' heights.
   2. Each clicked point is replaced by its closest point on the plane (a *node*). The panel reports the plane (its
      height, or its tilt from perpendicular to the height axis) and how far the points were from it.
   3. The curve runs through the nodes in that plane: cubic Bézier pieces between consecutive nodes. By default
@@ -933,8 +1033,62 @@ planimetrics DXF for `mobile-colorized-v2-1`)** (`io/dxf.py`, `store/label_impor
      - Manual handles are kept (swapped on a reversed curve). Ends closer than 2 cm become one node. "And close
        the loop" also joins the outer ends.
      - Both curves are replaced; undo brings them back.
-- **Curve edit mode** follows the curve's creation, or comes from "edit curve" or a double-click in the panel. Only
+- **Curve edit mode** follows the curve's creation, or comes from "edit line" or a double-click in the panel. Only
   the nodes react to the mouse; dragging elsewhere still moves the camera.
+  - **Polylines too** (2026-11-06, the user's request): a polyline opens in the same mode with straight pieces and
+    no handles or plane: drag a vertex (level across the tool's recorded height axis, else z), Shift+click the cloud
+    to add one where the line passes closest, Ctrl+click (or Del) to remove one (a line keeps two, an outline
+    three), "closed loop" to open or close it.
+  - A line a tool drew (it has a `source`), changed here by hand, gets `source.edited: true`: the labeller's
+    corrections are the evidence for tuning the tool.
+- **Curves and polylines, either way** (2026-11-06, the user's request; Annotations "to curves" / "to polylines",
+  for the selected items and those in selected directories; one undo step): a polyline becomes a curve with no
+  plane within the Trace panel's "within" (1 cm) of its vertices; a curve becomes a polyline whose straight pieces
+  stay within 2 mm of it. Each keeps its place, id, name, colour, label and mark; `source.converted` says what it
+  was. Converting there and back does not give the original vertices (undo does).
+- **Smooth** (2026-11-06, the user's request; Annotations "smooth over 1.00 m, moving ≤ 0.050 m", for the selected
+  curves and polylines and those in selected directories, or the line being edited; one undo step;
+  `analysis/curves.py` `smooth_line`): the line is resampled every 2 cm and each point replaced by a Gaussian
+  average along the line (sigma: "over"), heights too, but moved no more than "moving ≤" (a real corner is rounded
+  by no more than that). An open line's ends stay (mirrored through each end, so near an end it keeps its
+  direction); a loop wraps round. A curve stays a curve with its plane mode, as few nodes as keep within the Trace
+  panel's "within"; a polyline stays a polyline (within 2 mm). The source appends to `smoothed` (scale, max_shift,
+  largest_shift, wiggle_deg before and after, points); press again to smooth more. "Wiggle" is the total turning
+  across the height axis, measured every 0.1 m. On the user's joined kerb lines on ExchangeGreen 1 (22.8 m
+  curb_bottom, 19.4 m curb_top): 1 m / 5 cm took the turning from 683° to 512° and 435° to 384° (nodes 52 to 41,
+  36 to 34); 1 m / 10 cm to 353° and 324°; 0.5 m / 3 cm only to 630° and 397° (the traces wander more than 3 cm,
+  so the limit holds most points back); about 20 ms a line.
+- **Smooth onto the kerb top** (2026-11-06, the user's request: "a specialized smooth thing that also tries to keep
+  to the ground truth as much as possible and not lose it", for the top-of-kerb line only; Trace panel "smooth onto
+  the kerb top", for the selected lines or the line being edited; a worker thread; each line replaced in place, a
+  curve staying a curve with no plane, one undo step; `tools/kerbfit.py`):
+  1. Every 0.3 m along the line a cross-section is taken (the curb tracer's, following the top edge) and the **top of
+     the kerb's face** found: the first bin within 2 cm of the kerb top's own height (the median surface 0.2 m
+     beyond the first bin 6 cm above the road). Only where the kerb's top was scanned: where only the face was, its
+     highest scanned point is no top edge (on the user's `lip 1`, ExchangeGreen 1, 112 of 301 sections; those spots
+     scattered 0-20 cm across). One within 0.20 m across of the line is an *anchor*.
+  2. **Full-height kerb only:** an anchor whose step is under 80 % of the line's median step is left out (the kerb
+     sloping down to the road). A stretch without anchors up to 8 m long (a lowered kerb at a driveway or crossing)
+     is **carried across**: its height straight from the kerb top on one side to the other, its position following
+     the old line's shape moved by the corrections measured at each side. A longer stretch (nothing measured: not
+     this scan's kerb) **stays where it was**, the corrections fading out over 4 m.
+  3. **Clutter:** an anchor more than 5 cm off a quadratic through its neighbours within 0.9 m is dropped (a real
+     corner is followed by its neighbours).
+  4. **Smoothing held to the measurements:** the line through the anchors is averaged along its length (Gaussian,
+     sigma 1 m) but kept within 2 cm of the same line de-noised by a cubic fitted 0.9 m either way (Savitzky-Golay:
+     takes out the measurements' 1-3 cm scatter without pulling a corner in).
+  - Settings in the panel: smooth over, within, search across, carry across up to, full height ≥. The source
+    appends to `kerb_fit` (the parameters and counts) and the line becomes assisted; an earlier `edited` mark goes.
+  - On the user's kerb lines on ExchangeGreen 1 (read only): `tli_right` (103 m, hand-drawn) 263 kerb tops
+    measured, the line within 1.2 cm (rms) of them, moved 2.6 cm on average (5.5 at most), 10 stretches carried
+    across (longest 6.3 m); `curb_top 1` (46.6 m, the traced wraparound) 134 measured, 1.4 cm, moved at most 7.5 cm,
+    turning 538° to 260°; `bi_curb/curb_top 1` (200 m) 371 measured, 1.0 cm, 26 stretches carried across, at most
+    42 cm moved where the drawn line spiked 30 cm up (carried across at the kerb top); 0.5-2.5 s a line.
+  - Developed on those lines: a 1 m bending penalty alone cut the wraparound's 1 m-radius corner by 82 cm (its
+    measurements then looked like clutter); a 2 cm limit against the raw measurements left kinks; the clutter test
+    against neighbours and the limit against the de-noised line fixed both.
+  - **Drag a node** to move it (2026-11-06): on the curve's plane, or with no plane level at its height; its
+    handles move with it; one undo step per drag. A planar curve's plane is fitted again.
   - Click a node to give it a gradient: its two handles appear (yellow).
   - Drag a handle to set the gradient there. The handle follows the mouse on the curve's plane. The other handle
     turns to stay on the same line (the curve stays smooth) and keeps its length.
@@ -1016,6 +1170,7 @@ planimetrics DXF for `mobile-colorized-v2-1`)** (`io/dxf.py`, `store/label_impor
 | `Shift+Enter` | finish a curve as a closed loop (built) |
 | `V` / `Shift+V` | line segment (click two points) / curve (click points, Enter: edit its gradients) (built early, §13) |
 | `Ctrl+G` | make the selection a point set (an annotation item; built early, §13), in the directory selected in Annotations |
+| `Shift+M` | markers by clicking: each click places one (circle centre: snapped to the pole or trunk around the click; lowest point: dropped to the ground), with the label box's label |
 | `Ctrl+M` / `Ctrl+Shift+M` | a marker where the selection is (its mean, or a circle's centre; its mean height or lowest point), in the directory selected in Annotations / at the top level |
 | `Ctrl+Shift+G` | the same, at the top level |
 | `Ctrl+D` | duplicate the directories and items selected in Annotations |
@@ -1046,6 +1201,7 @@ planimetrics DXF for `mobile-colorized-v2-1`)** (`io/dxf.py`, `store/label_impor
 | `Ctrl+E` | eye-dome lighting on/off (M1) |
 | `Ctrl+O` / `Ctrl+I` | open project / import scan (M1) |
 | `Ctrl+Shift+I` | import labels made elsewhere (a DXF's layers) |
+| `Ctrl+T` / `Ctrl+Shift+T` | trace a curb / a road marking: two clicks (start, direction); Space stops, Backspace takes back a step, Enter saves |
 | right drag / right mouse + `W A S D Q E` | rotate, as left drag / fly: once a key is pressed the mouse looks until the button goes up (while the right button is held these keys move instead of their usual action) |
 
 Built in M1: `T`, `C` / `Shift+C`, `W`, `[` `]`, `Shift+[` `Shift+]` and the rows marked M1.

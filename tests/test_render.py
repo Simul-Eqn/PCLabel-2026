@@ -346,3 +346,22 @@ def test_clip_to_a_point_set(gl, target, taxonomy):
     lab = label_bytes(src, 0, 1000, r.marks)  # the set's bit in the third byte, apart from the flags
     assert lab.shape == (1000, 4) and np.array_equal(lab[:, 2] == 1, src.xyz[:1000, 0] >= 0) and not lab[:, 1].any()
     r.close()
+
+
+def test_intensity_window_hides_points_outside_it(gl, target, taxonomy):
+    """The intensity window (the Display panel's "hide points outside the intensity range"): points whose intensity is
+    outside the range are not drawn, in any colour mode; inside it they are."""
+    src = grid_source(lambda x: np.full_like(x, 11.0), inten=0.5)
+    r = make(gl, src, taxonomy)
+    d = r.display
+    d.mode = MODE_RGB
+    d.intensity_hide, d.intensity_range = True, (0.6, 1.0)
+    r.render(bev(), (W, H), target, wait=True)
+    assert centre(target)[0].sum() == 0
+    d.intensity_range = (0.4, 0.6)
+    r.render(bev(), (W, H), target, wait=True)
+    assert (centre(target)[1].sum(1) > 0).mean() > 0.95
+    d.intensity_hide, d.intensity_range = False, (0.6, 1.0)  # off: the range only stretches the intensity colours
+    r.render(bev(), (W, H), target, wait=True)
+    assert (centre(target)[1].sum(1) > 0).mean() > 0.95
+    r.close()

@@ -128,7 +128,7 @@ def test_profiles_and_the_import_as_annotations(project, tmp_path):
     known = {c["name"] for c in tax.classes} | {f["name"] for f in tax.flags} | {""}
     assert set(rock.layers.values()) <= known  # every label in the profile is a taxonomy class or flag
     # and fits what the layer holds: the curb's edges are lines, a manhole a marker
-    assert tax.only("curb_top") == "line" and tax.only("cover") == "marker" and tax.only("lamp_post") is None
+    assert tax.only("curb_top") == "line" and tax.only("cover") == ["line", "marker"] and tax.only("lamp_post") is None
     c = project.offset + np.asarray(project.meta["bounds"]["min"]) + 1.0  # inside the scan
     f = tmp_path / "rock.dxf"
     f.write_text(dxf_text(x0=c[0], y0=c[1], z0=c[2]), encoding="utf-8")

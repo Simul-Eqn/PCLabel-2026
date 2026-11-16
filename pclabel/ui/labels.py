@@ -90,9 +90,13 @@ class LabelsDock(QDockWidget):
         self.export_ann = QPushButton("export annotations...")
         self.export_ann.setToolTip("the point sets, segments and curves with the ticked labels, in their directories, "
                                    "as an annotations file (like \"export all\"; imports with the same labels)")  # fmt: skip
+        self.export_vec = QPushButton("export vectors...")
+        self.export_vec.setToolTip("the segments, curves, polylines and markers with the ticked labels, for CAD or GIS: "
+                                   "DXF (a layer per label) or GeoJSON (with attributes), in the scan's coordinates")  # fmt: skip
         self.tick_all = QPushButton("tick all")
         self.tick_none = QPushButton("tick none")
         erow.addWidget(self.export_ann)
+        erow.addWidget(self.export_vec)
         erow.addWidget(self.tick_all)
         erow.addWidget(self.tick_none)
         v.addLayout(erow)
@@ -168,6 +172,7 @@ class LabelsController(QObject):
         d.legend.itemDoubleClicked.connect(lambda it, col: self.pick_color(it.data(0, Qt.ItemDataRole.UserRole)))
         d.export.clicked.connect(lambda: self.export_map())
         d.export_ann.clicked.connect(lambda: self.export_annotations())
+        d.export_vec.clicked.connect(lambda: self.export_vectors())
         d.tick_all.clicked.connect(lambda: self.set_shown(self.labels_in_use()))
         d.tick_none.clicked.connect(lambda: self.set_shown([]))
         d.cancel.clicked.connect(self.cancel)
@@ -281,6 +286,36 @@ class LabelsController(QObject):
         n = self._model().export(path, w.project, labels=labels)
         shown = ", ".join(lab or "(no label)" for lab in labels)
         self.dock.status.setText(f"exported {n} item{'' if n == 1 else 's'} ({shown}) to {path}")
+        return path
+
+    def export_vectors(self, path=None):
+        """The segments, curves, polylines and markers with the ticked labels as DXF (a layer per label, in the
+        labels' colours) or GeoJSON (with attributes), by the file's suffix (io/vector_export.py)."""
+        from pclabel.io.vector_export import write_vectors
+
+        w = self.w
+        if w.project is None:
+            return None
+        labels = [lab for lab in self.labels_in_use() if lab not in self.hidden]
+        if not labels:
+            self.dock.status.setText("tick the labels to export first")
+            return None
+        if path is None:
+            path, _ = QFileDialog.getSaveFileName(w, "Export vectors with the ticked labels", f"{w.project.name} vectors.dxf",
+                                                  "DXF drawing (*.dxf);;GeoJSON (*.geojson)")  # fmt: skip
+            if not path:
+                return None
+        try:
+            res = write_vectors(path, self._model(), w.project, {k: self.color(k) for k in labels}, labels, w.taxonomy)
+        except (ValueError, OSError) as e:
+            self.dock.status.setText(f"no export: {e}")
+            return None
+        if "layers" in res:
+            parts = ", ".join(f"{k} {n}" for k, n in res["layers"].items())
+            self.dock.status.setText(f"exported {res['entities']} entities in {len(res['layers'])} layers ({parts}) to {path}")
+        else:
+            parts = ", ".join(f"{n} {k}" for k, n in res["by_kind"].items())
+            self.dock.status.setText(f"exported {res['features']} features ({parts}) to {path}")
         return path
 
     def fill_legend(self):

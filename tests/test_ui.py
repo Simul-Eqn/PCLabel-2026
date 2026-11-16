@@ -600,6 +600,14 @@ def test_undo_and_redo(window):
     assert np.allclose(a.editing.polyline(), plain) and a.editing.id == c.id
     window.redo()  # the drag again
     assert np.allclose(a.editing.polyline(), dragged)
+    before = a.editing.nodes[2].copy()
+    for k in range(1, 4):  # a node itself dragged (side 0), in the curve's plane
+        a.handle_dragged(2, 0, before - p.offset + (0.0, 0.1 * k, 0))
+    a.drag_finished()
+    assert a.editing.nodes[2][1] == pytest.approx(before[1] + 0.3, abs=0.02)
+    assert vp.edit_targets["node_planes"][2][1] == pytest.approx(a.editing.nodes[2] - p.offset)
+    window.undo()  # the whole node drag
+    assert np.allclose(a.editing.nodes[2], before)
     a.done()
 
     d = a.new_directory("lines")
@@ -1351,7 +1359,7 @@ def test_labels_view_and_label_map(window, tmp_path):
     assert a.model.label_colors["marking"] == marking_color
     lc.pick_color("marking", "#00ff88")
     saved = json.loads((window.project.path / "annotations.json").read_text(encoding="utf-8"))
-    assert saved["schema"] == "pclabel.annotations/7" and saved["label_colors"]["marking"] == "#00ff88"
+    assert saved["schema"] == "pclabel.annotations/9" and saved["label_colors"]["marking"] == "#00ff88"
     assert tuple(lc.color_table(lc.codes())[lc.codes()["marking"], :3]) == (0, 255, 136)
     lc.legend_rows()["road"].setCheckState(0, Qt.CheckState.Unchecked)  # road left out of the view and the map
     assert "road" in lc.hidden and [c for _, c in r.label_layers] == [lc.codes()["marking"]]
@@ -1936,3 +1944,383 @@ def test_tree_tool_band_fit_and_keys_in_the_fields(window):
     assert tr.save() in a.model.node(verge.id).children
     window.toggle_tool(None)
     assert not vol.keep_height and not tr.start.isChecked()
+
+
+def test_trace_panel_curb_and_marking(window, monkeypatch):
+    """Ctrl+T: two clicks run the tracer in a worker (logged in trace_log.jsonl); its result is drawn, a step can be taken back, Enter in the view
+    saves a directory of polylines labelled curb_bottom / curb_top, marked assisted with the parameters. Ctrl+Shift+T:
+    a marking's pieces labelled road_line. (The tracers themselves are tested on a dense street in their own files.)"""
+    import threading
+
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
+    from PySide6.QtWidgets import QApplication
+
+    import pclabel.ui.trace as tr_mod
+
+    app = QApplication.instance()
+    assert window.settle()
+    tr, a, vp = window.trace, window.annot, window.viewport
+    act = {x.shortcut().toString(): x for x in window.actions()}
+    threads = []
+
+    def fake_curb(xyz, tiles, start, toward, axis, params, filters, progress):
+        threads.append(threading.current_thread())
+        x = np.arange(6) * params.step
+        toe = np.c_[start[0] + x, np.full(6, start[1] + 0.3), np.full(6, start[2])]
+        res = {"toe": toe, "lip": toe + [0, 0.02, 0.15], "height": np.full(6, 0.15), "face": np.full(6, 0.02),
+               "seen": np.ones(6, bool), "piece": np.array([0, 0, 0, 1, 1, 1]), "stopped": "no step", "closed": False,
+               "params": {"step": params.step, "curb_height": params.curb_height}}  # fmt: skip
+        progress([{"toe": t, "lip": t, "piece": 0} for t in toe[:2]])
+        return res
+
+    monkeypatch.setattr(tr_mod, "run_curb", fake_curb)
+    act["Ctrl+T"].trigger()
+    assert vp.tool == "trace" and tr.mode() == "curb" and tr.dock.start.isChecked()
+    p0 = np.asarray(window.project.xyz[100], np.float64)
+    vp.seed_picked.emit(p0, "replace")
+    assert "further along" in tr.dock.status.text()
+    vp.seed_picked.emit(p0 + [1.0, 0, 0], "replace")
+    t0 = time.perf_counter()
+    while (tr._busy or not tr.runs) and time.perf_counter() - t0 < 30:
+        app.processEvents()
+    assert threads and threads[0] is not threading.main_thread() and len(tr.runs) == 1
+    assert "6 steps (2 pieces)" in tr.dock.status.text()
+    log = [json.loads(line) for line in (window.project.path / "trace_log.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert log[-1]["mode"] == "curb" and log[-1]["steps"] == 6 and log[-1]["stopped"] == "no step"
+    lines, _ = tr.overlay(window.project.offset)
+    assert len(lines) == 4  # toe and lip of each piece
+    QApplication.sendEvent(vp, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Backspace, Qt.KeyboardModifier.NoModifier))
+    assert len(tr.runs[0]["result"]["toe"]) == 5  # a step taken back
+    n0 = len(a.model.root)
+    a.dock.tree.clearSelection()
+    QApplication.sendEvent(vp, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier))
+    d = a.model.root[-1]
+    assert len(a.model.root) == n0 + 1 and d.name.startswith("curb trace ")
+    names = [c.name for c in d.children]
+    assert names == ["toe 1", "lip 1", "toe 2", "lip 2"]  # piece 2 has 2 steps left
+    toe = d.children[0]
+    # saved as editable curves with no plane, within 1 cm of the traced vertices
+    assert toe.label == "curb_bottom" and d.children[1].label == "curb_top" and toe.kind == "curve" and toe.mode == "free"
+    assert toe.source["tool"] == "curb_trace" and toe.source["assisted"] and toe.source["params"]["curb_height"] == 0.06
+    assert toe.source["curve_fit"]["largest_off"] <= 0.01 and toe.source["curve_fit"]["tolerance"] == 0.01
+    assert toe.source["heights"]["median"] == 0.15 and np.allclose(toe.nodes[0], p0 + [0, 0.3, 0] + window.project.offset)
+    assert not tr.runs
+    window.undo()
+    assert len(a.model.root) == n0
+    window.redo()
+
+    # a marking: the pieces as road_line polylines
+    def fake_line(xyz, inten, tiles, start, toward, axis, params, filters, progress):
+        pcs = [np.c_[start[0] + np.arange(4) * 0.25, np.full(4, start[1]), np.full(4, start[2])],
+               np.c_[start[0] + 6 + np.arange(3) * 0.25, np.full(3, start[1]), np.full(3, start[2])]]
+        return {"pieces": pcs, "bridged": [], "sections": 7, "stopped": "no paint", "threshold": 0.3,
+                "params": {"kind": params.kind, "threshold": 0.3}}  # fmt: skip
+
+    monkeypatch.setattr(tr_mod, "run_line", fake_line)
+    tr.dock.l_kind.setCurrentIndex(tr.dock.l_kind.findData("dashed"))
+    act["Ctrl+Shift+T"].trigger()
+    assert tr.mode() == "marking" and vp.tool == "trace"
+    tr.click(p0)
+    tr.click(p0 + [1.0, 0, 0])
+    t0 = time.perf_counter()
+    while (tr._busy or not tr.runs) and time.perf_counter() - t0 < 30:
+        app.processEvents()
+    assert "2 pieces" in tr.dock.status.text()
+    tr.dock.save_as.setCurrentIndex(tr.dock.save_as.findData("polyline"))  # every vertex exactly
+    d = tr.save()
+    assert [c.name for c in d.children] == ["dash 1", "dash 2"] and all(c.label == "road_line" for c in d.children)
+    assert all(c.kind == "polyline" for c in d.children) and len(d.children[0].vertices) == 4
+    tr.dock.save_as.setCurrentIndex(tr.dock.save_as.findData("curve"))
+    assert d.children[0].source["tool"] == "line_trace" and d.children[0].source["params"]["threshold"] == 0.3
+    tr.discard()
+    window.toggle_tool(None)
+
+
+def test_clearance_along_a_line(window):
+    """The Trace panel's clearance check: along a line beside the synthetic tree, all points: a place at the tree, as a
+    directory with the hits and a marker per place named with its clearance; one undo step."""
+    from PySide6.QtWidgets import QApplication
+
+    from pclabel.store.annotations import Segment
+
+    app = QApplication.instance()
+    assert window.settle()
+    tr, a, p = window.trace, window.annot, window.project
+    window.activate_frame(0)
+    w = np.asarray(p.xyz, np.float64) + p.offset
+    g = np.median(w[(np.abs(w[:, 1] - 5.0) < 0.3) & (np.abs(w[:, 0] - 3.0) < 0.3), 2])
+    seg = a.model.add(Segment(np.array([0.0, 5.0, g]), np.array([12.0, 5.0, g])), "along the verge")
+    a._changed()
+    a.dock.tree.clearSelection()
+    assert tr.clearance() is None and "select one line" in tr.dock.status.text()  # nothing selected
+    tr.dock.k_width.setValue(3.0)
+    n0 = len(a.model.root)
+    assert tr.clearance(seg.id, points="all")
+    t0 = time.perf_counter()
+    while tr._busy and time.perf_counter() - t0 < 60:
+        app.processEvents()
+    res = tr.last_clearance
+    assert res is not None and res["places"] and res["params"]["half_width"] == 3.0
+    d = a.model.root[-1]
+    assert len(a.model.root) == n0 + 1 and d.name.startswith("clearance ")
+    hits, *markers = d.children
+    assert hits.kind == "points" and hits.provenance[0]["tool"] == "clearance" and len(markers) == len(res["places"])
+    near_tree = [mk for mk in markers if abs(mk.position[0] - 6.0) < 1.5]
+    assert near_tree and near_tree[0].name.startswith("clearance ") and near_tree[0].source["assisted"]
+    window.undo()
+    assert len(a.model.root) == n0
+
+
+def test_cover_outlines_and_marker_attributes(window):
+    """A marker's attributes (key: value lines); cover outlines at selected markers (a circle sized from the marker's
+    circle fit), reshaped to a rectangle; one undo step each."""
+    from pclabel.store.annotations import Marker
+
+    assert window.settle()
+    tr, a = window.trace, window.annot
+    window.activate_frame(0)
+    p0 = np.asarray(window.project.xyz[200], np.float64) + window.project.offset
+    mk = a.model.add(Marker(p0, {"tool": "marker", "across": "circle", "points": 50, "radius": 0.31}), "MH 1")
+    a._changed()
+    a.dock.tree.clearSelection()
+    a._item_of(mk.id).setSelected(True)
+    assert a.edit_attributes("asset_id: MH-0001\ntype: sewer\nbad line\nempty:") == {"asset_id": "MH-0001", "type": "sewer"}
+    assert a.model.node(mk.id).attributes["asset_id"] == "MH-0001" and "(MH-0001)" in a.model.node(mk.id).describe()
+    window.undo()
+    assert a.model.node(mk.id).attributes == {}
+    window.redo()
+    a._item_of(mk.id).setSelected(True)
+    (d,) = tr.cover_outlines()
+    m2, ring = d.children
+    assert d.name.startswith("cover ") and m2.id == mk.id and m2.label == "cover" and ring.label == "cover"
+    assert ring.closed and ring.source["tool"] == "cover_template" and ring.source["template"]["diameter"] == pytest.approx(0.62)
+    assert np.allclose(np.linalg.norm(ring.vertices - p0, axis=1), 0.31)
+    tr.dock.o_shape.setCurrentIndex(tr.dock.o_shape.findData("rectangle"))
+    a.dock.tree.clearSelection()
+    a._item_of(d.id).setSelected(True)  # the directory: its outline
+    assert tr.reshape_outlines() == 1
+    ring = a.model.node(ring.id)
+    assert len(ring.vertices) == 4 and ring.source["template"]["shape"] == "rectangle"
+    tr.dock.o_shape.setCurrentIndex(tr.dock.o_shape.findData("circle"))
+
+
+def test_click_to_place_markers(window):
+    """Shift+M: each click places a marker (at the click, or snapped to a circle around it), labelled with the label
+    box's label when "label them" is ticked, in the selected directory; one undo step per click."""
+    assert window.settle()
+    a, vp, p = window.annot, window.viewport, window.project
+    window.activate_frame(0)
+    act = {x.shortcut().toString(): x for x in window.actions()}
+    act["Shift+M"].trigger()
+    assert vp.tool == "marker" and a.dock.click_markers.isChecked()
+    a.dock.marker_across.setCurrentIndex(a.dock.marker_across.findData("mean"))
+    a.dock.marker_height.setCurrentIndex(a.dock.marker_height.findData("mean"))
+    a.dock.tree.clearSelection()
+    a.dock.label.setCurrentText("street_furniture")
+    n0 = len(a.model.root)
+    click = np.asarray(p.xyz[300], np.float64)
+    vp.seed_picked.emit(click, "replace")
+    mk = a.model.root[-1]
+    assert len(a.model.root) == n0 + 1 and mk.kind == "marker" and mk.label == "street_furniture"
+    assert np.allclose(mk.position, click + p.offset) and mk.source["tool"] == "marker_click"
+    a.dock.label.setCurrentText("curb_top")  # a line-only label is not given to a marker
+    vp.seed_picked.emit(click, "replace")
+    assert a.model.root[-1].label == ""
+    # the synthetic tree's trunk (r 0.18 m at (6, 7.5)): snapped onto its axis, dropped to the ground
+    w = np.asarray(p.xyz, np.float64) + p.offset
+    r = np.hypot(w[:, 0] - 6.0, w[:, 1] - 7.5)
+    on_trunk = np.flatnonzero((r < 0.25) & (w[:, 2] > 1.0) & (w[:, 2] < 1.2))[0]
+    a.dock.marker_across.setCurrentIndex(a.dock.marker_across.findData("circle"))
+    a.dock.marker_height.setCurrentIndex(a.dock.marker_height.findData("lowest"))
+    vp.seed_picked.emit(np.asarray(p.xyz[on_trunk], np.float64), "replace")
+    mk = a.model.root[-1]
+    assert np.hypot(mk.position[0] - 6.0, mk.position[1] - 7.5) < 0.05 and mk.position[2] < 0.5
+    window.undo()
+    assert len(a.model.root) == n0 + 2  # one step per click
+    a.dock.marker_across.setCurrentIndex(a.dock.marker_across.findData("mean"))
+    a.dock.marker_height.setCurrentIndex(a.dock.marker_height.findData("mean"))
+    a.dock.label.setCurrentText("")
+    window.toggle_tool(None)
+    assert not a.dock.click_markers.isChecked()
+
+
+def test_join_traced_pieces(window):
+    """The Trace panel's "join the selected lines": a directory of traced pieces (with a retry over the same stretch
+    and a drain gap) becomes one line per label beside it; the originals and their emptied directory go; one undo
+    step."""
+    from pclabel.store.annotations import Polyline
+
+    assert window.settle()
+    tr, a = window.trace, window.annot
+    window.activate_frame(0)
+    o = window.project.offset + [0.0, 0.0, 0.0]
+
+    def piece(x0, x1, y=0.0):
+        x = np.arange(x0, x1 + 1e-9, 0.3)
+        return np.c_[x, np.full(len(x), y), np.zeros(len(x))] + o
+
+    d = a.model.new_directory("curb trace 99")
+    for name, v, lab in (("lip 1", piece(0, 6), "curb_top"), ("lip 2", piece(4.5, 12, 0.02), "curb_top"),
+                         ("lip 3", piece(12.6, 20), "curb_top"), ("toe 1", piece(0, 6, -0.07), "curb_bottom"),
+                         ("toe 2", piece(6.3, 9, -0.07), "curb_bottom")):  # fmt: skip
+        pl = a.model.add(Polyline(v, False, {"tool": "curb_trace", "assisted": True}), name)
+        pl.label = lab
+        a.model.move([pl.id], d.id)
+    a._changed()
+    n0 = len(a.model.root)
+    a.dock.tree.clearSelection()
+    a._item_of(d.id).setSelected(True)
+    out = tr.join_selected()
+    joined = a.model.root[-1]
+    assert joined.name == "curb trace 99 joined" and len(a.model.root) == n0  # the emptied directory went
+    assert sorted(x.label for x in out) == ["curb_bottom", "curb_top"]
+    top = next(x for x in out if x.label == "curb_top")
+    assert top.source["tool"] == "line_join" and top.source["assisted"] and len(top.source["bridged"]) == 1
+    assert sorted(top.source["from"]) == ["lip 1", "lip 2", "lip 3"]
+    assert top.kind == "curve" and top.mode == "free"
+    assert top.nodes[:, 0].min() - o[0] == pytest.approx(0) and top.nodes[:, 0].max() - o[0] > 19.5
+    window.undo()
+    assert a.model.root[-1].name == "curb trace 99" and len(a.model.root[-1].children) == 5
+    a.dock.tree.clearSelection()
+    a._item_of(a.model.root[-1].id).setSelected(True)
+    tr.join_selected(keep=True)
+    assert a.model.root[-2].name == "curb trace 99" and a.model.root[-1].name == "curb trace 99 joined"
+
+
+def test_convert_lines_and_edit_a_polyline(window):
+    """Annotations' "to curves" / "to polylines" on a selected directory: each item in its place with its id, name and
+    label, one undo step; curve edit mode on a polyline: a vertex dragged level, one added, one removed; a tool's
+    line changed by hand is marked edited."""
+    from pclabel.store.annotations import Polyline
+
+    assert window.settle()
+    a, vp = window.annot, window.viewport
+    window.activate_frame(0)
+    o = window.project.offset
+    s = np.arange(0, 9, 0.3)
+    v = np.c_[s, np.sin(s / 3), s / 10] + o  # rising and curving
+    d = a.model.new_directory("lines 98")
+    pl = a.model.add(Polyline(v, False, {"tool": "curb_trace", "assisted": True}), "lip 1")
+    pl.label = "curb_top"
+    a.model.move([pl.id], d.id)
+    a._changed()
+    a.dock.tree.clearSelection()
+    a._item_of(d.id).setSelected(True)
+    (c,) = a.convert_selected("curve")
+    assert c.kind == "curve" and c.mode == "free" and c.id == pl.id and c.name == "lip 1" and c.label == "curb_top"
+    assert c.source["converted"]["from"] == "polyline" and c.source["curve_fit"]["largest_off"] <= 0.01
+    assert a.model.parent(c.id).id == d.id and len(c.nodes) < len(v)
+    window.undo()
+    assert a.model.node(pl.id).kind == "polyline"
+    window.redo()
+    a.dock.tree.clearSelection()
+    a._item_of(d.id).setSelected(True)
+    (q,) = a.convert_selected("polyline")
+    assert q.kind == "polyline" and q.id == pl.id and "curve_fit" not in q.source and q.source["converted"]["from"] == "curve"
+
+    # editing the polyline
+    a.edit(q)
+    assert vp.tool == "curve_edit" and not a.dock.edit_mode.isVisibleTo(a.dock)
+    n = len(q.vertices)
+    before = q.vertices[2].copy()
+    for k in range(1, 3):
+        a.handle_dragged(2, 0, before - o + (0.0, 0.1 * k, 0.5))
+    a.drag_finished()
+    q = a.editing
+    assert q.vertices[2] == pytest.approx(before + [0, 0.2, 0]) and q.source["edited"]
+    a.remove_node(2)
+    assert len(a.editing.vertices) == n - 1
+    window.undo()
+    assert len(a.editing.vertices) == n and a.editing.kind == "polyline"
+    window.undo()  # the drag
+    assert a.editing.vertices[2] == pytest.approx(before) and not a.editing.source.get("edited")
+    a.done()
+
+
+def test_smooth_selected_lines(window):
+    """Annotations' "smooth": the selected directory's lines smoothed in place, one undo step; while editing."""
+    from pclabel.store.annotations import Curve
+
+    assert window.settle()
+    a = window.annot
+    window.activate_frame(0)
+    rng = np.random.default_rng(5)
+    x = np.arange(0, 12, 0.3)
+    v = np.c_[x, 0.02 * rng.standard_normal(len(x)), np.zeros(len(x))] + window.project.offset
+    d = a.model.new_directory("lines 97")
+    c = a.model.add(Curve.from_line(v, [0, 0, 1], window.project.offset, tolerance=0.005), "wavy")
+    a.model.move([c.id], d.id)
+    a._changed()
+    a.dock.tree.clearSelection()
+    a._item_of(d.id).setSelected(True)
+    (s,) = a.smooth_selected()
+    assert s.id == c.id and a.model.parent(s.id).id == d.id and len(s.nodes) < len(c.nodes)
+    assert "smoothed over 1.00 m" in a.dock.status.text()
+    window.undo()
+    assert len(a.model.node(c.id).nodes) == len(c.nodes)
+    a.edit(a.model.node(c.id))
+    a.dock.tree.clearSelection()
+    (s,) = a.smooth_selected()  # nothing selected: the line being edited
+    assert a.editing is s and "smoothed" in s.source
+    a.done()
+
+
+def test_smooth_onto_the_kerb_top(window, monkeypatch):
+    """The Trace panel's "smooth the selected lines": the kerb-top fit runs in a worker; each line is replaced in
+    place (curve stays a curve), its source records the fit; one undo step; a failure is reported."""
+    import time
+
+    from PySide6.QtWidgets import QApplication
+
+    import pclabel.ui.trace as tr_mod
+    from pclabel.store.annotations import Curve, Polyline
+
+    app = QApplication.instance()
+    assert window.settle()
+    tr, a = window.trace, window.annot
+    window.activate_frame(0)
+    o = window.project.offset
+    x = np.arange(0, 6, 0.3)
+    v = np.c_[x, 0.03 * np.sin(3 * x), np.full(len(x), 0.15)] + o
+    c = a.model.add(Curve.from_line(v, [0, 0, 1], o, tolerance=0.005, source={"tool": "curb_trace", "edited": True}), "top")
+    c.label = "curb_top"
+    pl = a.model.add(Polyline(v[:3], False, {}), "short")
+    a._changed()
+    seen = {}
+
+    def fake_fit(xyz, tiles, verts, axis, params, closed, filters, progress):
+        if len(verts) < 5:
+            raise ValueError("the line is too short to fit")
+        seen["params"] = params
+        X = curves_resample(verts)
+        X[:, 1] = 0.0
+        return {"vertices": X, "samples": verts, "state": np.zeros(len(verts), np.int8), "bridged": [(2.0, 1.2)],
+                "kept": [], "side": "left", "sections": 20, "anchors": 18, "low_steps": 2, "outliers": 0, "no_edge": 0,
+                "top_unseen": 0, "height_median": 0.15, "off_anchors_rms": 0.01, "off_anchors_max": 0.02,
+                "largest_move": 0.03, "mean_move": 0.02, "params": {}}
+
+    def curves_resample(verts):
+        from pclabel.analysis import curves
+
+        return curves.resample(verts, 0.02)
+
+    monkeypatch.setattr(tr_mod, "kerb_fit", fake_fit)
+    tr.dock.f_smooth.setValue(1.5)
+    a.dock.tree.clearSelection()
+    a._item_of(c.id).setSelected(True)
+    a._item_of(pl.id).setSelected(True)
+    assert tr.fit_selected()
+    t0 = time.perf_counter()
+    while tr._busy and time.perf_counter() - t0 < 30:
+        app.processEvents()
+    new = a.model.node(c.id)
+    assert new is not c and new.kind == "curve" and new.mode == "free" and new.label == "curb_top" and new.name == "top"
+    assert np.abs(new.polyline()[:, 1] - o[1]).max() < 0.006 and seen["params"].smooth == 1.5
+    k = new.source["kerb_fit"][0]
+    assert new.source["assisted"] and new.source["tool"] == "curb_trace" and "edited" not in new.source
+    assert k["anchors"] == 18 and k["bridged"] == [(2.0, 1.2)] and k["params"]["smooth"] == 1.5
+    assert a.model.node(pl.id) is pl  # too short: left as it was, and said so
+    assert "short: the line is too short" in a.dock.status.text() and "carried across (1.2 m)" in a.dock.status.text()
+    window.undo()
+    assert a.model.node(c.id).source.get("edited") and "kerb_fit" not in a.model.node(c.id).source

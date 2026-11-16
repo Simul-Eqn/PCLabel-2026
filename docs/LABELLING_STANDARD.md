@@ -320,6 +320,17 @@ and the measurements below.
   less than about a quarter of the circumference (mobile scans see 6–19 %, O-0015) is weak: mark the marker uncertain.
 - **Open:** whether a traffic light also needs markers for its signal heads (the sketch's signal positions, Q-17).
 
+### R-018 Lines drawn by a tool are assisted labels — proposed
+Proposed 2026-11-05 with the curb and marking tracers, the clearance check and cover templates.
+- **Rule:** a line or marker a tool drew (`source.assisted: true`, with the tool and its parameters) is a label like
+  any other once the labeller has checked it, but it is never evidence for the same tool's thresholds on its own:
+  scoring a curb or marking algorithm leaves assisted lines out, or scores them separately, unless the labeller
+  corrected or confirmed them (mark them sure, or redraw them).
+- **Why:** the tracers' settings are the thresholds being tuned (curb height, step, line width, intensity threshold);
+  tuning them against their own output is circular. The labeller's corrections are the evidence.
+- **Keep:** gaps the tracer left (a drain inlet, a hidden toe) stay gaps: do not bridge them by hand unless the edge
+  is seen.
+
 ## decision queue
 
 The open questions, each with a provisional "meanwhile" labelling choice and what to watch for, are in

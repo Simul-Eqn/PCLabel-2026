@@ -56,6 +56,7 @@ from pclabel.ui.trees import TreeController
 from pclabel.ui.split import SplitController
 from pclabel.ui.volume import VolumeController
 from pclabel.ui.import_dialog import ImportDialog, run_import
+from pclabel.ui.trace import TraceController
 from pclabel.ui.label_import import LabelImportController
 from pclabel.ui.undo import UndoStack
 
@@ -139,8 +140,13 @@ class MainWindow(QMainWindow):
         self.tabifyDockWidget(self.display, self.pieces.dock)
         self.labels = LabelsController(self)  # the labels view and the label map
         self.label_import = LabelImportController(self)  # File > Import labels (e.g. a DXF's layers)
+        self.trace = TraceController(self)  # semi-automatic curb and road-marking lines
+        self.trace.fill_labels()
+        self.viewport.trace_key.connect(self.trace.key)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.labels.dock)
         self.tabifyDockWidget(self.display, self.labels.dock)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.trace.dock)
+        self.tabifyDockWidget(self.display, self.trace.dock)
         self._locked = (None, np.empty(0, np.int64))  # (annotations version, store indices that cannot be selected)
         self.clip_set = None  # tools.sets.PointMask: the clip to point sets (drawn, picked and worked on alone)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.annot.dock)
@@ -281,6 +287,10 @@ class MainWindow(QMainWindow):
                      lambda: self.toggle_tool("piece"))  # fmt: skip
         self._action(m, "Tree or pole: click the ground at its foot, 3D select a band of it, save it", "Shift+U",
                      lambda: self.trees.begin())  # fmt: skip
+        self._action(m, "Trace a curb: click the road beside it, then further along", "Ctrl+T",
+                     lambda: self.trace.begin("curb"))  # fmt: skip
+        self._action(m, "Trace a road marking: click the paint, then further along", "Ctrl+Shift+T",
+                     lambda: self.trace.begin("marking"))  # fmt: skip
         fit = self._action(m, "Fit plane to selection (height axis)", "F", self.fit_plane)
         m.addSeparator()
         seg = self._action(m, "Line segment (click two points)", "V", lambda: self.toggle_tool("segment"))
@@ -293,6 +303,8 @@ class MainWindow(QMainWindow):
                               lambda: self.annot.marker_from_selection())  # fmt: skip
         self._action(m, "Marker where the selection is, at the top level", "Ctrl+Shift+M",
                      lambda: self.annot.marker_from_selection(top_level=True))  # fmt: skip
+        self._action(m, "Markers by clicking (each click places one; circle centre snaps to a pole)", "Shift+M",
+                     lambda: self.toggle_tool("marker"))  # fmt: skip
         self._action(m, "Rename the directory or item selected in Annotations", "F2", lambda: self.annot.rename_selected())
         self._action(m, "Duplicate the directories and items selected in Annotations", "Ctrl+D",
                      lambda: self.annot.duplicate_selected())  # fmt: skip
@@ -306,7 +318,7 @@ class MainWindow(QMainWindow):
         self._action(m, "Clear selection / tool / pick marker", "Esc", self.escape)
         m = self.menuBar().addMenu("&Window")
         for d in (self.frames_dock, self.annot.dock, self.grow, self.magic, self.volume.dock, self.split.dock,
-                  self.cleanup.dock, self.density.dock, self.pieces.dock, self.labels.dock,
+                  self.cleanup.dock, self.density.dock, self.pieces.dock, self.labels.dock, self.trace.dock,
                   self.display, self.info,
                   self.clip,
                   self.meta):
@@ -520,7 +532,7 @@ class MainWindow(QMainWindow):
     def escape(self):
         """Esc: end curve editing or drop the points of an unfinished segment or curve, else drop the tool, then
         the selection, then the pick marker."""
-        if self.annot.escape():
+        if self.annot.escape() or self.trace.escape():
             return
         if self.viewport.tool is not None:
             self.viewport.set_tool(None)
@@ -797,6 +809,12 @@ class MainWindow(QMainWindow):
             return
         if self.project is not None and tool == "tree":
             self.trees.place(p_local)
+            return
+        if self.project is not None and tool == "trace":
+            self.trace.click(p_local)
+            return
+        if self.project is not None and tool == "marker":
+            self.annot.click_marker(p_local)
             return
         if self.project is None or tool not in ("grow", "magic"):
             return

@@ -237,6 +237,24 @@ Things noticed in the scans while labelling. Observations are the main output of
     detections, misses and distances, is a possible tool.
 - status: open
 
+### O-0016 ExchangeGreen's kerbs step 8-10 cm, about half of streets 1's
+- date / who: 2026-11-05, measured by Claude while finding why the user's curb traces failed
+- scan: `ExchangeGreen/RTC360/ExchangeGreen 1.e57` · where: along the user's curves `tli_curb/tli_left` and
+  `tli_curb/tli_right` (e.g. near x 2.2, y 11.0 and x -9.2, y -51.7)
+- tags: curb, step height, threshold, R-004, Q-01
+- seen: cross-sections (20th percentile of heights in 0.1 m bins across the curve) step from road to kerb top by 8-10
+  cm at most places, 12 cm at one; the pavement behind keeps rising a few cm. In one place the kerb's face was
+  scanned (300 points in 4 cm) but not its top. On streets 1, by the curb tracer at the user's curb lines: 0.12-0.19
+  m (median about 0.165 m); O-0003 found 0.12-0.33 m there.
+- evidence: scratchpad scripts `trace_eg1.py`, `debug_section.py`, `trace_streets1.py` (this session)
+- seen elsewhere: not checked (newroad 2, the BLK ARC captures of ExchangeGreen)
+- implications:
+  - **Threshold:** a fixed curb height of 0.10 m (LiDAR360MLS's default) misses these kerbs; the tracer now uses 0.06
+    m. A curb algorithm's step threshold has to go below 8 cm for ExchangeGreen, which brings it near lowered
+    kerbs' 2-4 cm (O-0004): worth measuring how far apart the two stay.
+  - **Rule:** R-004's kerb unit is unchanged; the measured height belongs with each traced line (it is recorded).
+- status: open
+
 ### Prior observations from earlier work in this workspace (status `to verify`)
 
 These come from `../Roadrun/docs/experiments.md` and `../Roadrun/docs/project_brief.md`, made on a 5 cm voxel

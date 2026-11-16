@@ -25,12 +25,20 @@ ONLY = ("line", "marker")  # the item kinds a class can be kept to
 LINE_KINDS = ("segment", "curve", "polyline")  # items that are lines
 
 
-def fits(only: str | None, kind: str) -> bool:
-    """Whether a label kept to ``only`` (None: anything) can go on an item of this kind ("directory": anything goes,
-    its items take what fits them)."""
+def fits(only, kind: str) -> bool:
+    """Whether a label kept to ``only`` ("line", "marker", a list of them, or None: anything) can go on an item of
+    this kind ("directory": anything goes, its items take what fits them)."""
     if only is None or kind == "directory":
         return True
+    if isinstance(only, (list, tuple)):
+        return any(fits(o, kind) for o in only)
     return (only == "line" and kind in LINE_KINDS) or only == kind
+
+
+def only_words(only) -> str:
+    """"lines", "markers", "lines or markers"."""
+    kinds = list(only) if isinstance(only, (list, tuple)) else [only]
+    return " or ".join(f"{k}s" for k in kinds)
 
 
 @dataclass(frozen=True)
@@ -92,8 +100,9 @@ class Taxonomy:
     def depth(self, name: str) -> int:
         return len(self.ancestors(name))
 
-    def only(self, name: str) -> str | None:
-        """"line" or "marker" for a class only those items take; None for anything else (or a label not here)."""
+    def only(self, name: str):
+        """"line", "marker" or a list of them for a class only those items take; None for anything else (or a label
+        not here)."""
         c = self.by_name(name)
         return None if c is None else c.get("only")
 
@@ -167,8 +176,9 @@ def load_taxonomy(path: str | Path | None = None) -> Taxonomy:
             seen.add(p)
             p = parent[p]
     for c in classes:
-        if c.get("only") is not None and c["only"] not in ONLY:
-            raise ValueError(f"{path}: {c['name']}: only must be one of {ONLY}, not {c['only']!r}")
+        o = c.get("only")
+        if o is not None and not all(k in ONLY for k in (o if isinstance(o, list) else [o])):
+            raise ValueError(f"{path}: {c['name']}: only must be one of {ONLY} (or a list of them), not {o!r}")
     return Taxonomy(
         path=path,
         sha256=hashlib.sha256(raw).hexdigest(),

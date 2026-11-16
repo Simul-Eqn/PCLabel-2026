@@ -32,7 +32,7 @@ cosmetic.
   - Kerbs whose face is fully hidden (the no-point strip, O-0005).
 - **Where:** streets 1 south kerb (x 15..35, y −30..−18); any kerb on newroad 2; the same kerb type in ExchangeGreen.
 - **Ready when:** joint visibility and top width noted at 5 or more places in 2 or more scans.
-- **Evidence:** O-0013 (ROCK's drawing: a kerb unit from toe to back, top 8 cm wide, back line constructed)
+- **Evidence:** O-0013 (ROCK's drawing: a kerb unit from toe to back, top 8 cm wide, back line constructed), O-0016 (ExchangeGreen kerbs step 8-10 cm)
 
 ### Q-02 Which line is "the curb line" in the vector map? · R-004 · high (for M9, not for point labels)
 - **Decide:** toe (road level), lip (top edge), face, or both toe and lip as separate lines.

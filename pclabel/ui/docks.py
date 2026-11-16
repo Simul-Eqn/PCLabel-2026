@@ -66,6 +66,10 @@ class DisplayDock(QDockWidget):
         for x in (self.imin, self.imax, self.iauto):
             ir.addWidget(x)
         f.addRow("intensity range", ir)
+        self.ihide = QCheckBox("hide points outside the intensity range")
+        self.ihide.setToolTip("the intensity window: only points whose intensity is in the range are drawn (e.g. to "
+                              "see paint); display only: selection tools still reach the hidden points")  # fmt: skip
+        f.addRow("", self.ihide)
         self.gamma = _spin(0.1, 4.0, 0.6, 0.05, 2)
         f.addRow("intensity gamma", self.gamma)
         hr = QHBoxLayout()
@@ -107,7 +111,7 @@ class DisplayDock(QDockWidget):
         for s in (self.imin, self.imax, self.gamma, self.hmin, self.hmax, self.period, self.h0, self.size, self.max_size,
                   self.edl_strength, self.edl_radius):  # fmt: skip
             s.valueChanged.connect(self.changed)
-        for c in (self.adaptive, self.round, self.edl):
+        for c in (self.adaptive, self.round, self.edl, self.ihide):
             c.toggled.connect(self.changed)
         self.mode.currentIndexChanged.connect(self.changed)
         self.bg.clicked.connect(self._pick_bg)
@@ -130,6 +134,7 @@ class DisplayDock(QDockWidget):
         d.mode = self.mode.currentData()
         d.gamma = self.gamma.value()
         d.intensity_range = (self.imin.value(), self.imax.value())
+        d.intensity_hide = self.ihide.isChecked()
         d.height_range = (self.hmin.value(), self.hmax.value())
         d.period = self.period.value() / 100
         d.h0 = self.h0.value() / 100

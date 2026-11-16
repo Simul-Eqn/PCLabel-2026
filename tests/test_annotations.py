@@ -149,7 +149,8 @@ def test_taxonomy_tree(tmp_path):
     assert "island" in order and "island" not in [c["name"] for c, _ in tax.tree_order(enabled_only=True)]
     assert dict((c["name"], d) for c, d in tax.tree_order())["road_line"] == 2
     assert tax.fits("curb_top", "curve") and tax.fits("curb_top", "polyline") and not tax.fits("curb_top", "points")
-    assert tax.fits("cover", "marker") and not tax.fits("cover", "curve") and tax.fits("cover", "directory")
+    assert tax.fits("cover", "marker") and tax.fits("cover", "polyline") and not tax.fits("cover", "points")
+    assert tax.fits("cover", "directory") and not tax.fits("curb_top", "marker")
     assert tax.fits("road", "points") and tax.fits("road", "marker") and tax.fits("any text", "points")
     ids = [int(c["id"]) for c in tax.classes]
     assert len(ids) == len(set(ids))
@@ -392,7 +393,7 @@ def test_uncertain_labels(projects, tmp_path):
     u, warnings = Annotations.load(p)
     assert not warnings and [x.uncertain for x in u.root[0].children] == [True, False, True]
     doc = json.loads((p.path / "annotations.json").read_text(encoding="utf-8"))
-    assert doc["schema"] == SCHEMA == "pclabel.annotations/7" and "uncertain" not in doc["tree"][0]
+    assert doc["schema"] == SCHEMA == "pclabel.annotations/9" and "uncertain" not in doc["tree"][0]
     # a schema 2 document that marked a directory: the items that took its label carry the mark instead
     old2 = json.loads(json.dumps(doc))
     old2["tree"][0]["uncertain"] = True
@@ -425,3 +426,23 @@ def test_uncertain_labels(projects, tmp_path):
     # a split keeps the mark
     smooth, rough = t.split_point_set(ramp.id, np.arange(20) < 5, {"tool": "split"})
     assert smooth.uncertain and rough.uncertain and smooth.label == "ramp"
+
+
+def test_polyline_editing_and_converting():
+    from pclabel.store.annotations import Annotations, Polyline
+
+    m = Annotations()
+    v = np.array([[0, 0, 0], [1, 0, 0.1], [2, 0, 0.2]])
+    p = m.add(Polyline(v, False, {"axis": [0, 0, 1]}), "l")
+    assert p.insert([1.5, 0.1, 0.15]) == 2 and len(p.nodes) == 4
+    assert p.insert([3, 0, 0.3]) == 4  # beyond the end
+    p.move_node(0, [0, 1, 7])
+    assert p.vertices[0] == pytest.approx([0, 1, 0])  # level
+    p.remove(4)
+    with pytest.raises(ValueError):
+        p.set_closed(True) if len(p.vertices) < 3 else Polyline(v[:2]).remove(0)
+    c = m.convert(p.id, "curve", 0.005)
+    assert c.kind == "curve" and c.mode == "free" and m.root == [c]
+    assert m.convert(c.id, "curve", 0.005) is None  # already a curve
+    q = m.convert(c.id, "polyline", 0.002)
+    assert q.kind == "polyline" and q.source["axis"] == [0, 0, 1] and q.vertices[0] == pytest.approx([0, 1, 0])

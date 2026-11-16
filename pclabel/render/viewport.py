@@ -37,7 +37,7 @@ from pclabel.render.camera import ORTHO, PERSPECTIVE, OrbitCamera
 from pclabel.render.renderer import FrameStats, PointRenderer, PointSource
 from pclabel.tools.pick import nearest_point
 
-SEED_TOOLS = ("grow", "magic", "piece", "tree")  # a click sets a seed (piece: picks a piece of the selection; tree: the ground at a trunk)
+SEED_TOOLS = ("grow", "magic", "piece", "tree", "trace", "marker")  # a click sets a seed (piece: picks a piece of the selection; tree: the ground at a trunk)
 VOLUME_KEYS = {Qt.Key.Key_W, Qt.Key.Key_A, Qt.Key.Key_S, Qt.Key.Key_D, Qt.Key.Key_Q, Qt.Key.Key_E, Qt.Key.Key_Z,
                Qt.Key.Key_X, Qt.Key.Key_Minus, Qt.Key.Key_Equal, Qt.Key.Key_Plus, Qt.Key.Key_Underscore,
                Qt.Key.Key_K, Qt.Key.Key_Return, Qt.Key.Key_Enter}  # fmt: skip
@@ -67,10 +67,11 @@ class Viewport(QOpenGLWidget):
     edit_node_clicked = Signal(int)  # curve edit: a node was clicked
     edit_node_removed = Signal(int)  # curve edit: Ctrl+click on a node
     edit_delete_requested = Signal()  # curve edit: Del (remove the active node)
-    edit_handle_dragged = Signal(int, int, object)  # curve edit: (node, side +1 out / -1 in, local point on the plane)
+    edit_handle_dragged = Signal(int, int, object)  # curve edit: (node, side +1 out / -1 in / 0 the node, local point)
     edit_drag_finished = Signal()
     volume_placed = Signal(object)  # 3D select: local point on the surface clicked
     volume_key = Signal(int, object)  # 3D select: (key, modifiers)
+    trace_key = Signal(str)  # the trace tool: "enter" (save), "backspace" (back a step), "space" (stop)
 
     def __init__(self, memory_bytes: int, point_budget: int, parent=None):
         super().__init__(parent)
@@ -89,7 +90,8 @@ class Viewport(QOpenGLWidget):
         self._press = None
         self._dragged = False
         self.tool = None  # None | "lasso" | "rect" | "grow" | "magic" | "segment" | "curve" | "curve_edit"
-        # curve edit: {"nodes": (n, 3) local, "handles": [(node, side, (3,) local)], "plane": (normal, local point)}
+        # curve edit: {"nodes": (n, 3) local, "handles": [(node, side, (3,) local)], "plane": (normal, local point),
+        #              "node_planes": [(normal, local point)] per node (where it and its handles are dragged)}
         self.edit_targets = None
         self._edit_drag = None  # (node, side) of the handle being dragged
         self.select_through = False  # lasso / rectangle take hidden points too (the outline is orange)
@@ -406,6 +408,9 @@ class Viewport(QOpenGLWidget):
             if hit is not None and hit[0] == "handle":
                 self._edit_drag = hit[1:]
                 return
+            if hit is not None and hit[0] == "node":  # a drag moves the node; no drag: a click (on release)
+                self._edit_drag = (hit[1], 0)
+                return
         mods = e.modifiers()
         self._shape_op = ("add" if mods & Qt.KeyboardModifier.ShiftModifier
                           else "subtract" if mods & Qt.KeyboardModifier.ControlModifier else "replace")  # fmt: skip
@@ -440,8 +445,13 @@ class Viewport(QOpenGLWidget):
         if abs(d.x()) + abs(d.y()) > 3:
             self._dragged = True
         if self._edit_drag is not None:
+            if self._edit_drag[1] == 0 and not self._dragged:
+                return
             t = self.edit_targets
-            q = None if t is None else self.plane_point(e.position(), *t["plane"])
+            planes = None if t is None else t.get("node_planes")
+            i = self._edit_drag[0]
+            plane = planes[i] if planes is not None and i < len(planes) else None if t is None else t["plane"]
+            q = None if plane is None else self.plane_point(e.position(), *plane)
             if q is not None:
                 self.edit_handle_dragged.emit(self._edit_drag[0], self._edit_drag[1], q)
             self.update()
@@ -469,6 +479,8 @@ class Viewport(QOpenGLWidget):
         self.update()
 
     def mouseReleaseEvent(self, e):
+        if self._edit_drag is not None and self._edit_drag[1] == 0 and not self._dragged:
+            self._edit_drag = None  # a node pressed and let go: a click
         if self._edit_drag is not None:
             self._edit_drag = None
             self._press = None
@@ -540,6 +552,10 @@ class Viewport(QOpenGLWidget):
             return
         if self.tool == "volume" and is_volume_key(e):
             self.volume_key.emit(int(e.key()), e.modifiers())
+            return
+        if self.tool == "trace" and e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Backspace, Qt.Key.Key_Space):
+            self.trace_key.emit("backspace" if e.key() == Qt.Key.Key_Backspace else
+                                "space" if e.key() == Qt.Key.Key_Space else "enter")  # fmt: skip
             return
         if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self.tool in ("segment", "curve", "curve_edit"):
             self.finish_requested.emit(bool(e.modifiers() & Qt.KeyboardModifier.ShiftModifier))

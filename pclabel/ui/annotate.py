@@ -53,7 +53,7 @@ from PySide6.QtWidgets import (
 
 from pclabel.store.annotations import SET_OPS, CURVE_MODES, Annotations, Curve, Marker, PointSet, Segment, clone_nodes
 from pclabel.tools import sets as sets_
-from pclabel.tools.markers import MarkerParams, place_marker
+from pclabel.tools.markers import MarkerParams, marker_at_click, place_marker
 from pclabel.ui import labelbox
 from pclabel.ui.docks import _spin
 
@@ -142,7 +142,8 @@ class AnnotationDock(QDockWidget):
         self.edit_label.setWordWrap(True)
         e.addWidget(self.edit_label)
         pr = QHBoxLayout()
-        pr.addWidget(QLabel("plane:"))
+        self.edit_plane = QLabel("plane:")
+        pr.addWidget(self.edit_plane)
         self.edit_mode = _mode_combo()
         self.edit_mode.setToolTip("how this curve's plane is chosen; changing it fits the plane again")
         pr.addWidget(self.edit_mode, 1)
@@ -257,7 +258,22 @@ class AnnotationDock(QDockWidget):
         krow.addWidget(QLabel("at"))
         krow.addWidget(self.marker_height)
         krow.addWidget(self.marker)
+        self.attributes = QPushButton("attributes...")
+        self.attributes.setToolTip("the selected marker's fields, one \"key: value\" per line (e.g. asset_id: LP-0012); "
+                                   "exported with it (GeoJSON, export labels)")  # fmt: skip
+        krow.addWidget(self.attributes)
         v.addLayout(krow)
+        crow = QHBoxLayout()
+        self.click_markers = QPushButton("click to place markers (Shift+M)")
+        self.click_markers.setCheckable(True)
+        self.click_markers.setToolTip("each click on the cloud places a marker, by \"marker at\": circle centre snaps "
+                                      "to a pole or trunk around the click, lowest point drops it to the ground")  # fmt: skip
+        self.click_label = QCheckBox("label them")
+        self.click_label.setChecked(True)
+        self.click_label.setToolTip("give each clicked marker the label in the label box (if any)")
+        crow.addWidget(self.click_markers, 1)
+        crow.addWidget(self.click_label)
+        v.addLayout(crow)
         hrow = QHBoxLayout()
         hrow.addWidget(QLabel("move selected markers up by:"))
         self.marker_dz = _spin(-100.0, 100.0, 0.10, 0.01, 3, " m")
@@ -282,7 +298,25 @@ class AnnotationDock(QDockWidget):
         self.color.setToolTip("the colour of the selected directory (everything in it) or top-level item")
         self.select = QPushButton("select points")
         self.select.setToolTip("make the point sets among the selected items (and in selected directories) the selection")
-        self.edit = QPushButton("edit curve")
+        self.edit = QPushButton("edit line")
+        self.edit.setToolTip("edit the selected curve or polyline (or double-click it): drag its points, Shift+click "
+                             "the cloud to add one, Ctrl+click one to remove it")  # fmt: skip
+        self.to_curves = QPushButton("to curves")
+        self.to_curves.setToolTip("the selected polylines (and those in selected directories) become curves with no "
+                                  "plane, through as few of their vertices as keep within 1 cm (the Trace panel's "
+                                  "\"within\"); undoable")  # fmt: skip
+        self.smooth = QPushButton("smooth")
+        self.smooth.setToolTip("smooth the selected curves and polylines (and those in selected directories): each "
+                               "point averaged along the line over the distance below, moved at most the limit; an "
+                               "open line's ends stay; undoable, and again to smooth more")  # fmt: skip
+        self.smooth_scale = _spin(0.05, 20.0, 1.0, 0.1, 2, " m")
+        self.smooth_scale.setToolTip("smooth over: the length along the line points are averaged over (sigma); longer "
+                                     "takes out longer waves")  # fmt: skip
+        self.smooth_max = _spin(0.001, 1.0, 0.05, 0.005, 3, " m")
+        self.smooth_max.setToolTip("no point moves further than this (a real corner is rounded by no more)")
+        self.to_polylines = QPushButton("to polylines")
+        self.to_polylines.setToolTip("the selected curves (and those in selected directories) become polylines whose "
+                                     "straight pieces stay within 2 mm of the curve; undoable")  # fmt: skip
         self.delete = QPushButton("delete")
         self.rename = QPushButton("rename (F2)")
         self.rename.setToolTip("type a new name for the selected directory, point set, segment or curve (wherever it is)")
@@ -309,9 +343,18 @@ class AnnotationDock(QDockWidget):
                                 "Ctrl+Shift+K turns it off and on")  # fmt: skip
         for i, b in enumerate((self.new_dir, self.points, self.color, self.select, self.edit, self.delete,
                                self.rename, self.duplicate, self.export_sel, self.export_all, self.import_, self.export_labels,
-                               self.join, self.split, self.set_ops, self.clip_to, self.density)):  # fmt: skip
+                               self.join, self.split, self.set_ops, self.clip_to, self.density, self.to_curves,
+                               self.to_polylines)):  # fmt: skip
             grid.addWidget(b, i // 4, i % 4)
         v.addLayout(grid)
+        srow = QHBoxLayout()
+        srow.addWidget(self.smooth)
+        srow.addWidget(QLabel("over"))
+        srow.addWidget(self.smooth_scale)
+        srow.addWidget(QLabel("moving ≤"))
+        srow.addWidget(self.smooth_max)
+        srow.addStretch(1)
+        v.addLayout(srow)
         self.status = QLabel("")
         self.status.setWordWrap(True)
         self.status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -319,7 +362,8 @@ class AnnotationDock(QDockWidget):
         self.setWidget(w)
 
 
-MODE_NAMES = {"ends": "through the ends", "axis": "flat on the height axis", "fit": "fit all points"}
+MODE_NAMES = {"ends": "through the ends", "axis": "flat on the height axis", "fit": "fit all points",
+              "free": "no plane (3D)"}
 
 
 def _mode_combo() -> QComboBox:
@@ -359,11 +403,16 @@ class AnnotationController(QObject):
         d.new_dir.clicked.connect(lambda: self.new_directory())
         d.points.clicked.connect(self.points_from_selection)
         d.marker.clicked.connect(lambda: self.marker_from_selection())
+        d.click_markers.clicked.connect(lambda on: self.w.toggle_tool("marker") if on else self.vp.set_tool(None))
         d.marker_move.clicked.connect(lambda: self.move_markers())
+        d.attributes.clicked.connect(lambda: self.edit_attributes())
         d.marker_axis.clicked.connect(lambda: self.set_marker_axis())
         d.color.clicked.connect(lambda: self.set_color())
         d.select.clicked.connect(self.select_points)
         d.edit.clicked.connect(self.edit_selected)
+        d.to_curves.clicked.connect(lambda: self.convert_selected("curve"))
+        d.to_polylines.clicked.connect(lambda: self.convert_selected("polyline"))
+        d.smooth.clicked.connect(lambda: self.smooth_selected())
         d.delete.clicked.connect(lambda: self.delete_selected())
         d.duplicate.clicked.connect(lambda: self.duplicate_selected())
         d.rename.clicked.connect(lambda: self.rename_selected())
@@ -439,7 +488,7 @@ class AnnotationController(QObject):
                 c = self.model.node(self.editing.id)
             except KeyError:
                 c = None
-            if c is None or c.kind != "curve":
+            if c is None or c.kind not in ("curve", "polyline"):
                 self.done()
             else:
                 self.editing = c
@@ -517,6 +566,11 @@ class AnnotationController(QObject):
 
     @staticmethod
     def _plane_report(c: Curve) -> str:
+        if c.kind == "polyline":
+            return f"{len(c.vertices)} points, {c.length():.2f} m"
+        if c.mode == "free":
+            lo, hi = c.heights()
+            return f"no plane: the points stay where they are (heights {lo:+.3f} to {hi:+.3f} m on {c.frame})"
         if c.mode == "axis":
             where = f"plane at height {c.height():+.3f} m on {c.frame}"
         else:
@@ -527,11 +581,17 @@ class AnnotationController(QObject):
     # ---- curve edit mode --------------------------------------------------------------------------------------
 
     def edit(self, curve: Curve):
+        """Curve edit mode, for a curve or a polyline (straight pieces: points only, no handles or plane)."""
         self.editing, self.active = curve, None
         self.vp.set_tool("curve_edit")
-        self.dock.edit_label.setText(f"editing {curve.name}: click a point for its handles and drag them; "
-                                     "Shift+click the cloud adds a point, Ctrl+click a point removes it")  # fmt: skip
-        self.dock.edit_mode.setCurrentIndex(self.dock.edit_mode.findData(curve.mode))
+        is_curve = curve.kind == "curve"
+        self.dock.edit_label.setText(f"editing {curve.name}: drag a point to move it"
+                                     + ("; click one for its handles and drag them" if is_curve else " (level)")
+                                     + "; Shift+click the cloud adds a point, Ctrl+click a point removes it")  # fmt: skip
+        for wdg in (self.dock.edit_plane, self.dock.edit_mode, self.dock.show_picked, self.dock.auto):
+            wdg.setVisible(is_curve)
+        if is_curve:
+            self.dock.edit_mode.setCurrentIndex(self.dock.edit_mode.findData(curve.mode))
         self.dock.edit_closed.setChecked(curve.closed)
         self.dock.edit_box.show()
         self.dock.show()
@@ -582,12 +642,17 @@ class AnnotationController(QObject):
         self.refresh()
 
     def handle_dragged(self, i: int, side: int, q_local):
+        """A handle (side +1 out, -1 in) or, side 0, a node itself, dragged in its drag plane."""
         if self.editing is None:
             return
         if not self._dragging:
-            self._checkpoint(f"gradient of {self.editing.name}")
+            self._checkpoint(f"{'move a point of' if side == 0 else 'gradient of'} {self.editing.name}")
             self._dragging = True
-        self.editing.drag_handle(i, side, self._world(q_local))
+        self._mark_edited(self.editing)
+        if side == 0:
+            self.editing.move_node(i, self._world(q_local))
+        else:
+            self.editing.drag_handle(i, side, self._world(q_local))
         self.active = i
         self._curve_changed()
         self.refresh()
@@ -603,6 +668,7 @@ class AnnotationController(QObject):
             return
         p = self._world(self.project.xyz[store_index])
         self._checkpoint(f"add a point to {c.name}")
+        self._mark_edited(c)
         i = c.insert(p, int(self.project.source_index[store_index]))
         self.active = None
         self._curve_changed()
@@ -622,6 +688,7 @@ class AnnotationController(QObject):
         except ValueError as e:
             self.dock.status.setText(str(e))
             return
+        self._mark_edited(c)
         self.active = None
         self._curve_changed()
         self._changed(f"{c.name}: point {i + 1} removed, {len(c.nodes)} left")
@@ -635,6 +702,7 @@ class AnnotationController(QObject):
             self.refresh()
 
     def on_tool_changed(self, name):
+        self.dock.click_markers.setChecked(name == "marker")
         if name not in ("segment", "curve"):
             self.pending, self.hover = [], None
         if name != "curve_edit" and self.editing is not None:
@@ -801,6 +869,35 @@ class AnnotationController(QObject):
         f = self._frame()
         return np.asarray(f.normal, np.float64), f.name
 
+    def edit_attributes(self, text: str | None = None) -> dict | None:
+        """The selected marker's attributes, edited as "key: value" lines (``text``, or typed in a dialog); an empty
+        value removes its key. One undo step."""
+        mks = [self.model.node(i) for i in self.selected_ids()]
+        mks = [m for m in mks if m.kind == "marker"]
+        if len(mks) != 1:
+            self.dock.status.setText("select one marker to edit its attributes")
+            return None
+        mk = mks[0]
+        if text is None:
+            from PySide6.QtWidgets import QInputDialog
+
+            now = "\n".join(f"{k}: {v}" for k, v in mk.attributes.items()) or "asset_id: "
+            text, ok = QInputDialog.getMultiLineText(self.w, f"Attributes of {mk.name}",
+                                                     "one \"key: value\" per line (an empty value removes it)", now)  # fmt: skip
+            if not ok:
+                return None
+        attrs = {}
+        for line in text.splitlines():
+            if ":" not in line:
+                continue
+            k, v = (s.strip() for s in line.split(":", 1))
+            if k and v:
+                attrs[k] = v
+        self._checkpoint(f"attributes of {mk.name}")
+        mk.attributes = attrs
+        self._changed(f"{mk.name}: " + (", ".join(f"{k} {v}" for k, v in attrs.items()) or "no attributes"))
+        return attrs
+
     def move_markers(self, dh: float | None = None) -> int:
         """Move the selected markers (and those in selected directories) by ``dh`` metres (None: the panel's value;
         negative: down) along each marker's own height axis (the active one for a marker without one, e.g. imported).
@@ -837,6 +934,37 @@ class AnnotationController(QObject):
         self._changed(f"{len(mks)} marker{'s' * (len(mks) != 1)} now on the height axis {f.name} (positions kept)")
         return len(mks)
 
+    def click_marker(self, p_local):
+        """The marker tool (Shift+M): a marker where the cloud was clicked, by the panel's "marker at" (circle centre:
+        snapped to the pole or trunk around the click; lowest point: dropped to the ground), labelled with the label
+        box's label if "label them" is ticked; in the directory selected in the tree. One undo step per click."""
+        if self.project is None:
+            return None
+        d = self.dock
+        f = self._frame()
+        params = MarkerParams(d.marker_across.currentData(), d.marker_height.currentData())
+        filters = self.w._filters() if self.vp.renderer is not None else None
+        res = marker_at_click(self.project.xyz, self.project.tiles, p_local, f.normal, params, f.along, filters)
+        rec = dict(res["record"], click=self._world(p_local).tolist(), height_axis=f.name,
+                   axis=[float(v) for v in f.normal])  # fmt: skip
+        label = d.label.currentText().strip() if d.click_label.isChecked() else ""
+        if label and not self.w.taxonomy.fits(label, "marker"):
+            label = ""  # e.g. a line-only label in the box
+        into = self._directory_for_new()
+        self._checkpoint("new marker (click)")
+        mk = self.model.add(Marker(self._world(res["position"]), rec))
+        mk.label = label
+        if into is not None:
+            self.model.move([mk.id], into.id)
+        x, y, z = mk.position
+        how = "on the circle around the click" if rec["across"] == "circle" else "at the click"
+        text = f"{mk.name} {how}" + (", on the ground" if rec["height"] == "lowest" else "") + f": ({x:.3f}, {y:.3f}, {z:.3f})"
+        if rec["across"] == "circle":
+            text += f", radius {rec['radius']:.3f} m, {rec['coverage']:.0%} of the circumference"
+        text += (f", labelled {label}" if label else "") + (f"; {rec['note']}" if rec.get("note") else "")
+        self._changed(text + (f", in {into.name}" if into is not None else ""))
+        return mk
+
     def _label_fits(self, label: str, nodes) -> str | None:
         """Why ``label`` cannot go on these nodes (a class kept to lines or markers), or None."""
         tax = self.w.taxonomy
@@ -844,7 +972,9 @@ class AnnotationController(QObject):
         if not bad:
             return None
         names = ", ".join(n.name for n in bad[:3]) + (f" and {len(bad) - 3} more" if len(bad) > 3 else "")
-        return f"{label!r} is for {tax.only(label)}s only, not {names}"
+        from pclabel.taxonomy import only_words
+
+        return f"{label!r} is for {only_words(tax.only(label))} only, not {names}"
 
     def _directory_for_new(self):
         """Where a new point set goes: the one directory selected in the tree, or the directory of the one item
@@ -1075,9 +1205,67 @@ class AnnotationController(QObject):
         self.w.set_selection(idx, {"tool": "annotations", "op": "replace", "point_sets": [m.name for m in sets]})
 
     def edit_selected(self):
-        curves_ = [m for m in self._selected_items() if m.kind == "curve"]
-        if curves_:
-            self.edit(curves_[0])
+        lines_ = [m for m in self._selected_items() if m.kind == "curve" or (m.kind == "polyline" and len(m.vertices) > 1)]
+        if lines_:
+            self.edit(lines_[0])
+
+    @staticmethod
+    def _mark_edited(c):
+        """A line a tool drew, changed by hand: its source says so (the labeller's corrections are the evidence
+        for tuning the tool)."""
+        if c.source:
+            c.source["edited"] = True
+
+    def smooth_selected(self) -> list:
+        """Smooth the selected curves and polylines (Annotations.smooth with the panel's settings); one undo step;
+        curve edit mode carries on with the smoothed line."""
+        items = [x for x in self._selected_items() if x.kind == "curve" or (x.kind == "polyline" and len(x.vertices) > 1)]
+        if not items and self.editing is not None:
+            items = [self.editing]
+        if not items:
+            self.dock.status.setText("select the curves or polylines to smooth (or their directories) in Annotations")
+            return []
+        scale, mx = self.dock.smooth_scale.value(), self.dock.smooth_max.value()
+        tr = getattr(self.w, "trace", None)
+        tol = tr.dock.fit_tol.value() if tr is not None else 0.01
+        self._checkpoint(f"smooth {len(items)} line{'s' * (len(items) != 1)}")
+        out = [self.model.smooth(x.id, scale, mx, tol) for x in items]
+        for x in items:
+            self._lines.pop(x.id, None)
+        if self.editing is not None:
+            for y in out:
+                if y.id == self.editing.id:
+                    self.editing, self.active = y, None
+        recs = [y.source["smoothed"][-1] for y in out]
+        w0, w1 = sum(r["wiggle_deg"][0] for r in recs), sum(r["wiggle_deg"][1] for r in recs)
+        self._changed(f"{len(out)} line{'s' * (len(out) != 1)} smoothed over {scale:.2f} m: turning {w0:.0f}° -> "
+                      f"{w1:.0f}°, points moved up to {max(r['largest_shift'] for r in recs) * 100:.1f} cm, "
+                      f"{sum(r['points'] for r in recs)} points -> {sum(len(y.nodes) for y in out)}")  # fmt: skip
+        return out
+
+    def convert_selected(self, to: str, tolerance: float | None = None) -> list:
+        """The selected polylines to curves (no plane; within the Trace panel's "within", 1 cm) or the selected
+        curves to polylines (within 2 mm), each in its place; one undo step."""
+        frm = "polyline" if to == "curve" else "curve"
+        items = [x for x in self._selected_items() if x.kind == frm and (frm == "curve" or len(x.vertices) > 1)]
+        if not items:
+            self.dock.status.setText(f"no {frm}s among the selected items (or in selected directories)")
+            return []
+        if tolerance is None:
+            tr = getattr(self.w, "trace", None)
+            tolerance = tr.dock.fit_tol.value() if to == "curve" and tr is not None else 0.01 if to == "curve" else 0.002
+        if self.editing is not None and self.editing.id in {x.id for x in items}:
+            self.done()
+        f = self._frame()
+        self._checkpoint(f"{len(items)} {frm}s to {to}s")
+        out = [self.model.convert(x.id, to, tolerance, f.normal, f.origin, f.name) for x in items]
+        for x in items:
+            self._lines.pop(x.id, None)
+        n_before = sum(len(x.vertices) if frm == "polyline" else len(x.nodes) for x in items)
+        n_after = sum(len(y.nodes) if to == "curve" else len(y.vertices) for y in out)
+        self._changed(f"{len(out)} {frm}{'s' * (len(out) != 1)} to {to}s within {tolerance * 100:.1f} cm: "
+                      f"{n_before} points became {n_after}")  # fmt: skip
+        return out
 
     def set_color(self, color: str | None = None):
         ids = self.selected_ids()
@@ -1285,7 +1473,7 @@ class AnnotationController(QObject):
         x = self.model.node(item.data(0, ROLE)[1])
         if col == 1:
             self.dock.tree.editItem(item, 1)
-        elif x.kind == "curve":
+        elif x.kind == "curve" or (x.kind == "polyline" and len(x.vertices) > 1):
             self.edit(x)
         else:
             self.dock.tree.editItem(item, 0)
@@ -1341,6 +1529,11 @@ class AnnotationController(QObject):
                     lines.append((v, col, width))
                     if hl:
                         points.append((v, col, 6.0))
+        tracer = getattr(self.w, "trace", None)
+        if tracer is not None:  # the curb or marking trace waiting to be saved (local coordinates)
+            t_lines, t_points = tracer.overlay(off)
+            lines += t_lines
+            points += t_points
         targets = None
         if self.joining is not None:
             try:
@@ -1361,7 +1554,9 @@ class AnnotationController(QObject):
             nodes = c.nodes - off
             points.append((nodes, rgba(self.model.color_of(c.id)), 11.0))
             handles = []
-            if self.active is not None and self.active < len(nodes):
+            if self.active is not None and self.active < len(nodes) and c.kind == "polyline":
+                points.append((nodes[self.active : self.active + 1], PENDING, 14.0))
+            elif self.active is not None and self.active < len(nodes):
                 i = self.active
                 h_in, h_out = c.handles()
                 if i > 0 or c.closed:
@@ -1373,8 +1568,9 @@ class AnnotationController(QObject):
                 points.append((nodes[i : i + 1], PENDING, 14.0))
                 if handles:
                     points.append((np.array([q for _, _, q in handles]), HANDLE, 11.0))
-            targets = {"nodes": nodes, "handles": handles, "plane": (c.normal, c.plane_point() - off)}
-            if self.dock.show_picked.isChecked():  # where the points were clicked, and where they went
+            targets = {"nodes": nodes, "handles": handles, "plane": (c.drag_plane(0)[0], c.drag_plane(0)[1] - off),
+                       "node_planes": [(c.drag_plane(i)[0], nodes[i]) for i in range(len(nodes))]}  # fmt: skip
+            if c.kind == "curve" and self.dock.show_picked.isChecked():  # where the points were clicked, and where they went
                 picked = c.picked - off
                 for q, nd in zip(picked, nodes):
                     lines.append((np.array([q, nd]), PICKED, 1.0))

@@ -451,6 +451,24 @@ Results (in progress):
       Measured for markers: on streets 1's 127 tree bands the points' mean sits a median 5.6 cm from the fitted
       circle's centre (0.73 radii, up to 31 cm), 83 % toward the scanner (O-0014); ROCK's pole symbols sit at the
       foot, 5–13 cm from the axis (O-0015).
+    - Traced lines as editable curves (2026-11-06): curve mode "no plane" (annotations schema 9), nodes dragged in
+      curve edit mode, the tracers and the join tool save curves within 1 cm (or polylines). The user's joined kerb
+      lines on ExchangeGreen 1: 3-35 cm off any plane; 36-72 nodes per 19-27 m within 1 cm. Then: "to curves" /
+      "to polylines" in Annotations, and polylines edited in curve edit mode (drag, add, remove vertices); "smooth"
+      (Gaussian along the line, each point moved at most a limit); "smooth onto the kerb top" (tools/kerbfit.py:
+      measured kerb tops, lowered kerbs carried across at the top, within 2 cm of the de-noised measurements).
+    - Curb tracer from the user's tries on ExchangeGreen 1 (2026-11-05): curb height 0.06 m (the kerbs step 8-10 cm,
+      O-0016), the side found automatically, a start on the kerb top moved onto the road, attempts logged
+      (`trace_log.jsonl`), follow the top edge only, unseen kerb tops, tight curves (chord direction, turn rate,
+      half-step retry), quick click markers (`Shift+M`), joining traced pieces. Replaying the user's 21 runs: 334
+      steps (90 m) as run, 404 (109 m) now, 544 (148 m) following the top edge only.
+    - Road tools after LiDAR360MLS (2026-11-05, the user's request, from `reference/LiDAR360MLS/`): curb tracer
+      (`Ctrl+T`: toe and lip measured, gaps left at drains), marking tracer (`Ctrl+Shift+T`: solid or dashed, by
+      intensity), the intensity window, clearance along a line, cover outline templates and marker attributes
+      (annotations schema 8), vector export (DXF R12 by label, GeoJSON). Lines and markers drawn by tools are marked
+      `assisted` (R-018 proposed). On the synthetic street (2M points): the north kerb's toe within 3 cm, lip within
+      2 cm, height 0.149 m (true 0.15) in 0.13 s for 16 m; dashes' ends within 0.1 m; a double line's two lines apart.
+      On `mobile-colorized-v2-1` (595M points), started 0.3 m beside 30 of ROCK's BOTTOM_OF_CURB lines: 182 m traced in 1.6 s; toe a median 6.5 cm (xy) and 3 mm (height) from ROCK's bottom line, lip 5.0 cm and 4 mm from its top line, kerb 0.142 m high (p10-p90 0.131-0.152); about 10 % of steps more than 4 m from any ROCK curb line (edges ROCK did not draw); runs stopped at rolled faces wider than 0.40 m, sharp turns, and cars at the kerb.
 
     On streets 1 (GPU) at the magic-select site:
     - a 1 m cylinder took 107,891 points in 0.16 s;

@@ -31,6 +31,49 @@ class MarkerParams:
     trim: float = 0.03  # m, circle: points further than this off the circle are left out and the circle fitted again
 
 
+SNAP_RADIUS = 0.40  # m: a click snaps to a circle fitted to the points this far around it
+
+
+def marker_at_click(xyz, tiles, click, axis, params: MarkerParams = MarkerParams(), along=(1.0, 0.0, 0.0),
+                    filters=None, snap_radius: float = SNAP_RADIUS) -> dict:  # fmt: skip
+    """Where a marker for a click on the cloud goes (``click``, local).
+
+    - across the height axis: the click itself ("mean"), or the centre of a circle fitted to the points within
+      ``snap_radius`` of it and 0.25 m above and below ("circle": click a pole or a trunk anywhere, the marker goes
+      on its axis); if no circle fits, the click;
+    - along it: the click's height ("mean"), or the lowest point within ``snap_radius + 0.3`` m below the click
+      ("lowest": the ground at the foot of what was clicked).
+    Returns {"position", "record"}."""
+    from pclabel.tools.volume import VolumeParams, select_volume
+
+    n, _, _ = frame_axes(axis, along)
+    c = np.asarray(click, np.float64)
+    pos = c.copy()
+    rec = {"tool": "marker_click", "across": "click", "height": "click", "points": 0}
+    if params.across == "circle":
+        idx = select_volume(xyz, tiles, c, n, along, VolumeParams("cylinder", radius=snap_radius, bottom=-0.25, top=0.25),
+                            filters)  # fmt: skip
+        try:
+            res = place_marker(xyz, idx, n, MarkerParams("circle", "mean", params.trim), along)
+        except ValueError:
+            rec["note"] = "no circle around the click: at the click"
+        else:
+            q = res["position"]
+            pos = q - np.dot(q - c, n) * n  # across: the circle's centre; along: the click's height
+            rec.update({k: v for k, v in res["record"].items() if k not in ("tool", "height", "spread", "height_range")})
+            rec.update(across="circle", snap_radius=snap_radius)
+    if params.height == "lowest":
+        idx = select_volume(xyz, tiles, pos, n, along, VolumeParams("cylinder", radius=snap_radius + 0.3, bottom=-6.0,
+                                                                      top=0.0), filters)  # fmt: skip
+        if idx.size:
+            h = (np.asarray(xyz[idx], np.float64) - pos) @ n
+            pos = pos + float(np.percentile(h, 2)) * n
+            rec["height"] = "lowest"
+        else:
+            rec["note"] = (rec.get("note", "") + "; no points below: at the click's height").lstrip("; ")
+    return {"position": pos, "record": rec}
+
+
 def place_marker(xyz, idx, axis, params: MarkerParams = MarkerParams(), along=(1.0, 0.0, 0.0)) -> dict:
     """Where a marker for the points ``idx`` (store indices into ``xyz``, local) goes. Returns ``position`` (local)
     and a record: the method, the number of points, how widely they spread across the axis, and for a circle its

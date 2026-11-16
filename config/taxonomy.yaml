@@ -19,7 +19,8 @@
 #           50-59 temporary, 60+ other still hold for the classes that had them; the top-level kinds are 100-104).
 # parent    the class this one is a kind of (none: top level)
 # only      line   = only lines (segments, curves, polylines) take it, e.g. the curb's three edges
-#           marker = only markers take it (a position: where a thing is), e.g. a manhole cover
+#           marker = only markers take it (a position: where a thing is)
+#           [line, marker] = both, e.g. a cover: its outline and its centre
 #           (absent: point sets, lines and markers all take it: its points, its edge or outline, where it stands)
 # status    core      = asked for or decided by the user
 #           proposed  = planning suggestion; the user decides (see the rule named in `rule`)
@@ -64,8 +65,8 @@ classes:
      def: "paved surface for pedestrians/cyclists: footpaths, park connectors, cycling and shared paths", rule: R-002}
   - {id: 5,   name: drain,              parent: ground,   status: proposed, enabled: true,  color: "#00BCD4", key: "4", countable: true,
      def: "drainage: kerb inlets, gratings, open channels, drain covers, pits", rule: R-003}
-  - {id: 16,  name: cover,              parent: ground,   status: proposed, enabled: true,  color: "#26A69A", only: marker,
-     def: "marker: a manhole or utility cover (its points keep the class of the surface it is in)", rule: R-005}
+  - {id: 16,  name: cover,              parent: ground,   status: proposed, enabled: true,  color: "#26A69A", only: [line, marker],
+     def: "a manhole or utility cover: a marker at its centre, or its outline (its points keep the class of the surface it is in)", rule: R-005}
   - {id: 17,  name: hard_surface,       parent: ground,   status: proposed, enabled: true,  color: "#BCAAA4",
      def: "other paved ground, neither road nor pavement: pads, aprons, concrete areas"}
   - {id: 6,   name: grass,              parent: ground,   status: core,     enabled: true,  color: "#9CCC65", key: "5",
