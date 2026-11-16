@@ -26,6 +26,7 @@ road-marking lines (tools/curbtrace.py, tools/linetrace.py).
 from __future__ import annotations
 
 import threading
+from dataclasses import asdict
 import time
 
 import numpy as np
@@ -51,8 +52,7 @@ from pclabel.tools.clearance import ClearanceParams, check
 from pclabel.tools.kerbfit import KerbFitParams
 from pclabel.tools.kerbfit import fit as kerb_fit
 from pclabel.tools.linejoin import JoinParams, join_lines
-from pclabel.tools.linejoin import record as join_record
-from pclabel.tools.templates import SHAPES, OutlineParams, outline, record
+from pclabel.tools.templates import SHAPES, OutlineParams, outline
 from pclabel.tools.curbtrace import CurbTraceParams
 from pclabel.tools.curbtrace import run_trace as run_curb
 from pclabel.tools.linetrace import LineTraceParams
@@ -681,8 +681,6 @@ class TraceController(QObject):
         return True
 
     def _on_fit(self, res, err):
-        from pclabel.tools.kerbfit import record as fit_record
-
         self._busy = False
         if err is not None:
             self.dock.status.setText(f"no fit: {err}")
@@ -709,7 +707,7 @@ class TraceController(QObject):
                 x = m.node(iid)
             except KeyError:  # removed meanwhile
                 continue
-            src = trace_ops.kerb_fit_source(getattr(x, "source", {}), r, fit_record(res["params"]), res["frame"],
+            src = trace_ops.kerb_fit_source(getattr(x, "source", {}), r, asdict(res["params"]), res["frame"],
                                             res["axis"])  # fmt: skip
             new = self._line_item(r["vertices"] + off, x.closed, src, as_kind=x.kind)
             if x.kind == "curve" and new.kind == "curve":
@@ -765,7 +763,7 @@ class TraceController(QObject):
         n_out, n_bridged, n_dropped = 0, 0, 0
         for lab, xs, out in results:
             for k, o in enumerate(out, 1):
-                src = trace_ops.join_source(o, xs, join_record(params), f.name, assisted)
+                src = trace_ops.join_source(o, xs, asdict(params), f.name, assisted)
                 pl = m.add(self._line_item(o["vertices"], o["closed"], src), f"{lab or 'line'} {k}")
                 pl.label = lab
                 m.move([pl.id], d.id)
@@ -818,7 +816,7 @@ class TraceController(QObject):
         made = []
         for mk in mks:
             ring, p, axis = self._outline_for(mk)
-            made.append(trace_ops.add_cover(m, mk, ring, record(p), axis, self.w.taxonomy.tool_label("cover")))
+            made.append(trace_ops.add_cover(m, mk, ring, asdict(p), axis, self.w.taxonomy.tool_label("cover")))
         a._changed(f"{len(made)} cover outline{'s' * (len(made) != 1)}: {made[0].name}" + (" ..." if len(made) > 1 else ""))
         return made
 
@@ -840,7 +838,7 @@ class TraceController(QObject):
                 continue
             ring, p, axis = self._outline_for(mk)
             pl.vertices = ring
-            pl.source = dict(pl.source, template=record(p), axis=[float(x) for x in axis])
+            pl.source = dict(pl.source, template=asdict(p), axis=[float(x) for x in axis])
             n += 1
         a._changed(f"{n} outline{'s' * (n != 1)} reshaped")
         return n

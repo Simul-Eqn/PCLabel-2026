@@ -41,6 +41,3 @@ def outline(centre, axis, p: OutlineParams = OutlineParams(), along=(1.0, 0.0, 0
     corners = [(-hl, -hw), (hl, -hw), (hl, hw), (-hl, hw)]
     return np.array([c + a * u + b * v for a, b in corners])
 
-
-def record(p: OutlineParams) -> dict:
-    return asdict(p)

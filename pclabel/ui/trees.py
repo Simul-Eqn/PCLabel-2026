@@ -217,13 +217,13 @@ class TreeController(QObject):
         sel = w.selection
         axis, along, frame_name = self.frame
         try:
-            fit = fit_trunk(w.project.xyz, sel, self.ground, axis, along)
+            fit = fit_trunk(w.project.xyz, sel, self.ground, axis, along, trim=self.params().trim)
         except ValueError as e:
             self.status.setText(f"select the band first (Enter): {e}")
             return
         what = self.kind()
         record = tree_ops.band_record(self.ground, self.ground_h, frame_name, axis, self.band(), fit,
-                                      w.project.offset, what)  # fmt: skip
+                                      w.project.offset, what, self.params())  # fmt: skip
         a = w.annot
         a._checkpoint(f"save a {what}")
         trees = self._target()

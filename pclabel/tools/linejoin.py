@@ -129,6 +129,3 @@ def join_lines(lines, axis=(0.0, 0.0, 1.0), p: JoinParams = JoinParams()) -> lis
                     "dropped": {k: dropped.get(k, 0) for k in sorted(set(s["sources"]))}})  # fmt: skip
     return sorted(out, key=lambda o: -curves.length(o["vertices"]))
 
-
-def record(p: JoinParams) -> dict:
-    return asdict(p)

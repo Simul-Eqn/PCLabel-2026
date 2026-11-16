@@ -21,6 +21,7 @@ class TreeParams:
     band_bottom: float = 1.00  # m above the clicked ground: the identifying band of the trunk
     band_top: float = 1.10
     radius: float = 0.50  # m, the cylinder's radius when it is placed (then sized to the trunk)
+    trim: float = 0.03  # m: points further than this off the first circle are left out of the fit
 
 
 def _circle(x, y):

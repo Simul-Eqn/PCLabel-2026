@@ -271,6 +271,3 @@ def fit(xyz, tiles, vertices, axis, p: KerbFitParams = KerbFitParams(), closed: 
             "off_anchors_rms": float(np.sqrt(np.mean(off**2))), "off_anchors_max": float(off.max()),
             "largest_move": float(move.max()), "mean_move": float(move.mean()), "params": asdict(p)}  # fmt: skip
 
-
-def record(p: KerbFitParams) -> dict:
-    return asdict(p)

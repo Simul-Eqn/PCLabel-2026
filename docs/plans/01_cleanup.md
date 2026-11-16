@@ -89,7 +89,11 @@ the same project files, since the user labels while the code changes).
 - C14: done. New projects are schema `pclabel.project/2`, without label columns; schema 1 opens, its columns unread.
   Point info shows the point's class resolved from the annotations (`ops/labels.labels_at`), the sets holding it,
   and any conflict. The class colour mode is left out of the app (synthetic ground truth only).
-- Next: C13, C7, C8, then C9 to C11.
+- C7: done where it changes what is recorded: MarkerParams holds the click-snapping thresholds, TreeParams the fit's
+  `trim` and is recorded with each band, pieces record their whole dataclass, shape selections their depth
+  tolerance; the `record()` wrappers are gone (`asdict`). Kept as they are: `Annotations.smooth`, `convert`,
+  `join_curves` and `Curve.from_line` take one or two numbers each and already write them into the line's source.
+- Next: C8, then C9 to C11, then C13.
 
 Rules for every step:
 

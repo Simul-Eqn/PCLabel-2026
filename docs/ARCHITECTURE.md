@@ -205,6 +205,10 @@ read):
   - `trace_log.jsonl` in the project directory: one JSON line per tracer run (saved or not): `{time, mode, start,
     toward (world), height_axis, axis, params, stopped, seconds, steps, pieces, height_median | threshold}` or
     `error`.
+  - Parameter records (2026-11-16, no schema change: fields were added): a band saved by the tree tool records
+    `params` (TreeParams, with `trim`); a marker placed by clicking records `params` (MarkerParams, with
+    `snap_radius`, `snap_band`, `drop_reach`, `drop_depth`, `ground_percentile`); a shape selection records
+    `depth_test` ({tol, tol_per_m}, or null for *through*); pieces record the whole PieceParams.
   - `points`: `count`, `provenance` (the selection operations), and either `file` (the project's copy: store
     indices in `annotations/<id>.npy`) or `source_indices` (an export: sorted source indices, the export order).
 - **Label import profiles** (`config/label_imports/*.yaml`, schema `pclabel.label-import-profile/1`): `{schema,

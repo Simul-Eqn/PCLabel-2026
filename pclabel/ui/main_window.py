@@ -717,7 +717,8 @@ class MainWindow(QMainWindow):
         shape = "lasso" if self.viewport.tool == "lasso" else "rectangle"
         depth = "through" if self.viewport.select_through else "visible"
         self._run_selection(lambda: select_visible(*args), op,
-                            {"tool": "select_shape", "shape": shape, "depth": depth, "op": op})  # fmt: skip
+                            {"tool": "select_shape", "shape": shape, "depth": depth, "op": op,
+                             "depth_test": None if test is None else {"tol": test.tol, "tol_per_m": test.tol_per_m}})  # fmt: skip
 
     def set_select_through(self, on: bool):
         """Lasso and rectangle: every point inside the shape (through), or only the visible ones."""

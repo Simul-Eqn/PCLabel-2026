@@ -6,6 +6,8 @@ stands: the centre of a circle fitted to its band, at the ground) and the band a
 
 from __future__ import annotations
 
+from dataclasses import asdict
+
 import numpy as np
 
 from pclabel.store.annotations import Marker, PointSet
@@ -15,11 +17,12 @@ TREE = "tree"  # what a saved object is by default; its marker's label
 POSITION = "position"  # the name of an object's marker
 
 
-def band_record(ground, ground_h: float, frame: str, axis, band, fit: dict, offset, what: str) -> dict:
+def band_record(ground, ground_h: float, frame: str, axis, band, fit: dict, offset, what: str,
+                params=None) -> dict:  # fmt: skip
     """The tree tool's record (world coordinates) for a band whose circle fit is ``fit`` (``tools.trees.fit_trunk``,
-    local), standing on ``ground`` (local) at height ``ground_h`` along ``axis``."""
+    local), standing on ``ground`` (local) at height ``ground_h`` along ``axis``; ``params``: the TreeParams used."""
     off = np.asarray(offset, np.float64)
-    return {"tool": "tree", "ground": (np.asarray(ground, np.float64) + off).tolist(), "ground_h": ground_h,
+    return {"tool": "tree", "params": asdict(params) if params is not None else None, "ground": (np.asarray(ground, np.float64) + off).tolist(), "ground_h": ground_h,
             "height_axis": frame, "axis": [float(v) for v in axis], "band": [float(band[0]), float(band[1])],
             "position": (fit["centre"] + off).tolist(), "radius": fit["radius"], "girth": fit["girth"],
             "rms": fit["rms"], "points_fitted": fit["points"], "points_dropped": fit["dropped"],

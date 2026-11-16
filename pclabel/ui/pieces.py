@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtWidgets import QDockWidget, QFormLayout, QHBoxLayout, QLabel, QPushButton, QSpinBox, QWidget
@@ -154,8 +154,8 @@ class PiecesController(QObject):
 
     def _record(self, op, ids, extra=None):
         p = self.pieces
-        return {"tool": "pieces", "op": "replace", "action": op, "params": {"gap": p.params.gap,
-                "min_points": self.dock.min_points.value()}, "pieces": int(p.count),
+        params = asdict(replace(p.params, min_points=self.dock.min_points.value()))
+        return {"tool": "pieces", "op": "replace", "action": op, "params": params, "pieces": int(p.count),
                 "kept": [int(p.sizes[i]) for i in sorted(ids)][:20], **(extra or {})}  # fmt: skip
 
     # ---- the buttons: on the current selection --------------------------------------------------------------

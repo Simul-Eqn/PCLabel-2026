@@ -780,7 +780,7 @@ def test_lasso_and_rectangle_select_visible_points_or_everything_through(window,
     assert window.frames_dock.depth_mode.currentData() == "through"
     through = select()
     assert window.selection_def == {"tool": "select_shape", "shape": "rectangle", "depth": "through", "op": "replace",
-                                    "points": through.size}  # fmt: skip
+                                    "depth_test": None, "points": through.size}  # fmt: skip
     assert np.isin(visible, through).all() and through.size > 1.5 * visible.size  # the ground under the canopy too
     z = np.asarray(p.xyz[through, 2], np.float64) + p.offset[2]
     assert z.min() < 0.5 < 3.0 < z.max()  # from the ground up into the canopy
