@@ -679,15 +679,6 @@ class MainWindow(QMainWindow):
             return idx
         return self._filters().apply(self.project.xyz, idx)
 
-    def allowed_mask(self, idx) -> np.ndarray:
-        """Which of these store indices a tool may select: visible (clips, slice) and not locked."""
-        idx = np.asarray(idx, np.int64)
-        ok = isin_sorted(idx, self._visible(idx)) if idx.size else np.zeros(0, bool)
-        lk = self.locked_points()
-        if lk.size and idx.size:
-            ok &= ~isin_sorted(idx, lk)
-        return ok
-
     def set_volume_clip(self, spec, on: bool = True):
         """Clip to a 3D select volume (a tools.volume.VolumeSpec, local), or turn that clip off (spec None)."""
         r = self.viewport.renderer
@@ -865,12 +856,6 @@ class MainWindow(QMainWindow):
             vp.doneCurrent()
         vp.update()
 
-    def _clip_local(self):
-        d, off = self.viewport.renderer.display, self.project.offset
-        if not d.clip_on:
-            return None
-        return np.asarray(d.clip_min) - off, np.asarray(d.clip_max) - off
-
     def run_grow(self):
         """Run the active seed tool from the current seed in a worker (again when a threshold changes)."""
         st = self._grow_state
@@ -879,8 +864,7 @@ class MainWindow(QMainWindow):
         if self._grow_busy:
             self._grow_pending = True
             return
-        clip = self._clip_local()
-        inside = self._inside()
+        filters = self._filters()
         dock = self._seed_dock(st["tool"])
         params = dock.params()
         pr = self.project
@@ -889,22 +873,20 @@ class MainWindow(QMainWindow):
             image = self._magic_image
 
             def run():
-                return magic_select(pr.xyz, pr.intensity, pr.tiles, st["seed"], params, image=image, clip=clip,
-                                    inside=inside)  # fmt: skip
+                return magic_select(pr.xyz, pr.intensity, pr.tiles, st["seed"], params, image=image, filters=filters)
         elif st["mode"] == "normals":
             voxels = self._normal_voxels
 
             def run():
-                return normal_grow(pr.xyz, pr.tiles, st["seed"], params, voxels=voxels, clip=clip, inside=inside)
+                return normal_grow(pr.xyz, pr.tiles, st["seed"], params, voxels=voxels, filters=filters)
         else:
             key = (tuple(st["seed"]), params.cell, params.radius, params.surface_band, params.cell_points,
-                   None if clip is None else (tuple(clip[0]), tuple(clip[1])), None if inside is None else inside.token)  # fmt: skip
+                   *filters.key())  # fmt: skip
             grid = st["grid"] if st["grid_key"] == key else None
             st["want_key"] = key
 
             def run():
-                return ground_grow(pr.xyz, pr.intensity, pr.tiles, st["seed"], params, grid=grid, clip=clip,
-                                   inside=inside)  # fmt: skip
+                return ground_grow(pr.xyz, pr.intensity, pr.tiles, st["seed"], params, grid=grid, filters=filters)
 
         self._grow_busy = True
         dock.result.setText("working...")

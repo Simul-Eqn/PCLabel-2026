@@ -24,7 +24,9 @@ from dataclasses import asdict, dataclass
 import numba as nb
 import numpy as np
 
+from pclabel.store.tiles import tiles_meeting
 from pclabel.tools import sets
+from pclabel.tools.selection import reach as filter_reach, restrict
 
 EMPTY = np.int64(-1)
 BITS = 21  # per axis in a voxel key: up to 2 million voxels along each side of the cube
@@ -70,9 +72,9 @@ class NormalGrowResult:
     info: dict
 
 
-def build_key(params: NormalGrowParams, clip=None, inside=None) -> tuple:
-    c = None if clip is None else (tuple(np.asarray(clip[0], float)), tuple(np.asarray(clip[1], float)))
-    return (params.radius, params.voxel, params.normal_radius, c, None if inside is None else inside.token)
+def build_key(params: NormalGrowParams, filters=None) -> tuple:
+    f = filters.key() if filters is not None else (None, None)
+    return (params.radius, params.voxel, params.normal_radius, *f)
 
 
 @nb.njit(nogil=True, cache=True, inline="always")
@@ -248,9 +250,10 @@ def _classify(xyz, a, b, lo, voxel, n_side, keys, region, out):
 PICTURE_SCALE = 1.5  # the voxels' half-size, in reaches
 
 
-def build_voxels(xyz, tiles, centre, params: NormalGrowParams, clip=None, inside=None) -> VoxelNormals:
+def build_voxels(xyz, tiles, centre, params: NormalGrowParams, filters=None) -> VoxelNormals:
     """Voxels, centroids, normals and curvature in a cube of half-size PICTURE_SCALE x the reach around ``centre``,
-    from the points within the clip box and ``inside`` (a PointMask)."""
+    from the points ``filters`` reach (its clip box and point mask)."""
+    clip, inside = filter_reach(filters)
     p = params
     half = PICTURE_SCALE * p.radius
     n_side = int(np.ceil(2 * half / p.voxel)) + 1
@@ -260,10 +263,7 @@ def build_voxels(xyz, tiles, centre, params: NormalGrowParams, clip=None, inside
     lo = np.floor((centre - half) / p.voxel) * p.voxel  # a fixed lattice
     hi = lo + n_side * p.voxel
     t = tiles
-    cand = np.flatnonzero((t["x1"] >= lo[0]) & (t["x0"] <= hi[0]) & (t["y1"] >= lo[1]) & (t["y0"] <= hi[1])
-                          & (t["zmax"] >= lo[2]) & (t["zmin"] <= hi[2]))  # fmt: skip
-    if inside is not None:
-        cand = inside.keep_tiles(t, cand)
+    cand = tiles_meeting(t, lo, hi, inside)
     in_on, in_mask = sets.mask_args(inside)
     size = 1 << 20
     keys = np.full(size, EMPTY, np.int64)
@@ -290,19 +290,20 @@ def build_voxels(xyz, tiles, centre, params: NormalGrowParams, clip=None, inside
     rough = np.full(size, np.nan)
     reach = int(np.ceil(p.normal_radius / p.voxel))
     _normals(keys, centroid, reach, p.normal_radius, normal, curvature, rough)
-    return VoxelNormals(lo, p.voxel, n_side, keys, centroid, cnt, normal, curvature, build_key(p, clip, inside),
+    return VoxelNormals(lo, p.voxel, n_side, keys, centroid, cnt, normal, curvature, build_key(p, filters),
                         int(cnt.sum()))  # fmt: skip
 
 
 def normal_grow(xyz, tiles, seed, params: NormalGrowParams = NormalGrowParams(), *, voxels=None,
-                clip=None, inside=None) -> NormalGrowResult:  # fmt: skip
+                filters=None) -> NormalGrowResult:  # fmt: skip
     """Run the geometric grow from ``seed`` (local). Pass ``voxels`` from an earlier run to reuse them when they were
     built with the same settings and cover this click's reach."""
     p = params
     seed = np.asarray(seed, np.float64)
-    reused = voxels is not None and voxels.key == build_key(p, clip, inside) and voxels.covers(seed, p.radius)
+    clip, inside = filter_reach(filters)
+    reused = voxels is not None and voxels.key == build_key(p, filters) and voxels.covers(seed, p.radius)
     if not reused:
-        voxels = build_voxels(xyz, tiles, seed, p, clip, inside)
+        voxels = build_voxels(xyz, tiles, seed, p, filters)
     v = voxels
     vi = np.floor((seed - v.lo) / v.voxel).astype(np.int64)
     s = -1
@@ -331,10 +332,7 @@ def normal_grow(xyz, tiles, seed, params: NormalGrowParams = NormalGrowParams(),
     lo_w = v.lo + lo_i * v.voxel
     hi_w = v.lo + (hi_i + 1) * v.voxel
     t = tiles
-    cand = np.flatnonzero((t["x1"] >= lo_w[0]) & (t["x0"] <= hi_w[0]) & (t["y1"] >= lo_w[1]) & (t["y0"] <= hi_w[1])
-                          & (t["zmax"] >= lo_w[2]) & (t["zmin"] <= hi_w[2]))  # fmt: skip
-    if inside is not None:
-        cand = inside.keep_tiles(t, cand)
+    cand = tiles_meeting(t, lo_w, hi_w, inside)
     arr = np.asarray(xyz)
     parts = []
     for k in cand:
@@ -342,11 +340,7 @@ def normal_grow(xyz, tiles, seed, params: NormalGrowParams = NormalGrowParams(),
         out = np.empty(b - a, np.bool_)
         _classify(arr, a, b, v.lo, v.voxel, v.n_side, v.keys, region, out)
         idx = np.flatnonzero(out).astype(np.int64) + a
-        if inside is not None and idx.size:
-            idx = idx[inside.mask[idx]]
-        if clip is not None and idx.size:
-            q = arr[idx]
-            idx = idx[np.all((q >= clip[0]) & (q <= clip[1]), axis=1)]
+        idx = restrict(arr, idx, clip, inside)
         parts.append(idx)
     idx = np.concatenate(parts) if parts else np.empty(0, np.int64)
     reached = bool(np.any(region & _on_box_edge(v, lo_i, hi_i)))

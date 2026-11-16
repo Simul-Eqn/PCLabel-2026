@@ -24,6 +24,7 @@ from scipy import ndimage
 from scipy.spatial import cKDTree
 
 from pclabel.analysis import curves
+from pclabel.store.tiles import tiles_meeting
 
 SIDES = ("both", "left", "right")
 
@@ -55,8 +56,7 @@ def check(xyz, tiles, line, axis, p: ClearanceParams = ClearanceParams(), candid
     hi = samp.max(0) + (reach + p.height)
     if candidates is None:
         t = tiles
-        cand = np.flatnonzero((t["x1"] >= lo[0]) & (t["x0"] <= hi[0]) & (t["y1"] >= lo[1]) & (t["y0"] <= hi[1])
-                              & (t["zmax"] >= lo[2]) & (t["zmin"] <= hi[2]))  # fmt: skip
+        cand = tiles_meeting(t, lo, hi)
         chunks = [np.arange(int(t["start"][k]), int(t["start"][k] + t["count"][k]), dtype=np.int64) for k in cand]
     else:
         c = np.asarray(candidates, np.int64)

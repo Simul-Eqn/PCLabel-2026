@@ -352,6 +352,11 @@ read):
 - **Locks:** the window keeps the sorted store indices of locked points, recomputed when the annotations or the
   locks change. Every selection result except a subtraction is filtered against them with a parallel
   binary-search membership test (`store.annotations.isin_sorted`).
+- **One restriction type** (`tools/selection.py: SelectFilters`): the clip box, the height slice, the clip volume
+  and the clip to point sets. Every tool takes it as `filters`. Shapes, 3D select and the tracers keep only what it
+  keeps; the seed tools (grow, magic select, geometric grow) and the clean-up read their points through its clip
+  box and point mask (`reach`), and the window filters their results by the rest. The clean-up also takes `locked`
+  (sorted store indices), which subtractions ignore. Tiles are found with `store/tiles.py: tiles_meeting`.
 - **Clip to point sets** (`tools/sets.py: PointMask`): the chosen point sets' store indices, plus a dense boolean
   mask over the store (1 B/point: 634 MB for streets 1, built in about 10 ms by a parallel scatter).
   - Every kernel that reads points takes it (`inside=`): the ground grid, the magic picture, the geometric voxels,

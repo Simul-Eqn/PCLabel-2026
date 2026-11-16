@@ -78,7 +78,12 @@ the same project files, since the user labels while the code changes).
   labels come from the taxonomy's `tools` section; the curb tracer labels the lip `curb` and leaves the toe
   unlabelled. The unused `key` field is gone from the taxonomy. The synthetic street has a `material` array (the
   physical surface) beside `cls`, which is now the standard's classes (curb, drain and canopy points have none).
-- Next: C6 (one tile query and one filter type), then C7 to C14 as time allows.
+- C6: done. `store/tiles.py: tiles_meeting` is the one tile query (ten copies before); every tool takes
+  `filters: SelectFilters` (the seed tools' `clip=` / `inside=` and the clean-up's `allowed` callback are gone; the
+  clean-up takes `locked`); `tools/selection.restrict` is the one result filter of the seed tools. The numba
+  kernels are unchanged. `bench/bench_select.py` before and after: 1,208 and 1,199M points/s (mask), 1,182 and
+  1,168M (mask and depth test), within run-to-run noise.
+- Next: C7 to C14 as time allows.
 
 Rules for every step:
 

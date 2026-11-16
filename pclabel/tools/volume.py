@@ -21,6 +21,7 @@ import numba as nb
 import numpy as np
 
 from pclabel.analysis.geometry import frame_axes
+from pclabel.store.tiles import tiles_meeting
 
 
 @dataclass(frozen=True)
@@ -179,10 +180,7 @@ def select_volume(xyz, tiles, base, axis, along, params: VolumeParams = VolumePa
     c = corners(base, n, u, v, p)
     lo, hi = c.min(0), c.max(0)
     t = tiles
-    cand = np.flatnonzero((t["x1"] >= lo[0]) & (t["x0"] <= hi[0]) & (t["y1"] >= lo[1]) & (t["y0"] <= hi[1])
-                          & (t["zmax"] >= lo[2]) & (t["zmin"] <= hi[2]))  # fmt: skip
-    if filters is not None:
-        cand = filters.tiles(t, cand)
+    cand = tiles_meeting(t, lo, hi, filters.inside if filters is not None else None)
     hl, hw = _half_extents(p)
     arr = np.asarray(xyz)
     parts = []
@@ -286,10 +284,7 @@ def select_loop(xyz, tiles, origin, normal, u, poly2d, bottom: float, top: float
     c = np.array([origin + x * u + y * v + h * n for x in xs for y in ys for h in (bottom, top)])
     lo, hi = c.min(0), c.max(0)
     t = tiles
-    cand = np.flatnonzero((t["x1"] >= lo[0]) & (t["x0"] <= hi[0]) & (t["y1"] >= lo[1]) & (t["y0"] <= hi[1])
-                          & (t["zmax"] >= lo[2]) & (t["zmin"] <= hi[2]))  # fmt: skip
-    if filters is not None:
-        cand = filters.tiles(t, cand)
+    cand = tiles_meeting(t, lo, hi, filters.inside if filters is not None else None)
     arr = np.asarray(xyz)
     parts = []
     for k in cand:

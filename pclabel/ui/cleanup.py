@@ -123,9 +123,8 @@ class CleanController(QObject):
         f = w.frames[w.active_frame]
         sel = w.selection
         p = self.dock.params()
-        allowed = w.allowed_mask
         origin = np.asarray(f.origin, np.float64) - w.project.offset
-        args = (w.project.xyz, w.project.tiles, sel, f.normal, f.along, origin, p, allowed, w._inside())
+        args = (w.project.xyz, w.project.tiles, sel, f.normal, f.along, origin, p, w._filters(), w.locked_points())
         self._busy = True
         self.dock.result.setText("working...")
 

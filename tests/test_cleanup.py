@@ -7,6 +7,7 @@ import pytest
 
 from pclabel.store.tiles import TilingParams, build_tiles
 from pclabel.tools.cleanup import CleanParams, apply_clean, clean_selection
+from pclabel.tools.selection import SelectFilters
 
 
 @pytest.fixture(scope="module")
@@ -42,8 +43,12 @@ def test_grass_over_a_low_cut_joins_and_specks_go(area):
     assert tight.size < added.size
 
 
-def test_only_allowed_points_are_touched(area):
+def test_only_visible_unlocked_points_are_touched(area):
     xyz, tiles, sel = area
-    allowed = lambda idx: xyz[idx, 0] < 7.5  # noqa: E731  (e.g. a clip hides x >= 7.5)
-    added, removed, _ = clean_selection(xyz, tiles, sel, (0, 0, 1), (1, 0, 0), np.zeros(3), CleanParams(), allowed)
-    assert added.size and np.all(xyz[added, 0] < 7.5) and removed.size == 0  # the speck is hidden: it stays
+    clip = SelectFilters(clip_min=(-100.0, -100.0, -100.0), clip_max=(7.5, 100.0, 100.0))  # a clip hides x > 7.5
+    added, removed, _ = clean_selection(xyz, tiles, sel, (0, 0, 1), (1, 0, 0), np.zeros(3), CleanParams(), clip)
+    assert added.size and np.all(xyz[added, 0] <= 7.5) and removed.size == 0  # the speck is hidden: it stays
+    every, _, _ = clean_selection(xyz, tiles, sel, (0, 0, 1), (1, 0, 0), np.zeros(3), CleanParams())
+    locked = every[: every.size // 2]
+    rest, _, _ = clean_selection(xyz, tiles, sel, (0, 0, 1), (1, 0, 0), np.zeros(3), CleanParams(), locked=locked)
+    assert rest.size and not np.isin(rest, locked).any()

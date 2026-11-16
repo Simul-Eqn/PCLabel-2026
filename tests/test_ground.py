@@ -8,6 +8,7 @@ import pytest
 from pclabel.store.tiles import TilingParams, build_tiles
 from pclabel.synth import is_material, make_street
 from pclabel.tools.ground import GroundGrowParams, ground_grow
+from pclabel.tools.selection import SelectFilters
 
 # the synthetic scan is about 40x sparser than streets 1, so cells are 20 cm here (10 cm is the default)
 P = GroundGrowParams(cell=0.2, max_gap=0.6, intensity_range=1.0)
@@ -93,7 +94,7 @@ def test_reach_limits_the_grow(scene):
 def test_seed_without_ground_data(scene):
     with pytest.raises(ValueError):
         ground_grow(scene["xyz"], scene["inten"], scene["tiles"], scene["seed"] + (0, 0, 0), P,
-                    clip=(scene["seed"] + 100, scene["seed"] + 101))  # fmt: skip
+                    filters=SelectFilters(clip_min=tuple(scene["seed"] + 100), clip_max=tuple(scene["seed"] + 101)))
 
 
 def patch(parts, max_points=10_000_000):
