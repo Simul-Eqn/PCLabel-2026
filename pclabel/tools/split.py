@@ -22,7 +22,7 @@ from dataclasses import asdict, dataclass
 import numba as nb
 import numpy as np
 
-from pclabel.tools.normals import BITS, EMPTY, _find, _hash, _normals, _rehash
+from pclabel.tools.voxels import BITS, EMPTY, find, grown, hash_slot, local_normals
 
 FEATURES = {"curvature": "curvature (surface variation)", "roughness": "roughness (spread off the local plane)"}
 
@@ -93,7 +93,7 @@ def _insert_indices(xyz, idx, j0, lo, voxel, keys, sums, cnt, used, limit):
         iy = np.int64(np.floor((y - lo[1]) / voxel))
         iz = np.int64(np.floor((z - lo[2]) / voxel))
         key = (ix << (2 * BITS)) | (iy << BITS) | iz
-        h = _hash(key, mask)
+        h = hash_slot(key, mask)
         while keys[h] != EMPTY and keys[h] != key:
             h = (h + 1) & mask
         if keys[h] == EMPTY:
@@ -115,7 +115,7 @@ def _slots(xyz, idx, lo, voxel, keys, out):
         ix = np.int64(np.floor((xyz[i, 0] - lo[0]) / voxel))
         iy = np.int64(np.floor((xyz[i, 1] - lo[1]) / voxel))
         iz = np.int64(np.floor((xyz[i, 2] - lo[2]) / voxel))
-        out[j] = _find(keys, (ix << (2 * BITS)) | (iy << BITS) | iz)
+        out[j] = find(keys, (ix << (2 * BITS)) | (iy << BITS) | iz)
 
 
 def set_features(xyz, indices, voxel: float = 0.03, normal_radius: float = 0.09) -> SetFeatures:
@@ -133,14 +133,12 @@ def set_features(xyz, indices, voxel: float = 0.03, normal_radius: float = 0.09)
     while j < idx.size:
         j, used = _insert_indices(arr, idx, j, lo, voxel, keys, sums, cnt, used, size // 2)
         if j < idx.size:
-            size *= 2
-            nk, ns, nc = np.full(size, EMPTY, np.int64), np.zeros((size, 3)), np.zeros(size, np.int32)
-            _rehash(keys, sums, cnt, nk, ns, nc)
-            keys, sums, cnt = nk, ns, nc
+            keys, sums, cnt = grown(keys, sums, cnt)
+            size = keys.shape[0]
     centroid = sums / np.maximum(cnt, 1)[:, None]
     normal = np.full((size, 3), np.nan)
     curvature, rough = np.full(size, np.nan), np.full(size, np.nan)
-    _normals(keys, centroid, int(np.ceil(normal_radius / voxel)), normal_radius, normal, curvature, rough)
+    local_normals(keys, centroid, int(np.ceil(normal_radius / voxel)), normal_radius, normal, curvature, rough)
     slot = np.empty(idx.size, np.int64)
     _slots(arr, idx, lo, voxel, keys, slot)
     return SetFeatures(idx, slot, keys, cnt, centroid, curvature, rough, lo, voxel, n_side, (voxel, normal_radius))
@@ -164,7 +162,7 @@ def _majority(keys, centroid, count, label, reach, radius, majority, out):
                     jx, jy, jz = ix + dx, iy + dy, iz + dz
                     if jx < 0 or jy < 0 or jz < 0:
                         continue
-                    t = _find(keys, (jx << (2 * BITS)) | (jy << BITS) | jz)
+                    t = find(keys, (jx << (2 * BITS)) | (jy << BITS) | jz)
                     if t < 0:
                         continue
                     q = centroid[t]
@@ -205,7 +203,7 @@ def _islands(keys, count, label, min_points, out):
                         jx, jy, jz = ix + dx, iy + dy, iz + dz
                         if jx < 0 or jy < 0 or jz < 0:
                             continue
-                        t = _find(keys, (jx << (2 * BITS)) | (jy << BITS) | jz)
+                        t = find(keys, (jx << (2 * BITS)) | (jy << BITS) | jz)
                         if t >= 0 and not seen[t] and label[t] == label[s0]:
                             seen[t] = True
                             queue[tail] = t

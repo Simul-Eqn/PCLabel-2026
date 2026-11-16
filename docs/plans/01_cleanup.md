@@ -93,7 +93,11 @@ the same project files, since the user labels while the code changes).
   `trim` and is recorded with each band, pieces record their whole dataclass, shape selections their depth
   tolerance; the `record()` wrappers are gone (`asdict`). Kept as they are: `Annotations.smooth`, `convert`,
   `join_curves` and `Curve.from_line` take one or two numbers each and already write them into the line's source.
-- Next: C8, then C9 to C11, then C13.
+- C8: done. `tools/voxels.py` holds the hash (`hash_slot`, `find`, `grown`, `BITS`, `EMPTY`) and `local_normals`;
+  the geometric grow, pieces and split import it instead of each other's private names. Each keeps its own short
+  insert loop: a shared `claim` cost 50 % on pieces. `bench/bench_voxels.py` on streets 1, before / after: grow
+  1.96 / 1.90-1.94 s, pieces 0.090 / 0.090-0.103 s, split 0.52 / 0.49-0.50 s, identical results.
+- Next: C9 to C11, then C13.
 
 Rules for every step:
 

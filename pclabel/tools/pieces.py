@@ -19,7 +19,7 @@ from dataclasses import asdict, dataclass
 import numba as nb
 import numpy as np
 
-from pclabel.tools.normals import BITS, EMPTY, _find, _hash
+from pclabel.tools.voxels import BITS, EMPTY, find, grown, hash_slot
 
 
 @dataclass(frozen=True)
@@ -102,7 +102,7 @@ def _insert_keys(pkeys, i0, keys, used, limit):
     mask = keys.shape[0] - 1
     for k in range(i0, pkeys.shape[0]):
         key = pkeys[k]
-        h = _hash(key, mask)
+        h = hash_slot(key, mask)
         while keys[h] != EMPTY and keys[h] != key:
             h = (h + 1) & mask
         if keys[h] == EMPTY:
@@ -113,23 +113,10 @@ def _insert_keys(pkeys, i0, keys, used, limit):
     return pkeys.shape[0], used
 
 
-@nb.njit(nogil=True, cache=True)
-def _rehash_keys(keys, nkeys):
-    mask = nkeys.shape[0] - 1
-    for s in range(keys.shape[0]):
-        k = keys[s]
-        if k == EMPTY:
-            continue
-        h = _hash(k, mask)
-        while nkeys[h] != EMPTY:
-            h = (h + 1) & mask
-        nkeys[h] = k
-
-
 @nb.njit(parallel=True, nogil=True, cache=True)
 def _slots(keys, pkeys, out):
     for k in nb.prange(pkeys.shape[0]):
-        out[k] = _find(keys, pkeys[k])
+        out[k] = find(keys, pkeys[k])
 
 
 @nb.njit(nogil=True, cache=True)
@@ -157,7 +144,7 @@ def _union_neighbours(keys, n_side, parent):
                     jx, jy, jz = ix + dx, iy + dy, iz + dz
                     if jx < 0 or jy < 0 or jz < 0 or jx >= n_side or jy >= n_side or jz >= n_side:
                         continue
-                    t = _find(keys, (jx << (2 * BITS)) | (jy << BITS) | jz)
+                    t = find(keys, (jx << (2 * BITS)) | (jy << BITS) | jz)
                     if t >= 0:
                         a, b = _root(parent, s), _root(parent, t)
                         if a != b:
@@ -188,7 +175,7 @@ def _nearest_piece(keys, slot_piece, p, lo, voxel, n_side, r):
                 d = dx * dx + dy * dy + dz * dz
                 if d >= best_d or d > r * r:
                     continue
-                t = _find(keys, (np.int64(jx) << (2 * BITS)) | (np.int64(jy) << BITS) | np.int64(jz))
+                t = find(keys, (np.int64(jx) << (2 * BITS)) | (np.int64(jy) << BITS) | np.int64(jz))
                 if t >= 0:
                     best, best_d = slot_piece[t], d
     return best
@@ -217,10 +204,8 @@ def find_pieces(xyz, selection, params: PieceParams = PieceParams()) -> Pieces:
     while i < pkeys.size:
         i, used = _insert_keys(pkeys, i, keys, used, size // 2)
         if i < pkeys.size:  # half full: double the table
-            size *= 2
-            nk = np.full(size, EMPTY, np.int64)
-            _rehash_keys(keys, nk)
-            keys = nk
+            keys = grown(keys)[0]
+            size = keys.shape[0]
     slots = np.empty(idx.size, np.int64)
     _slots(keys, pkeys, slots)
     parent = np.arange(size, dtype=np.int64)

@@ -100,6 +100,12 @@ In the app on streets 1, GPU, unless named otherwise.
 | density | `bottom_road_cleaned` (121.1M) | the dense part (≥ 2,000/m²) holds 99.5 % of the points on 1,168 of 2,250 m²; 2,000/m² is reached about 43 m from the scanner on the bottom road | 1.09 s; 0.61 s per change | 2026-10-21 |
 | split | 6 m cylinder, 4.83M points | verge rough, road smooth; points to look at along the kerb edge and marking edges | 0.61 s; ~0.1 s per change | 2026-10-20 |
 
+## voxel tools
+
+`python bench/bench_voxels.py "streets 1"`, 2026-11-16, at the magic-select site (22.85, −11.09), median of 9 runs:
+geometric grow from the road (voxels built each run) 1.90–1.94 s, 7.39M points, 1.05M voxels; pieces of a 6 m
+cylinder (5.78M points, 10 cm gap) 0.090–0.103 s, 36 pieces; split features of that cylinder 0.49–0.50 s.
+
 ## planes
 
 - Synthetic road with 1.00 % grade and 2.50 % crossfall recovered as 1.0009 % and 2.4994 %, RMS 0.6 mm; unchanged
