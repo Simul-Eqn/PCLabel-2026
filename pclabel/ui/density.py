@@ -10,18 +10,17 @@
 
 from __future__ import annotations
 
-import threading
-import time
 from dataclasses import replace
 
 import numpy as np
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, Qt, QTimer
 from PySide6.QtWidgets import QDockWidget, QFormLayout, QHBoxLayout, QLabel, QPushButton, QWidget
 
 from pclabel.render.renderer import UNSURE_BIT
 from pclabel.store.annotations import PointSet
 from pclabel.tools import sets
 from pclabel.tools.density import DensityParams, dense_part, density_grid
+from pclabel.ui.worker import run_in_worker
 from pclabel.ui.docks import _spin
 
 
@@ -86,10 +85,6 @@ class DensityDock(QDockWidget):
                        radius=self.radius.value() / 100, min_area=self.min_area.value())  # fmt: skip
 
 
-class _Done(QObject):
-    done = Signal(object, object, object)  # kind, result, error
-
-
 class DensityController(QObject):
     def __init__(self, window):
         super().__init__(window)
@@ -100,8 +95,6 @@ class DensityController(QObject):
         self.last = None  # (dense, sparse, info)
         self._busy = False
         self._again = None
-        self._done = _Done()
-        self._done.done.connect(self._finished)
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(250)
@@ -169,14 +162,7 @@ class DensityController(QObject):
         self._busy = True
         self.dock.result.setText("counting the points per column..." if kind == "grid" else "working...")
 
-        def work():
-            t0 = time.perf_counter()
-            try:
-                self._done.done.emit(kind, (fn(), time.perf_counter() - t0), None)
-            except Exception as e:  # reported in the UI thread
-                self._done.done.emit(kind, None, e)
-
-        threading.Thread(target=work, daemon=True, name="density").start()
+        run_in_worker(fn, lambda res, err, s: self._finished(kind, None if err else (res, s), err), "density")
 
     def _finished(self, kind, res, err):
         self._busy = False
@@ -203,11 +189,8 @@ class DensityController(QObject):
         dense, sparse, info = self.last
         vp = self.w.viewport
         if vp.renderer is not None:
-            vp.makeCurrent()
-            try:
+            with vp.current():
                 vp.renderer.set_marks(UNSURE_BIT, sparse)
-            finally:
-                vp.doneCurrent()
             vp.update()
         pc = info["density_percentiles"]
         pct = ", ".join(f"{k} % {v:,.0f}" for k, v in pc.items())
@@ -220,11 +203,8 @@ class DensityController(QObject):
     def _clear(self):
         vp = self.w.viewport
         if vp.renderer is not None:
-            vp.makeCurrent()
-            try:
+            with vp.current():
                 vp.renderer.set_marks(UNSURE_BIT, None)
-            finally:
-                vp.doneCurrent()
             vp.update()
 
     def cancel(self):

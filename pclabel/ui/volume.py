@@ -372,11 +372,8 @@ class VolumeController(QObject):
         lines = None
         if self.vp.tool != "volume" and d.clip_volume_on and d.clip_volume is not None:
             lines = [(q, CLIP_COLOR, 1.2) for q in d.clip_volume.outline(min(self.dock.verticals.value(), 16))]
-        self.vp.makeCurrent()
-        try:
+        with self.vp.current():
             r.set_vectors(lines, None, layer="clip")
-        finally:
-            self.vp.doneCurrent()
         self.vp.update()
 
     def confirm(self, op: str):
@@ -429,11 +426,8 @@ class VolumeController(QObject):
                 size = f"{p.length:.2f} x {p.width:.2f} m" if p.shape == "box" else f"radius {p.radius:.2f} m"
                 self.dock.status.setText(f"{p.shape} {size}, {p.bottom:+.2f} to {p.top:+.2f} m along the height axis; "
                                          f"base at {np.round(self.base + self.w.project.offset, 3).tolist()}")  # fmt: skip
-        self.vp.makeCurrent()
-        try:
+        with self.vp.current():
             r.set_vectors(lines, points, layer="volume")
-        finally:
-            self.vp.doneCurrent()
         if self.vp.tool == "volume" and self.dock.live.isChecked() and lines is not None:
             self.clip_to_this()  # the clip follows the volume
         else:

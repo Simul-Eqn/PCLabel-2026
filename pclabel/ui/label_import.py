@@ -7,10 +7,8 @@ scan. The import is one undoable step: a directory named after the file, a direc
 
 from __future__ import annotations
 
-import threading
-import time
 
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QObject, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox,
@@ -28,6 +26,7 @@ from PySide6.QtWidgets import (
 
 from pclabel.store.label_import import FORMATS, apply_profile, best_profile, coverage, load_profiles, read_source, to_directory
 from pclabel.ui import labelbox
+from pclabel.ui.worker import run_in_worker
 
 COLS = ("import", "layer", "features", "vertices", "label", "why")
 
@@ -137,16 +136,10 @@ class LabelImportDialog(QDialog):
         return out
 
 
-class _Read(QObject):
-    done = Signal(object, object, float)  # source, error, seconds
-
-
 class LabelImportController(QObject):
     def __init__(self, window):
         super().__init__(window)
         self.w = window
-        self._read = _Read(self)  # lives in the UI thread; ``_on_read`` runs there (a bound method of a QObject)
-        self._read.done.connect(self._on_read)
         self._busy = False
         self.last_dialog = None
 
@@ -163,14 +156,7 @@ class LabelImportController(QObject):
         self._busy = True
         w.statusBar().showMessage(f"reading {path}...")
 
-        def work():
-            t0 = time.perf_counter()
-            try:
-                self._read.done.emit(read_source(path), None, time.perf_counter() - t0)
-            except Exception as e:  # reported in the UI thread
-                self._read.done.emit(None, e, time.perf_counter() - t0)
-
-        threading.Thread(target=work, daemon=True, name="read-labels").start()
+        run_in_worker(lambda: read_source(path), self._on_read, "read-labels")
 
     def _on_read(self, source, err, seconds):
         self._busy = False

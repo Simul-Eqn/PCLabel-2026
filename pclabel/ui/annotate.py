@@ -1591,9 +1591,6 @@ class AnnotationController(QObject):
                 lines.append((band, PENDING, 2.0))
             points.append((pts, PENDING, 9.0))
         self.vp.edit_targets = targets
-        self.vp.makeCurrent()
-        try:
+        with self.vp.current():
             r.set_vectors(lines, points)
-        finally:
-            self.vp.doneCurrent()
         self.vp.update()

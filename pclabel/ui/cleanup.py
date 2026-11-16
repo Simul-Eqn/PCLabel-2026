@@ -7,16 +7,15 @@ and not locked, are considered.
 
 from __future__ import annotations
 
-import threading
-import time
 from dataclasses import replace
 
 import numpy as np
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, Qt, QTimer
 from PySide6.QtWidgets import QCheckBox, QDockWidget, QFormLayout, QHBoxLayout, QLabel, QPushButton, QSpinBox, QWidget
 
 from pclabel.render.renderer import GROUP_BIT, UNSURE_BIT
 from pclabel.tools.cleanup import CleanParams, apply_clean, clean_selection
+from pclabel.ui.worker import run_in_worker
 from pclabel.ui.docks import _spin
 
 
@@ -79,10 +78,6 @@ class CleanDock(QDockWidget):
                        min_island=self.min_island.value())  # fmt: skip
 
 
-class _Done(QObject):
-    done = Signal(object, object, object)  # selection it was for, result, error
-
-
 class CleanController(QObject):
     def __init__(self, window):
         super().__init__(window)
@@ -91,8 +86,6 @@ class CleanController(QObject):
         self.last = None  # (selection, added, removed, info)
         self._busy = False
         self._again = False
-        self._done = _Done()
-        self._done.done.connect(self._finished)
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(300)
@@ -128,16 +121,12 @@ class CleanController(QObject):
         self._busy = True
         self.dock.result.setText("working...")
 
-        def work():
-            t0 = time.perf_counter()
-            try:
-                added, removed, info = clean_selection(*args)
-                info["seconds"] = time.perf_counter() - t0
-                self._done.done.emit(sel, (added, removed, info), None)
-            except Exception as e:  # reported in the UI thread
-                self._done.done.emit(sel, None, e)
+        def done(res, err, seconds):
+            if res is not None:
+                res[2]["seconds"] = seconds
+            self._finished(sel, res, err)
 
-        threading.Thread(target=work, daemon=True, name="clean-up").start()
+        run_in_worker(lambda: clean_selection(*args), done, "clean-up")
 
     def _finished(self, sel, res, err):
         self._busy = False
@@ -157,12 +146,9 @@ class CleanController(QObject):
         vp = self.w.viewport
         if vp.renderer is None:
             return
-        vp.makeCurrent()
-        try:
+        with vp.current():
             vp.renderer.set_marks(GROUP_BIT, added)
             vp.renderer.set_marks(UNSURE_BIT, removed)
-        finally:
-            vp.doneCurrent()
         vp.update()
 
     def cancel(self):

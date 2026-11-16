@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import threading
 import time
 from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
@@ -37,6 +36,7 @@ from pclabel.tools.sets import isin_sorted
 from pclabel.tools import sets
 from pclabel.tools.selection import DepthTest, SelectFilters, select_visible
 from pclabel.tools.volume import select_loop, select_volume
+from pclabel.ui.worker import run_in_worker
 from pclabel.ui.docks import (
     ClipDock,
     DisplayDock,
@@ -62,14 +62,6 @@ from pclabel.ui.label_import import LabelImportController
 from pclabel.ui.undo import UndoStack
 
 MODES = [k for k in sorted(MODE_NAMES) if k != MODE_CLASS]  # the class mode is for synthetic ground truth
-
-
-class _SelectionResult(QObject):
-    done = Signal(object, str, float, object, object)  # indices, op, seconds, error, definition (tool, parameters)
-
-
-class _GrowResult(QObject):
-    done = Signal(object, object, float, object)  # seed tool state, result, seconds, error
 
 
 class _UndoKeysToTheApp(QObject):
@@ -161,15 +153,11 @@ class MainWindow(QMainWindow):
         self._last_plane = None
         self.selection = np.empty(0, np.int64)
         self._sel_busy = False
-        self._sel_result = _SelectionResult()
-        self._sel_result.done.connect(self._selection_done)
         self._grow_state = None  # the last seed tool run: tool, seed, op, base selection, cached cell grid
         self._magic_image = None  # magic select's intensity picture, reused by later clicks
         self._normal_voxels = None  # grow select's geometric voxels and normals, reused by later clicks
         self._grow_busy = False
         self._grow_pending = False
-        self._grow_result = _GrowResult()
-        self._grow_result.done.connect(self._grow_done)
         self._grow_timer = QTimer(self)
         self._grow_timer.setSingleShot(True)
         self._grow_timer.setInterval(350)
@@ -592,13 +580,10 @@ class MainWindow(QMainWindow):
         vp = self.viewport
         if vp.renderer is None:
             return
-        vp.makeCurrent()
-        try:
+        with vp.current():
             vp.renderer.set_selection(self.selection)
             if self._grow_state is None:
                 vp.renderer.set_markers(None)
-        finally:
-            vp.doneCurrent()
         vp.update()
 
     def _filters(self) -> SelectFilters:
@@ -630,11 +615,8 @@ class MainWindow(QMainWindow):
             return
         self.clip_set = None if indices is None else sets.PointMask(indices, self.project.n, label)
         vp = self.viewport
-        vp.makeCurrent()
-        try:
+        with vp.current():
             r.set_marks(INSIDE_BIT, None if self.clip_set is None else self.clip_set.indices)
-        finally:
-            vp.doneCurrent()
         self._show_set_clip(on)
         self._apply_display()
 
@@ -696,11 +678,8 @@ class MainWindow(QMainWindow):
             return
         test = None  # through: every point inside the shape
         if not vp.select_through:  # visible: test against the drawn surface
-            vp.makeCurrent()
-            try:
+            with vp.current():
                 depth = r.read_depth()
-            finally:
-                vp.doneCurrent()
             cam = vp.camera
             test = DepthTest(depth, cam.near, cam.far, ortho=cam.projection == ORTHO)
         args = (self.project.xyz, self.project.tiles, r.last_mvp.copy(), r.last_viewport, polygon, test,
@@ -753,14 +732,7 @@ class MainWindow(QMainWindow):
         self._run_selection(lambda: select_loop(*args), op, definition)
 
     def _run_selection(self, fn, op, definition):
-        def work():
-            t0 = time.perf_counter()
-            try:
-                self._sel_result.done.emit(fn(), op, time.perf_counter() - t0, None, definition)
-            except Exception as e:  # reported in the UI thread
-                self._sel_result.done.emit(None, op, time.perf_counter() - t0, e, definition)
-
-        threading.Thread(target=work, daemon=True, name="select").start()
+        run_in_worker(fn, lambda res, err, s: self._selection_done(res, op, s, err, definition), "select")
 
     def _selection_done(self, idx, op, seconds, err, definition):
         self._sel_busy = False
@@ -835,11 +807,8 @@ class MainWindow(QMainWindow):
                     z = np.where(np.isfinite(z), z, near[ys - ya, xs - xa])
                 pts = np.stack([x0 + (xs + 0.5) * cell, y0 + (ys + 0.5) * cell, z], 1)
                 rgb = np.array([self.STOP_COLORS[int(r)] for r in reason[ys, xs]], np.uint8)
-        vp.makeCurrent()
-        try:
+        with vp.current():
             vp.renderer.set_markers(pts, rgb)
-        finally:
-            vp.doneCurrent()
         vp.update()
 
     def run_grow(self):
@@ -877,14 +846,7 @@ class MainWindow(QMainWindow):
         self._grow_busy = True
         dock.result.setText("working...")
 
-        def work():
-            t0 = time.perf_counter()
-            try:
-                self._grow_result.done.emit(st, run(), time.perf_counter() - t0, None)
-            except Exception as e:  # reported in the UI thread
-                self._grow_result.done.emit(st, None, time.perf_counter() - t0, e)
-
-        threading.Thread(target=work, daemon=True, name=st["tool"]).start()
+        run_in_worker(run, lambda res, err, s: self._grow_done(st, res, s, err), st["tool"])
 
     def _grow_done(self, st, res, seconds, err):
         self._grow_busy = False

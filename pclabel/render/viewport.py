@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import csv
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -129,8 +130,7 @@ class Viewport(QOpenGLWidget):
         if self.ctx is None:
             self._pending = (source, class_colors)
             return
-        self.makeCurrent()
-        try:
+        with self.current():
             if self.renderer is not None:
                 self.renderer.close()
                 self.renderer = None
@@ -139,8 +139,6 @@ class Viewport(QOpenGLWidget):
                 self.renderer = PointRenderer(self.ctx, source, class_colors, memory_bytes=self.memory_bytes,
                                               point_budget=self.point_budget)  # fmt: skip
                 self.fit()
-        finally:
-            self.doneCurrent()
         if self.renderer is not None:
             self.renderer_ready.emit()
         self.update()
@@ -302,11 +300,8 @@ class Viewport(QOpenGLWidget):
         if self.renderer is None or self.renderer.last_mvp is None:
             return None
         dpr = self.devicePixelRatioF()
-        self.makeCurrent()
-        try:
+        with self.current():
             hit = self.renderer.depth_near(pos.x() * dpr, pos.y() * dpr, radius)
-        finally:
-            self.doneCurrent()
         if hit is None:
             return None
         w, h = self.renderer.last_viewport
@@ -533,6 +528,15 @@ class Viewport(QOpenGLWidget):
         p = self.world_at(e.position())
         self.camera.zoom(0.85**steps, towards=p)
         self.update()
+
+    @contextmanager
+    def current(self):
+        """``with viewport.current():`` the GL context is current for the block (makeCurrent ... doneCurrent)."""
+        self.makeCurrent()
+        try:
+            yield
+        finally:
+            self.doneCurrent()
 
     def event(self, e):
         # while flying, W A S D Q E move the camera instead of triggering the window's shortcuts

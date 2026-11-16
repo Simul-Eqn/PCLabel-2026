@@ -58,6 +58,7 @@ from pclabel.tools.curbtrace import run_trace as run_curb
 from pclabel.tools.linetrace import LineTraceParams
 from pclabel.tools.linetrace import run_trace as run_line
 from pclabel.ui import labelbox
+from pclabel.ui.worker import run_in_worker
 from pclabel.ui.docks import _spin
 
 TOE_COLOR = (1.0, 0.55, 0.1, 1.0)
@@ -316,8 +317,6 @@ class TraceDock(QDockWidget):
 class _Relay(QObject):
     progress = Signal(object)  # a snapshot of the run so far
     done = Signal(object, object)  # result, error
-    done_clear = Signal(object, object)  # a clearance check: result, error
-    done_fit = Signal(object, object)  # kerb-top fits: [(item id, result or error)], error
 
 
 class TraceController(QObject):
@@ -333,8 +332,6 @@ class TraceController(QObject):
         self._relay = _Relay(self)
         self._relay.progress.connect(self._on_progress)
         self._relay.done.connect(self._on_done)
-        self._relay.done_clear.connect(self._on_clearance)
-        self._relay.done_fit.connect(self._on_fit)
         self.last_clearance = None
         d = self.dock
         d.start.clicked.connect(lambda on: self.begin(d.mode.currentData()) if on else self.w.viewport.set_tool(None))
@@ -598,17 +595,13 @@ class TraceController(QObject):
         def progress(frac):
             return not self._stop
 
-        def work():
-            t0 = time.perf_counter()
-            try:
-                res = check(xyz, tiles, v - off, axis, params, cand, progress)
-                res.update(seconds=time.perf_counter() - t0, line=line.name, line_id=line.id, points_checked=what,
-                           frame=f.name, axis=axis)  # fmt: skip
-                self._relay.done_clear.emit(res, None)
-            except Exception as e:  # reported in the UI thread
-                self._relay.done_clear.emit(None, e)
+        def done(res, err, seconds):
+            if res is not None:
+                res.update(seconds=seconds, line=line.name, line_id=line.id, points_checked=what, frame=f.name,
+                           axis=axis)  # fmt: skip
+            self._on_clearance(res, err)
 
-        threading.Thread(target=work, daemon=True, name="clearance").start()
+        run_in_worker(lambda: check(xyz, tiles, v - off, axis, params, cand, progress), done, "clearance")
         return True
 
     def _on_clearance(self, res, err):
@@ -662,22 +655,19 @@ class TraceController(QObject):
 
         def work():
             out = []
-            try:
-                for k, (iid, name, v, closed) in enumerate(jobs):
-                    if self._stop:
-                        break
-                    t0 = time.perf_counter()
-                    try:
-                        r = kerb_fit(xyz, tiles, v, axis, params, closed, filters, lambda fr: not self._stop)
-                        r["seconds"] = time.perf_counter() - t0
-                        out.append((iid, r))
-                    except (ValueError, InterruptedError) as e:
-                        out.append((iid, e))
-                self._relay.done_fit.emit({"results": out, "frame": f.name, "axis": axis, "params": params}, None)
-            except Exception as e:  # reported in the UI thread
-                self._relay.done_fit.emit(None, e)
+            for iid, name, v, closed in jobs:
+                if self._stop:
+                    break
+                t0 = time.perf_counter()
+                try:
+                    r = kerb_fit(xyz, tiles, v, axis, params, closed, filters, lambda fr: not self._stop)
+                    r["seconds"] = time.perf_counter() - t0
+                    out.append((iid, r))
+                except (ValueError, InterruptedError) as e:
+                    out.append((iid, e))
+            return {"results": out, "frame": f.name, "axis": axis, "params": params}
 
-        threading.Thread(target=work, daemon=True, name="kerb_fit").start()
+        run_in_worker(work, lambda res, err, s: self._on_fit(res, err), "kerb_fit")
         return True
 
     def _on_fit(self, res, err):

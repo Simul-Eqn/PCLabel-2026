@@ -102,7 +102,12 @@ the same project files, since the user labels while the code changes).
   joins the selection (locks kept out, subtraction ignores them); the label map's JSON document is
   `tools/labelmap.map_document`. Left in the UI, being thin already: placing markers (`tools/markers` does the
   work) and the map's PNG (written with QImage; the pipeline needs its own PNG writer, plan 02).
-- Next: C10, C11, then C13.
+- C10, in part: `Viewport.current()` replaces the 17 `makeCurrent()` / `doneCurrent()` pairs; `ui/worker.run_in_worker`
+  (the result handled in the UI thread) replaces the hand-rolled threads and relays of the clean-up, density,
+  split, pieces, label import, selection, seed tools, clearance and kerb fit. Kept: the tracer's and the label
+  map's relays (they stream progress) and the import dialog's QThread. Not done: building the panels from the
+  parameter dataclasses; it rewrites every tool panel the user works in, for no change in what they do.
+- Next: C11, then C13.
 
 Rules for every step:
 

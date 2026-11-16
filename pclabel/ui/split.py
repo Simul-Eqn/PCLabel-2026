@@ -11,11 +11,9 @@
 
 from __future__ import annotations
 
-import threading
-import time
 from dataclasses import replace
 
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -30,6 +28,7 @@ from PySide6.QtWidgets import (
 
 from pclabel.render.renderer import GROUP_BIT, UNSURE_BIT
 from pclabel.tools.split import FEATURES, SplitParams, set_features, split_labels
+from pclabel.ui.worker import run_in_worker
 from pclabel.ui.docks import _spin
 
 # threshold display: curvature as is, roughness in mm
@@ -124,10 +123,6 @@ class SplitDock(QDockWidget):
                        min_island=self.min_island.value(), band=self.band.value() / 100)  # fmt: skip
 
 
-class _Done(QObject):
-    done = Signal(object, object, object)  # kind, result, error
-
-
 class SplitController(QObject):
     def __init__(self, window):
         super().__init__(window)
@@ -138,8 +133,6 @@ class SplitController(QObject):
         self.last = None  # (rough, unsure, info) of the last preview
         self._busy = False
         self._again = False
-        self._done = _Done()
-        self._done.done.connect(self._finished)
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(250)
@@ -190,14 +183,7 @@ class SplitController(QObject):
         self._busy = True
         self.dock.result.setText("computing the features..." if kind == "features" else "splitting...")
 
-        def work():
-            t0 = time.perf_counter()
-            try:
-                self._done.done.emit(kind, (fn(), time.perf_counter() - t0), None)
-            except Exception as e:  # reported in the UI thread
-                self._done.done.emit(kind, None, e)
-
-        threading.Thread(target=work, daemon=True, name="split").start()
+        run_in_worker(fn, lambda res, err, s: self._finished(kind, None if err else (res, s), err), "split")
 
     def _finished(self, kind, res, err):
         self._busy = False
@@ -247,12 +233,9 @@ class SplitController(QObject):
         idx = self.features.indices
         vp = self.w.viewport
         if vp.renderer is not None:
-            vp.makeCurrent()
-            try:
+            with vp.current():
                 vp.renderer.set_marks(GROUP_BIT, idx[rough])
                 vp.renderer.set_marks(UNSURE_BIT, idx[unsure] if self.dock.highlight.isChecked() else None)
-            finally:
-                vp.doneCurrent()
             vp.update()
         n = max(info["points"], 1)
         self.dock.result.setText(
@@ -264,12 +247,9 @@ class SplitController(QObject):
     def _clear(self):
         vp = self.w.viewport
         if vp.renderer is not None:
-            vp.makeCurrent()
-            try:
+            with vp.current():
                 vp.renderer.set_marks(GROUP_BIT, None)
                 vp.renderer.set_marks(UNSURE_BIT, None)
-            finally:
-                vp.doneCurrent()
             vp.update()
 
     def cancel(self):

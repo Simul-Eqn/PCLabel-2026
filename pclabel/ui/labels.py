@@ -416,12 +416,9 @@ class LabelsController(QObject):
         codes = self.codes()
         layers = [(ps.indices, codes[lab]) for lab, ps in m.label_layers() if lab in codes]
         vp = self.w.viewport
-        vp.makeCurrent()
-        try:
+        with vp.current():
             r.set_label_colors(self.color_table(codes))
             r.set_label_layers(layers)
-        finally:
-            vp.doneCurrent()
         self._synced = key
         vp.update()
 
