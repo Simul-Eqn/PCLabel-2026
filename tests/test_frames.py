@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from pclabel.analysis.frames import Z_FRAME, HeightFrame, PlaneFitParams, fit_plane, frame_from_points, plane_document
-from pclabel.synth import StreetParams, make_street
+from pclabel.synth import StreetParams, is_material, make_street
 
 
 @pytest.fixture(scope="module")
@@ -16,7 +16,7 @@ def tilted_street(taxonomy):
 
 def road_patch(scan, taxonomy):
     x, y = scan.xyz[:, 0], scan.xyz[:, 1]
-    road = (scan.cls == taxonomy.class_id("road")) & ((scan.flags & taxonomy.flag_mask("marking")) == 0)
+    road = is_material(scan.material, "road")
     return road & (np.abs(x) < 15) & (np.abs(y) < 3.0)
 
 
@@ -75,7 +75,7 @@ def test_warns_when_the_fit_is_not_ground(tilted_street, taxonomy):
     scan, _ = tilted_street
     road = frame_from_points(scan.xyz[road_patch(scan, taxonomy)].astype(np.float64), "road")
     assert "warning" not in road.report
-    canopy = scan.xyz[scan.cls == taxonomy.class_id("tree_canopy")].astype(np.float64)
+    canopy = scan.xyz[is_material(scan.material, "tree_canopy")].astype(np.float64)
     leaves = frame_from_points(canopy, "leaves")
     assert "does not look like ground" in leaves.report["warning"]
 

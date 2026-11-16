@@ -24,19 +24,18 @@
 #           retired   = the user's standard has no such class; kept so old label files load
 # enabled   shown in the label menus. Disabled classes stay valid in old label files.
 # countable points of this class may carry instance ids (one id per object)
-# key       default hotkey ("shift+N" for the second row). "0" erases to unassessed.
 # selectable  false: points with this class are never selected by any tool. Default true.
 
 schema: pclabel.taxonomy/2
 version: "0.7"
 
 classes:
-  - {id: 0,   name: unassessed,         status: core,     enabled: true,  color: "#8E8E93", key: "0",
+  - {id: 0,   name: unassessed,         status: core,     enabled: true,  color: "#8E8E93",
      def: "not yet looked at. Never means 'not X'."}
 
   - {id: 100, name: ground,             status: core,     enabled: true,  color: "#A1887F",
      def: "the ground surface; use a sub-label where one fits"}
-  - {id: 1,   name: road,               parent: ground,   status: core,     enabled: true,  color: "#3F51B5", key: "1",
+  - {id: 1,   name: road,               parent: ground,   status: core,     enabled: true,  color: "#3F51B5",
      def: "everything bounded by the lower stage of the curbs, including flat features that can be driven over; not the strip beside the road"}
   - {id: 10,  name: road_line,          parent: road,     status: core,     enabled: true,  color: "#D6DBFF",
      def: "painted lines and markings on the road; also road (the only points with two classes)"}
@@ -48,7 +47,7 @@ classes:
      def: "parking bays and car park surfaces"}
   - {id: 11,  name: gutter,             parent: ground,   status: import,   enabled: false, color: "#7986CB",
      def: "a vendor drawing's gutter line; in the standard the strip beside the road has no label"}
-  - {id: 2,   name: curb,               parent: ground,   status: core,     enabled: true,  color: "#E53935", key: "2", only: line,
+  - {id: 2,   name: curb,               parent: ground,   status: core,     enabled: true,  color: "#E53935", only: line,
      def: "a curve along the top, outermost edge of the raised curb; one curve per area, straight across lowered sections"}
   - {id: 13,  name: curb_top,           parent: curb,     status: import,   enabled: false, color: "#FF8A80", only: line,
      def: "the same line as curb: what the curb tracer, vendor drawings (TOP_OF_CURB) and older labels write"}
@@ -58,7 +57,7 @@ classes:
      def: "a vendor drawing's back of curb (BACK_OF_CURB); not part of the standard"}
   - {id: 3,   name: curb_lowered,       parent: curb,     status: retired,  enabled: false, color: "#FF7043",
      def: "retired: the curb curve runs straight across a lowered section"}
-  - {id: 4,   name: pavement,           parent: ground,   status: core,     enabled: true,  color: "#FFD60A", key: "3",
+  - {id: 4,   name: pavement,           parent: ground,   status: core,     enabled: true,  color: "#FFD60A",
      def: "where pedestrians walk, including tactile paving and the slope down to the road, up to a 5 cm inset from the curb curve"}
   - {id: 16,  name: cover,              parent: ground,   status: proposed, enabled: true,  color: "#26A69A", only: [line, marker],
      def: "a manhole or utility cover: a marker at its centre, or its outline (future work: not labelled for now)"}
@@ -69,29 +68,29 @@ classes:
   - {id: 7,   name: island,             parent: ground,   status: proposed, enabled: false, color: "#F06292",
      def: "top of a raised traffic island or median"}
 
-  - {id: 101, name: vegetation,         status: core,     enabled: true,  color: "#43A047", key: "5",
+  - {id: 101, name: vegetation,         status: core,     enabled: true,  color: "#43A047",
      def: "plants without a trunk at least 1 m long, and saplings under 2 m; no instances"}
   - {id: 6,   name: grass,              parent: vegetation, status: optional, enabled: true, color: "#9CCC65",
      def: "grass and low ground cover"}
-  - {id: 20,  name: shrub_hedge,        parent: vegetation, status: optional, enabled: true, color: "#7CB342", key: "shift+2",
+  - {id: 20,  name: shrub_hedge,        parent: vegetation, status: optional, enabled: true, color: "#7CB342",
      def: "shrubs, hedges, planted beds above ground cover"}
 
   - {id: 23,  name: tree,               status: core,     enabled: true,  color: "#2E7D32", countable: true,
      def: "one tree: a marker where it stands, from a circle fitted to its trunk 1.00-1.10 m above its foot"}
-  - {id: 21,  name: tree_trunk,         parent: tree,     status: core,     enabled: true,  color: "#689F38", key: "6", countable: true,
+  - {id: 21,  name: tree_trunk,         parent: tree,     status: core,     enabled: true,  color: "#689F38", countable: true,
      def: "the band of a tree's trunk 1.00-1.10 m above its foot"}
   - {id: 22,  name: tree_canopy,        parent: tree,     status: retired,  enabled: false, color: "#66BB6A", countable: true,
      def: "retired: canopies are not labelled"}
 
   - {id: 102, name: pole,               status: core,     enabled: true,  color: "#AB47BC", countable: true,
      def: "pole-like objects: a marker at the height of the ground around it, at the middle of the shape; use a sub-label where one fits"}
-  - {id: 33,  name: lta_lamp_post,      parent: pole,     status: core,     enabled: true,  color: "#9C27B0", key: "shift+1", countable: true,
+  - {id: 33,  name: lta_lamp_post,      parent: pole,     status: core,     enabled: true,  color: "#9C27B0", countable: true,
      def: "a lamp post registered with LTA; its marker's asset_id attribute is its LTA lamp post number (the user, 2026-11-16)"}
-  - {id: 30,  name: lamp_post,          parent: pole,     status: core,     enabled: true,  color: "#E040FB", key: "8", countable: true,
+  - {id: 30,  name: lamp_post,          parent: pole,     status: core,     enabled: true,  color: "#E040FB", countable: true,
      def: "a privately owned lamp post, not registered with LTA; every lamp post labelled before 2026-11-16 is one (the user, 2026-11-16)"}
-  - {id: 31,  name: traffic_light_pole, parent: pole,     status: core,     enabled: true,  color: "#7E57C2", key: "shift+3", countable: true,
+  - {id: 31,  name: traffic_light_pole, parent: pole,     status: core,     enabled: true,  color: "#7E57C2", countable: true,
      def: "traffic signal pole"}
-  - {id: 32,  name: other_pole,         parent: pole,     status: core,     enabled: true,  color: "#CE93D8", key: "shift+4", countable: true,
+  - {id: 32,  name: other_pole,         parent: pole,     status: core,     enabled: true,  color: "#CE93D8", countable: true,
      def: "usually road signage (sign posts); also bollards, camera poles, utility poles and other pole-like objects"}
 
   - {id: 103, name: structure,          status: proposed, enabled: true,  color: "#9E9E9E",
@@ -113,18 +112,18 @@ classes:
 
   - {id: 104, name: temporary,          status: proposed, enabled: true,  color: "#FF9800",
      def: "temporary and moving things; use a sub-label where one fits"}
-  - {id: 50,  name: vehicle,            parent: temporary, status: proposed, enabled: true, color: "#F57C00", key: "shift+5", countable: true,
+  - {id: 50,  name: vehicle,            parent: temporary, status: proposed, enabled: true, color: "#F57C00", countable: true,
      def: "parked or stationary vehicles"}
-  - {id: 51,  name: person,             parent: temporary, status: proposed, enabled: true, color: "#FFB74D", key: "shift+6", countable: true,
+  - {id: 51,  name: person,             parent: temporary, status: proposed, enabled: true, color: "#FFB74D", countable: true,
      def: "people"}
-  - {id: 52,  name: temporary_object,   parent: temporary, status: proposed, enabled: true, color: "#FF6F00", key: "shift+7", countable: true,
+  - {id: 52,  name: temporary_object,   parent: temporary, status: proposed, enabled: true, color: "#FF6F00", countable: true,
      def: "cones, barricades, incident equipment, construction items"}
-  - {id: 53,  name: ghost,              parent: temporary, status: proposed, enabled: true, color: "#FFE0B2", key: "shift+8",
+  - {id: 53,  name: ghost,              parent: temporary, status: proposed, enabled: true, color: "#FFE0B2",
      def: "streaks left by objects that moved during the scan"}
 
-  - {id: 60,  name: noise,              status: proposed, enabled: true,  color: "#424242", key: "shift+9",
+  - {id: 60,  name: noise,              status: proposed, enabled: true,  color: "#424242",
      def: "isolated points, mixed pixels off any surface, below-ground multipath, sky noise"}
-  - {id: 61,  name: other,              status: core,     enabled: true,  color: "#F5F5F5", key: "9",
+  - {id: 61,  name: other,              status: core,     enabled: true,  color: "#F5F5F5",
      selectable: false,
      def: "assessed, but fits no class; 'no class': never selected"}
 

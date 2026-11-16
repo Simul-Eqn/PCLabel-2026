@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from pclabel.store.tiles import TilingParams, build_tiles
-from pclabel.synth import make_street
+from pclabel.synth import is_material, make_street
 from pclabel.tools.magic import MagicSelectParams, magic_select
 
 P = MagicSelectParams(radius=8.0)
@@ -18,11 +18,11 @@ def scene(taxonomy):
     s = make_street(n_target=1_000_000, seed=3)
     tiles, order = build_tiles(s.xyz, TilingParams(max_points=50_000))
     xyz = np.ascontiguousarray(s.xyz[order])
-    cls, flags = s.cls[order], s.flags[order]
-    marking = (flags & taxonomy.flag_mask("marking")) > 0
+    mat = s.material[order]
+    marking = is_material(mat, "marking")
     dash = marking & (np.abs(xyz[:, 1]) < 0.1) & (xyz[:, 0] > -3) & (xyz[:, 0] < 0)  # the centre dash x -3..0
     d = np.where(dash, np.hypot(xyz[:, 0] + 1.5, xyz[:, 1]), np.inf)
-    return {"xyz": xyz, "inten": s.intensity[order], "tiles": tiles, "cls": cls, "marking": marking, "dash": dash,
+    return {"xyz": xyz, "inten": s.intensity[order], "tiles": tiles, "mat": mat, "marking": marking, "dash": dash,
             "seed": xyz[np.argmin(d)].astype(np.float64)}  # fmt: skip
 
 
@@ -38,7 +38,7 @@ def test_selects_the_clicked_dash(scene, taxonomy):
     assert sel[scene["dash"]].mean() > 0.98
     assert (sel & scene["marking"]).sum() > 0.97 * sel.sum()
     assert not (sel & scene["marking"] & ~scene["dash"]).any()  # contiguous: not the next dash, not the yellow lines
-    assert not (sel & (scene["cls"] != taxonomy.class_id("road"))).any()
+    assert not (sel & ~is_material(scene["mat"], "road", "marking")).any()
     assert np.all(np.diff(r.indices) > 0) and r.info["params"]["tolerance"] == 2.0
     lo, hi = r.info["accepted_intensity"]
     assert lo == pytest.approx(r.info["seed_intensity"] / 2) and hi == pytest.approx(r.info["seed_intensity"] * 2)
@@ -46,20 +46,19 @@ def test_selects_the_clicked_dash(scene, taxonomy):
 
 def test_not_contiguous_takes_the_other_markings_on_the_road(scene, taxonomy):
     sel, _ = selected(scene, replace(P, contiguous=False))
-    cls = scene["cls"]
     assert (sel & scene["marking"] & ~scene["dash"]).sum() > 10_000  # other dashes and the yellow lines
     assert (sel & scene["marking"]).sum() > 0.85 * sel.sum()
     for name in ("pavement", "grass", "tree_trunk", "tree_canopy", "lamp_post"):  # as bright, but not on the road
-        assert not (sel & (cls == taxonomy.class_id(name))).any(), name
+        assert not (sel & is_material(scene["mat"], name)).any(), name
 
 
 def test_tolerance_is_a_factor(scene, taxonomy):
     tight, _ = selected(scene, replace(P, tolerance=1.05))  # the dash's own spread is about +-10 %
     assert tight[scene["dash"]].sum() < 0.5 * scene["dash"].sum()
     wide, r = selected(scene, replace(P, tolerance=10.0))  # takes the road too, but not up the kerbs
-    road = scene["cls"] == taxonomy.class_id("road")
+    road = is_material(scene["mat"], "road", "marking")
     assert (wide & road & ~scene["marking"]).sum() > 100_000
-    assert not (wide & (scene["cls"] == taxonomy.class_id("pavement"))).any()
+    assert not (wide & is_material(scene["mat"], "pavement")).any()
     assert r.info["stopped_by"]["height step"] > 0
 
 

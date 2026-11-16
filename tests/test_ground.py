@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from pclabel.store.tiles import TilingParams, build_tiles
-from pclabel.synth import make_street
+from pclabel.synth import is_material, make_street
 from pclabel.tools.ground import GroundGrowParams, ground_grow
 
 # the synthetic scan is about 40x sparser than streets 1, so cells are 20 cm here (10 cm is the default)
@@ -18,11 +18,11 @@ def scene(taxonomy):
     s = make_street(n_target=1_000_000, seed=3)
     tiles, order = build_tiles(s.xyz, TilingParams(max_points=50_000))
     xyz = np.ascontiguousarray(s.xyz[order])
-    cls, flags = s.cls[order], s.flags[order]
-    road = cls == taxonomy.class_id("road")
+    mat = s.material[order]
+    road = is_material(mat, "road")
     d = np.where(road, np.hypot(xyz[:, 0] + 5, xyz[:, 1] + 1.5), np.inf)
     seed = xyz[np.argmin(d)].astype(np.float64)  # on the road, near the scanner
-    return {"xyz": xyz, "inten": s.intensity[order], "tiles": tiles, "cls": cls, "flags": flags, "seed": seed,
+    return {"xyz": xyz, "inten": s.intensity[order], "tiles": tiles, "mat": mat, "seed": seed,
             "params": s.params}  # fmt: skip
 
 
@@ -35,12 +35,12 @@ def selected(scene, params):
 
 def test_grows_over_the_road_and_its_markings_only(scene, taxonomy):
     sel, r = selected(scene, P)
-    cls = scene["cls"]
-    road = cls == taxonomy.class_id("road")
-    marking = (scene["flags"] & taxonomy.flag_mask("marking")) > 0
+    mat = scene["mat"]
+    road = is_material(mat, "road", "marking")
+    marking = is_material(mat, "marking")
     assert (sel & ~road).sum() <= 0.005 * sel.sum()  # kerb and drain-lip points at road level, at most 0.5 %
     for name in ("pavement", "grass", "tree_trunk", "tree_canopy", "lamp_post"):
-        assert not (sel & (cls == taxonomy.class_id(name))).any(), name
+        assert not (sel & is_material(mat, name)).any(), name
     assert sel[road].mean() > 0.95
     assert sel[marking].mean() > 0.9  # paint is bridged, not a boundary
     assert r.info["cells_bridged"] > 0 and np.all(np.diff(r.indices) > 0)
@@ -49,8 +49,7 @@ def test_grows_over_the_road_and_its_markings_only(scene, taxonomy):
 def test_intensity_is_what_stops_the_walkway(scene, taxonomy):
     """At the lowered kerb the pavement ramps down to road height: without the intensity checks the grow leaks
     onto it, with them it does not."""
-    cls = scene["cls"]
-    pavement = cls == taxonomy.class_id("pavement")
+    pavement = is_material(scene["mat"], "pavement")
     leak, _ = selected(scene, replace(P, intensity_step=1.0, intensity_range=1.0, max_step=0.025))
     held, _ = selected(scene, replace(P, max_step=0.025))
     assert (leak & pavement).sum() > 10_000
@@ -58,7 +57,7 @@ def test_intensity_is_what_stops_the_walkway(scene, taxonomy):
 
 
 def test_markings_need_bridging(scene, taxonomy):
-    marking = (scene["flags"] & taxonomy.flag_mask("marking")) > 0
+    marking = is_material(scene["mat"], "marking")
     bridged, _ = selected(scene, P)
     plain, r = selected(scene, replace(P, marking_width=0.0))
     assert r.info["cells_bridged"] == 0

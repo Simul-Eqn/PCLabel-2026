@@ -22,15 +22,14 @@ import numpy as np
 from PySide6.QtCore import QObject
 from PySide6.QtWidgets import QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton, QWidget
 
-from pclabel.store.annotations import Marker, PointSet
-from pclabel.tools.trees import TreeParams, fit_trunk, next_name
+from pclabel.ops import trees as tree_ops
+from pclabel.ops.trees import TREE
+from pclabel.tools.trees import TreeParams, fit_trunk
 from pclabel.ui.docks import EXTRA_DECIMALS, _spin
 
-TREE = "tree"  # what a saved object is by default; its marker's label
 TREES = "trees"  # the default directory saved trees go into (made at the top level when missing)
 POLES = "poles"  # ... and poles
 NEW = "new"  # the combo's data for that directory when it does not exist yet
-POSITION = "position"  # the name of an object's marker
 
 
 class _DirCombo(QComboBox):
@@ -222,30 +221,14 @@ class TreeController(QObject):
         except ValueError as e:
             self.status.setText(f"select the band first (Enter): {e}")
             return
-        off = np.asarray(w.project.offset, np.float64)
-        b0, b1 = self.band()
-        record = {"tool": "tree", "ground": (self.ground + off).tolist(), "ground_h": self.ground_h,
-                  "height_axis": frame_name, "axis": [float(v) for v in axis], "band": [b0, b1],
-                  "position": (fit["centre"] + off).tolist(), "radius": fit["radius"], "girth": fit["girth"],
-                  "rms": fit["rms"], "points_fitted": fit["points"], "points_dropped": fit["dropped"],
-                  "coverage": fit["coverage"]}  # fmt: skip
         what = self.kind()
-        record["object"] = what
+        record = tree_ops.band_record(self.ground, self.ground_h, frame_name, axis, self.band(), fit,
+                                      w.project.offset, what)  # fmt: skip
         a = w.annot
-        m = a.model
         a._checkpoint(f"save a {what}")
         trees = self._target()
-        name = next_name([c.name for c in trees.children], what)
-        tree = m.new_directory(name, trees.id)
-        known = {c["name"] for c in w.taxonomy.classes}
-        mk = m.add(Marker(np.asarray(record["position"], np.float64), _marker_source(record, fit)), POSITION)
-        mk.label = what if what in known else ""
-        band_label = w.taxonomy.tool_label("tree_band") if what == TREE else what
-        part = "trunk" if what == TREE else "pole"
-        ps = m.add(PointSet(sel.copy(), [dict(op) for op in w.selection_ops] + [record]), f"{part} {b0:.2f} to {b1:.2f} m")
-        if band_label in known:
-            ps.label = band_label
-        m.move([mk.id, ps.id], tree.id)
+        tree = tree_ops.add_object(a.model, trees, record, sel, w.selection_ops, w.taxonomy)
+        name, part = tree.name, "trunk" if what == TREE else "pole"
         x, y, z = record["position"]
         text = (f"{name}: {sel.size:,} points; marker at ({x:.3f}, {y:.3f}, {z:.3f}); radius {fit['radius']:.3f} m, girth "
                 f"{fit['girth']:.2f} m; fit {fit['rms'] * 100:.1f} cm rms, {fit['coverage']:.0%} of the circumference"
@@ -263,29 +246,13 @@ class TreeController(QObject):
         if w.project is None:
             return 0
         a = w.annot
-        m = a.model
-        known = {c["name"] for c in w.taxonomy.classes}
-        todo = []
-        for x, anc in m.walk():
-            if x.kind != "points":
-                continue
-            recs = [r for r in x.provenance if isinstance(r, dict) and r.get("tool") == "tree" and "position" in r]
-            home = anc[-1] if anc else None
-            if not recs or home is None or any(c.kind == "marker" for c in home.children):
-                continue
-            todo.append((home, recs[-1]))
+        todo = tree_ops.missing_markers(a.model)
         if not todo:
             self.status.setText("every saved tree has its marker")
             return 0
         a._checkpoint(f"add markers to {len(todo)} trees")
         for home, rec in todo:
-            what = rec.get("object", TREE)
-            fit = {"radius": rec.get("radius"), "girth": rec.get("girth"), "rms": rec.get("rms"),
-                   "points": rec.get("points_fitted"), "dropped": rec.get("points_dropped"), "coverage": rec.get("coverage")}  # fmt: skip
-            mk = m.add(Marker(np.asarray(rec["position"], np.float64), _marker_source(rec, fit)), POSITION)
-            mk.label = what if what in known else ""
-            m.move([mk.id], home.id)
-            home.children.insert(0, home.children.pop())  # the marker first, as for a new tree
+            tree_ops.add_marker(a.model, home, rec, w.taxonomy)  # the marker first, as for a new tree
         text = f"added {len(todo)} marker{'s' * (len(todo) != 1)} to trees saved before, from their bands' positions"
         a._changed(text)
         self.status.setText(text)
@@ -296,12 +263,3 @@ class TreeController(QObject):
         self.vol.keep_height = False
         self.status.setText("")
         self.fill_directories(keep=NEW)
-
-
-def _marker_source(record: dict, fit: dict) -> dict:
-    """A tree's (or pole's) marker's source: placed by the tree tool at the band's circle centre, at the ground."""
-    return {"tool": "tree", "object": record.get("object", TREE), "across": "circle", "height": "ground",
-            "points": fit.get("points"), "points_dropped": fit.get("dropped"), "radius": fit.get("radius"),
-            "girth": fit.get("girth"), "rms": fit.get("rms"), "coverage": fit.get("coverage"),
-            "ground": record.get("ground"), "ground_h": record.get("ground_h"), "band": record.get("band"),
-            "height_axis": record.get("height_axis"), "axis": record.get("axis")}  # fmt: skip

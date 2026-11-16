@@ -224,4 +224,4 @@ Lines and markers these tools draw are marked `assisted` with their parameters. 
 | curve edit | drag a node or handle, Shift+click add, Ctrl+click or Del remove, Enter or Esc done |
 | tracing | Space stop, Backspace take back a step, Enter save |
 
-The taxonomy's `key` field is not wired to anything yet: labels are set with the label box.
+There are no keys for labels: they are set with the label box in Annotations.

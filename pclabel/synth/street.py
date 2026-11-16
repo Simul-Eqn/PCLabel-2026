@@ -31,20 +31,31 @@ from pclabel.taxonomy import Taxonomy, load_taxonomy
 # material codes (internal to the simulator)
 M_NONE, M_ROAD, M_MARK_W, M_MARK_Y, M_CURB, M_CURB_LOW, M_PAVEMENT, M_DRAIN, M_GRASS, M_TRUNK, M_CANOPY, M_LAMP = range(12)
 
-# material -> (class name, flag name or None, base rgb, reflectance)
+# material -> (material name, the labelling standard's class for its points or "" for none, base rgb, reflectance).
+# The material is the physical truth (a kerb unit, a drain floor); the class is what the standard labels: the curb is
+# a line, not points, and the strip with its drains and tree canopies are not labelled (docs/LABELLING_STANDARD.md).
 MATERIALS = {
-    M_ROAD: ("road", None, (68, 68, 70), 0.20),
-    M_MARK_W: ("road", "marking", (225, 225, 220), 0.80),
-    M_MARK_Y: ("road", "marking", (215, 180, 40), 0.70),
-    M_CURB: ("curb", None, (150, 150, 145), 0.45),
-    M_CURB_LOW: ("curb_lowered", None, (150, 150, 145), 0.45),
-    M_PAVEMENT: ("pavement", None, (170, 150, 135), 0.40),
-    M_DRAIN: ("drain", None, (35, 35, 38), 0.10),
-    M_GRASS: ("grass", None, (75, 120, 55), 0.33),
-    M_TRUNK: ("tree_trunk", None, (95, 75, 55), 0.30),
-    M_CANOPY: ("tree_canopy", None, (45, 95, 45), 0.28),
-    M_LAMP: ("lamp_post", None, (120, 125, 130), 0.50),
+    M_ROAD: ("road", "road", (68, 68, 70), 0.20),
+    M_MARK_W: ("marking", "road_line", (225, 225, 220), 0.80),
+    M_MARK_Y: ("marking", "road_line", (215, 180, 40), 0.70),
+    M_CURB: ("curb", "", (150, 150, 145), 0.45),
+    M_CURB_LOW: ("curb_lowered", "", (150, 150, 145), 0.45),
+    M_PAVEMENT: ("pavement", "pavement", (170, 150, 135), 0.40),
+    M_DRAIN: ("drain", "", (35, 35, 38), 0.10),
+    M_GRASS: ("grass", "vegetation", (75, 120, 55), 0.33),
+    M_TRUNK: ("tree_trunk", "tree_trunk", (95, 75, 55), 0.30),
+    M_CANOPY: ("tree_canopy", "", (45, 95, 45), 0.28),
+    M_LAMP: ("lamp_post", "lamp_post", (120, 125, 130), 0.50),
 }
+
+
+def is_material(material: np.ndarray, *names: str) -> np.ndarray:
+    """Which points (a scan's ``material`` codes) are of any of these materials (MATERIALS names)."""
+    codes = [k for k, v in MATERIALS.items() if v[0] in names]
+    unknown = set(names) - {v[0] for v in MATERIALS.values()}
+    if unknown:
+        raise KeyError(f"no materials {sorted(unknown)}")
+    return np.isin(material, codes)
 
 
 @dataclass(frozen=True)
@@ -106,8 +117,9 @@ class SynthScan:
     offset: np.ndarray  # float64 (3,)
     rgb: np.ndarray  # uint8 (n, 3)
     intensity: np.ndarray  # uint16 (n,)
-    cls: np.ndarray  # uint8 (n,), taxonomy ids
-    flags: np.ndarray  # uint8 (n,)
+    cls: np.ndarray  # uint8 (n,), taxonomy ids: what the labelling standard labels each point (0: no class)
+    flags: np.ndarray  # uint8 (n,): taxonomy flags (none set)
+    material: np.ndarray  # uint8 (n,): MATERIALS codes, the physical surface each point is on
     instance: np.ndarray  # uint32 (n,), 0 = none
     row: np.ndarray  # uint16 (n,), elevation index
     col: np.ndarray  # uint16 (n,), azimuth index
@@ -583,16 +595,14 @@ def make_street(params: StreetParams | None = None, taxonomy: Taxonomy | None = 
 
     mat = m[hit]
     lut_cls = np.zeros(256, np.uint8)
-    lut_flag = np.zeros(256, np.uint8)
     lut_rgb = np.zeros((256, 3), np.float32)
     lut_ref = np.zeros(256, np.float32)
-    for code, (name, flag, rgb, refl) in MATERIALS.items():
-        lut_cls[code] = tax.class_id(name)
-        lut_flag[code] = tax.flag_mask(flag) if flag else 0
+    for code, (_, cls_name, rgb, refl) in MATERIALS.items():
+        lut_cls[code] = tax.class_id(cls_name) if cls_name else 0
         lut_rgb[code] = rgb
         lut_ref[code] = refl
     cls = lut_cls[mat]
-    flags = lut_flag[mat]
+    flags = np.zeros(hit.size, np.uint8)
 
     instance = np.zeros(hit.size, np.uint32)
     instance[(mat == M_TRUNK) | (mat == M_CANOPY)] = 1
@@ -613,6 +623,7 @@ def make_street(params: StreetParams | None = None, taxonomy: Taxonomy | None = 
         intensity=intensity,
         cls=cls,
         flags=flags,
+        material=mat.astype(np.uint8),
         instance=instance,
         row=row,
         col=col,
@@ -648,6 +659,7 @@ def tiled_copy(scan: SynthScan, copies: int, gap: float = 2.0) -> SynthScan:
         intensity=rep(scan.intensity),
         cls=rep(scan.cls),
         flags=rep(scan.flags),
+        material=rep(scan.material),
         instance=rep(scan.instance),
         row=rep(scan.row),
         col=rep(scan.col),
@@ -692,6 +704,7 @@ def write_street_e57(scan: SynthScan, path: str | Path, *, invalid_fraction: flo
         path.with_name(path.name + ".gt.npz"),
         cls=scan.cls,
         flags=scan.flags,
+        material=scan.material,
         instance=scan.instance,
         invalid=invalid,
         origin=scan.origin,

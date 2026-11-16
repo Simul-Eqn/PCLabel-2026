@@ -65,7 +65,8 @@ Three things are not yours: the labelling standard, the source scans, and the us
   surface.
 
 **Code**
-- `tools/`, `analysis/`, `store/`, `io/`, and the planned `ops/`, `auto/` and `scoring/` import no Qt and no GL.
+- `tools/`, `analysis/`, `store/`, `io/`, `ops/`, and the planned `auto/` and `scoring/` import no Qt and no GL. What
+  turns a tool's result into annotations lives in `ops/`, so the app and the pipeline save the same things.
 - No Python loops over points: numpy and numba. On selections use the merges in `tools/sets.py`, not
   `np.union1d`, `setdiff1d` or `unique`, which took tens of seconds at 100M points.
 - Qt: deliver a worker's result to its handler in the UI thread.

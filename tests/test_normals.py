@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from pclabel.store.tiles import TilingParams, build_tiles
-from pclabel.synth import make_street
+from pclabel.synth import is_material, make_street
 from pclabel.tools.normals import NormalGrowParams, build_voxels, normal_grow
 
 P = NormalGrowParams(voxel=0.05, normal_radius=0.15, connect=0.075, radius=8.0)  # the synthetic scan is sparse
@@ -16,12 +16,11 @@ P = NormalGrowParams(voxel=0.05, normal_radius=0.15, connect=0.075, radius=8.0) 
 def scene(taxonomy):
     s = make_street(n_target=1_000_000, seed=3)
     tiles, order = build_tiles(s.xyz, TilingParams(max_points=50_000))
-    return {"xyz": np.ascontiguousarray(s.xyz[order]), "tiles": tiles, "cls": s.cls[order], "tax": taxonomy}
+    return {"xyz": np.ascontiguousarray(s.xyz[order]), "tiles": tiles, "mat": s.material[order]}
 
 
 def pick(scene, name, near):
-    cls = scene["cls"] == scene["tax"].class_id(name)
-    d = np.where(cls, np.linalg.norm(scene["xyz"] - np.asarray(near, np.float32), axis=1), np.inf)
+    d = np.where(is_material(scene["mat"], name), np.linalg.norm(scene["xyz"] - np.asarray(near, np.float32), axis=1), np.inf)
     return scene["xyz"][np.argmin(d)].astype(np.float64)
 
 
@@ -41,24 +40,24 @@ def test_normals_of_a_plane_are_its_normal(scene):
 
 
 def test_road_grows_and_stops_at_the_kerb_faces(scene):
-    tax, cls = scene["tax"], scene["cls"]
+    mat = scene["mat"]
     seed = pick(scene, "road", (-2.0, -1.0, 0.0))
     r = normal_grow(scene["xyz"], scene["tiles"], seed, P)
-    sel = np.zeros(len(cls), bool)
+    sel = np.zeros(len(mat), bool)
     sel[r.indices] = True
-    road = cls == tax.class_id("road")
+    road = is_material(mat, "road", "marking")
     near = np.all(np.abs(scene["xyz"][:, :2] - seed[:2]) < P.radius - 0.2, axis=1)
     assert sel[road & near].mean() > 0.9
     for name in ("tree_trunk", "tree_canopy", "lamp_post", "grass"):
-        assert (sel & (cls == tax.class_id(name))).sum() < 0.002 * sel.sum(), name
+        assert (sel & is_material(mat, name)).sum() < 0.002 * sel.sum(), name
     assert r.info["refused_by_angle"] > 0 and r.info["voxels_reused"] is False
     again = normal_grow(scene["xyz"], scene["tiles"], seed, replace(P, smoothness=1.0), voxels=r.voxels)
     assert again.info["voxels_reused"] and again.indices.size < r.indices.size  # stricter: less, same voxels
 
 
 def test_a_trunk_is_a_surface_of_its_own(scene):
-    tax, cls = scene["tax"], scene["cls"]
+    mat = scene["mat"]
     seed = pick(scene, "tree_trunk", (6.0, 7.3, 1.0))
     r = normal_grow(scene["xyz"], scene["tiles"], seed, replace(P, smoothness=15.0))
-    sel_cls = cls[r.indices]
-    assert (sel_cls == tax.class_id("tree_trunk")).mean() > 0.8 and (sel_cls == tax.class_id("road")).sum() == 0
+    got = mat[r.indices]
+    assert is_material(got, "tree_trunk").mean() > 0.8 and is_material(got, "road").sum() == 0

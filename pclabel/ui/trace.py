@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import threading
 import time
-from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import QObject, Qt, Signal
@@ -47,7 +46,7 @@ from PySide6.QtWidgets import (
 )
 
 from pclabel.analysis import curves
-from pclabel.store.annotations import Curve, Marker, PointSet, Polyline
+from pclabel.ops import trace as trace_ops
 from pclabel.tools.clearance import ClearanceParams, check
 from pclabel.tools.kerbfit import KerbFitParams
 from pclabel.tools.kerbfit import fit as kerb_fit
@@ -435,34 +434,9 @@ class TraceController(QObject):
     def _log(self, live, res, err):
         """Every run goes into the project's trace_log.jsonl (start, direction, settings, what it found or why it
         stopped), so failed attempts can be looked at and replayed later."""
-        import json
-
-        w = self.w
-        if w.project is None or live is None:
+        if self.w.project is None or live is None:
             return
-        off = np.asarray(w.project.offset, np.float64)
-        rec = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "mode": live["mode"], "start": (live["start"] + off).tolist(),
-               "toward": (live["toward"] + off).tolist(), "height_axis": live["frame"],
-               "axis": [float(v) for v in live["axis"]]}  # fmt: skip
-        if err is not None:
-            rec["error"] = str(err)
-        else:
-            rec["params"] = res.get("params")
-            rec["stopped"] = res.get("stopped")
-            rec["seconds"] = round(float(res.get("seconds", 0.0)), 3)
-            if live["mode"] == "curb":
-                rec["steps"] = int(len(res["toe"]))
-                rec["pieces"] = int(res["piece"].max()) + 1 if len(res["piece"]) else 0
-                if len(res["height"]):
-                    rec["height_median"] = float(np.median(res["height"]))
-            else:
-                rec["pieces"] = len(res["pieces"])
-                rec["threshold"] = res.get("threshold")
-        try:
-            with open(Path(w.project.path) / "trace_log.jsonl", "a", encoding="utf-8") as f:
-                f.write(json.dumps(rec) + "\n")
-        except OSError:
-            pass
+        trace_ops.append_log(self.w.project.path, trace_ops.log_record(live, self.w.project.offset, res, err))
 
     def _on_done(self, res, err):
         self._busy = False
@@ -555,53 +529,17 @@ class TraceController(QObject):
             self.dock.status.setText("nothing traced to save")
             return None
         a = w.annot
-        m = a.model
-        off = np.asarray(w.project.offset, np.float64)
         mode = self.runs[0]["mode"]
-        tax = w.taxonomy
-        toe_label, lip_label = tax.tool_label("curb_trace_toe"), tax.tool_label("curb_trace_lip")
-        lines = []  # (name, vertices local, label, source)
-        for ri, run in enumerate(self.runs, 1):
-            r = run["result"]
-            base = {"tool": "curb_trace" if mode == "curb" else "line_trace", "assisted": True,
-                    "params": dict(r["params"]), "start": (run["start"] + off).tolist(),
-                    "toward": (run["toward"] + off).tolist(), "height_axis": run["frame"],
-                    "axis": [float(v) for v in run["axis"]], "stopped": r["stopped"], "run": ri}  # fmt: skip
-            if mode == "curb":
-                for k in range(int(r["piece"].max()) + 1 if len(r["piece"]) else 0):
-                    sel = r["piece"] == k
-                    if sel.sum() < 2:
-                        continue
-                    h = r["height"][sel]
-                    src = dict(base, piece=k, heights={"median": float(np.median(h)), "min": float(h.min()),
-                                                       "max": float(h.max())},
-                               face_seen=float(r["seen"][sel].mean()))  # fmt: skip
-                    tag = f"{ri}.{k + 1}" if len(self.runs) > 1 else f"{k + 1}"
-                    if self.dock.c_toe.isChecked() and r["params"].get("follow", "toe") == "toe":
-                        lines.append((f"toe {tag}", r["toe"][sel], toe_label, dict(src, line="toe")))
-                    if self.dock.c_lip.isChecked():
-                        lines.append((f"lip {tag}", r["lip"][sel], lip_label, dict(src, line="lip")))
-            else:
-                label = self.dock.l_label.currentText().strip() or tax.tool_label("marking_trace")
-                for k, pc in enumerate(r["pieces"]):
-                    if len(pc) < 2:
-                        continue
-                    tag = f"{ri}.{k + 1}" if len(self.runs) > 1 else f"{k + 1}"
-                    what = "dash" if r["params"]["kind"] == "dashed" else "line"
-                    lines.append((f"{what} {tag}", pc, label, dict(base, piece=k, bridged=list(r["bridged"]))))
+        lines = trace_ops.run_lines(self.runs, w.project.offset, w.taxonomy, toe=self.dock.c_toe.isChecked(),
+                                    lip=self.dock.c_lip.isChecked(), line_label=self.dock.l_label.currentText().strip())
         if not lines:
             self.dock.status.setText("nothing to save: the pieces are too short")
             return None
         into = a._directory_for_new()
         a._checkpoint(f"save a {mode} trace")
-        stem = "curb trace" if mode == "curb" else "marking trace"
-        nums = [int(x.name.rsplit(" ", 1)[1]) for x, _ in m.walk()
-                if x.kind == "directory" and x.name.startswith(stem + " ") and x.name.rsplit(" ", 1)[1].isdigit()]  # fmt: skip
-        d = m.new_directory(f"{stem} {max(nums, default=0) + 1:02d}", into.id if into is not None else None)
-        for name, verts, label, src in lines:
-            pl = m.add(self._line_item(np.asarray(verts, np.float64) + off, False, src, run_axis=self.runs[0]), name)
-            pl.label = label
-            m.move([pl.id], d.id)
+        run0 = self.runs[0]
+        d = trace_ops.add_lines(a.model, lines, trace_ops.STEMS[mode], into.id if into is not None else None,
+                                lambda v, src: self._line_item(v, False, src, run_axis=run0))  # fmt: skip
         self.runs = []
         a._changed(f"{d.name}: {len(lines)} line{'s' * (len(lines) != 1)} saved (drawn by the tracer: marked assisted)")
         self.dock.status.setText(f"saved {d.name}")
@@ -612,17 +550,15 @@ class TraceController(QObject):
         """A saved line: a "free" curve within the panel's distance of the vertices (editable), or the polyline
         (``as_kind`` overrides the panel's "save as"; a polyline from dense points keeps them within 2 mm)."""
         kind = as_kind or self.dock.save_as.currentData()
-        if kind != "curve" or len(vertices) < 2:
-            if as_kind == "polyline":
-                vertices = np.asarray(vertices, np.float64)[curves.simplify(vertices, 0.002, closed)]
-            return Polyline(vertices, closed, src)
+        if kind != "curve" and as_kind == "polyline":
+            vertices = trace_ops.simplify_polyline(vertices, closed)
         f = self.w.frames[self.w.active_frame]
         if run_axis is not None:  # the height axis the trace ran on
             axis, frame = np.asarray(run_axis["axis"], np.float64), run_axis["frame"]
         else:
             axis, frame = np.asarray(f.normal, np.float64), f.name
         origin = np.asarray(f.origin, np.float64) if frame == f.name else np.asarray(vertices[0], np.float64)
-        return Curve.from_line(vertices, axis, origin, frame, self.dock.fit_tol.value(), closed, src)
+        return trace_ops.line_item(vertices, closed, src, kind, axis, frame, origin, self.dock.fit_tol.value())
 
     # ---- clearance --------------------------------------------------------------------------------------------
 
@@ -680,13 +616,7 @@ class TraceController(QObject):
         if err is not None:
             self.dock.status.setText(f"no clearance check: {err}")
             return
-        w = self.w
-        a = w.annot
-        m = a.model
-        off = np.asarray(w.project.offset, np.float64)
-        base = {"tool": "clearance", "assisted": True, "params": res["params"], "line": res["line"],
-                "line_id": res["line_id"], "points_checked": res["points_checked"], "height_axis": res["frame"],
-                "axis": [float(x) for x in res["axis"]]}  # fmt: skip
+        a = self.w.annot
         places = res["places"]
         self.last_clearance = res
         if not places:
@@ -694,15 +624,7 @@ class TraceController(QObject):
                                      f"{res['seconds']:.1f} s); the scan shows only what it captured")  # fmt: skip
             return
         a._checkpoint("clearance check")
-        nums = [int(x.name.rsplit(" ", 1)[1]) for x, _ in m.walk()
-                if x.kind == "directory" and x.name.startswith("clearance ") and x.name.rsplit(" ", 1)[1].isdigit()]  # fmt: skip
-        d = m.new_directory(f"clearance {max(nums, default=0) + 1:02d}")
-        hits = m.add(PointSet(np.asarray(res["hits"], np.int64), [dict(base)]), "inside the envelope")
-        m.move([hits.id], d.id)
-        for pl in places:
-            src = dict(base, clearance=pl["clearance"], points=pl["points"], along=pl["along"], across=pl["across"])
-            mk = m.add(Marker(pl["position"] + off, src), f"clearance {pl['clearance']:.2f} m at {pl['along']:.1f} m")
-            m.move([mk.id], d.id)
+        d = trace_ops.add_clearance(a.model, res, self.w.project.offset)
         low = min(places, key=lambda p: p["clearance"])
         a._changed(f"{d.name}: {len(places)} place{'s' * (len(places) != 1)} inside the envelope along {res['line']} "
                    f"({res['length']:.1f} m); the lowest leaves {low['clearance']:.2f} m at {low['along']:.1f} m "
@@ -787,16 +709,8 @@ class TraceController(QObject):
                 x = m.node(iid)
             except KeyError:  # removed meanwhile
                 continue
-            rec = {k: r[k] for k in ("side", "sections", "anchors", "low_steps", "outliers", "no_edge", "top_unseen",
-                                     "height_median", "off_anchors_rms", "off_anchors_max", "largest_move",
-                                     "mean_move", "bridged", "kept", "seconds")}  # fmt: skip
-            rec.update(params=fit_record(res["params"]), height_axis=res["frame"])
-            src = {k: v for k, v in getattr(x, "source", {}).items() if k != "curve_fit"}
-            src["kerb_fit"] = list(src.get("kerb_fit", [])) + [rec]
-            src["assisted"] = True
-            src.setdefault("axis", [float(c) for c in res["axis"]])
-            src.setdefault("height_axis", res["frame"])
-            src.pop("edited", None)  # a new tool result: later hand edits are marked again
+            src = trace_ops.kerb_fit_source(getattr(x, "source", {}), r, fit_record(res["params"]), res["frame"],
+                                            res["axis"])  # fmt: skip
             new = self._line_item(r["vertices"] + off, x.closed, src, as_kind=x.kind)
             if x.kind == "curve" and new.kind == "curve":
                 new.frame, new.axis, new.axis_origin = x.frame, x.axis.copy(), x.axis_origin.copy()
@@ -851,10 +765,7 @@ class TraceController(QObject):
         n_out, n_bridged, n_dropped = 0, 0, 0
         for lab, xs, out in results:
             for k, o in enumerate(out, 1):
-                src = {"tool": "line_join", "assisted": any(assisted(xs[i]) for i in o["sources"]), "params": join_record(params),
-                       "from": [xs[i].name for i in o["sources"]], "from_ids": [xs[i].id for i in o["sources"]],
-                       "bridged": o["bridged"], "dropped": {xs[i].name: c for i, c in o["dropped"].items()},
-                       "height_axis": f.name}  # fmt: skip
+                src = trace_ops.join_source(o, xs, join_record(params), f.name, assisted)
                 pl = m.add(self._line_item(o["vertices"], o["closed"], src), f"{lab or 'line'} {k}")
                 pl.label = lab
                 m.move([pl.id], d.id)
@@ -904,22 +815,10 @@ class TraceController(QObject):
             self.dock.status.setText("select markers in Annotations first (e.g. Ctrl+M on a cover's points)")
             return []
         a._checkpoint(f"cover outline{'s' * (len(mks) != 1)}")
-        nums = [int(x.name.rsplit(" ", 1)[1]) for x, _ in m.walk()
-                if x.kind == "directory" and x.name.startswith("cover ") and x.name.rsplit(" ", 1)[1].isdigit()]  # fmt: skip
         made = []
         for mk in mks:
             ring, p, axis = self._outline_for(mk)
-            home = m.parent(mk.id)
-            nums.append(max(nums, default=0) + 1)
-            d = m.new_directory(f"cover {nums[-1]:02d}", home.id if home is not None else None)
-            if not mk.label:
-                mk.label = self.w.taxonomy.tool_label("cover")
-            src = {"tool": "cover_template", "assisted": True, "template": record(p), "marker": mk.id,
-                   "axis": [float(x) for x in axis]}  # fmt: skip
-            pl = m.add(Polyline(ring, True, src), "outline")
-            pl.label = self.w.taxonomy.tool_label("cover")
-            m.move([mk.id, pl.id], d.id)
-            made.append(d)
+            made.append(trace_ops.add_cover(m, mk, ring, record(p), axis, self.w.taxonomy.tool_label("cover")))
         a._changed(f"{len(made)} cover outline{'s' * (len(made) != 1)}: {made[0].name}" + (" ..." if len(made) > 1 else ""))
         return made
 

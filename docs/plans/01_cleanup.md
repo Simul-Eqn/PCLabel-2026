@@ -72,11 +72,13 @@ the same project files, since the user labels while the code changes).
   (`write_json_atomic`), `store/project.source_doc`, `tools/sets.isin_sorted`, `tools/tracing.drive`;
   `curbtrace.Section` / `NoStep` dataclasses; box sizes in the parameter dataclasses (`box_below`, `box_above`,
   `start_length`, `road_behind`).
-- C5, done so far: `pclabel/ops/labels.py` resolves annotations to a class and a flags byte per point, with a
-  source-order export (`python -m pclabel labels`); tool labels come from the taxonomy's `tools` section; the curb
-  tracer labels the lip `curb` and leaves the toe unlabelled. Still to do in C5: move the trace, kerb fit, join,
-  clearance, cover and tree saving out of `ui/` into `ops/`; the taxonomy `key` field; the synthetic street's
-  classes.
+- C5: done. `ops/labels.py` resolves annotations to a class and a flags byte per point, with a source-order
+  export (`python -m pclabel labels`). `ops/trace.py` turns tracer runs, clearance checks, kerb fits, joins and cover
+  outlines into annotations and writes the trace log; `ops/trees.py` saves trees and poles; the UI calls both. Tool
+  labels come from the taxonomy's `tools` section; the curb tracer labels the lip `curb` and leaves the toe
+  unlabelled. The unused `key` field is gone from the taxonomy. The synthetic street has a `material` array (the
+  physical surface) beside `cls`, which is now the standard's classes (curb, drain and canopy points have none).
+- Next: C6 (one tile query and one filter type), then C7 to C14 as time allows.
 
 Rules for every step:
 

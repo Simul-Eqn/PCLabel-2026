@@ -242,9 +242,8 @@ read):
 **`config/taxonomy.yaml`, schema `pclabel.taxonomy/2`** (2026-11-04: the classes form a tree; schema 1 had a flat
 `group` per class and `subset_of`, and still loads, its `subset_of` read as `parent`):
 - `{schema, version, classes: [...], flags: [...]}`. A class is `{id, name, parent?, only?, status, enabled, color,
-  key?, countable?, selectable?, def}`; listed in tree order (a parent before its children). `status` is `core`,
-  `optional`, `proposed`, `import` or `retired` (the file's header says what each means). `key` is not read by the
-  app yet.
+  countable?, selectable?, def}`; listed in tree order (a parent before its children). `status` is `core`,
+  `optional`, `proposed`, `import` or `retired` (the file's header says what each means).
 - `parent`: the class it is a kind of (none: a top-level class: ground, vegetation, tree, pole, structure,
   temporary, noise, other). Ids never change when a class moves; the tree, not the id range, says what a class belongs to.
 - `only`: `line` (segments, curves and polylines only: `curb` and its kinds) or `marker`, or both (`cover`).
@@ -434,6 +433,9 @@ Measured results are in RESULTS.md.
   - density falling with range from a scanner origin; **occlusion** (points on surfaces hidden from the origin
     removed, giving no-point strips behind kerbs).
   - Can write E57, so the import path is tested end to end.
+- **`material`** beside `cls` in the synthetic scan: the physical surface of each point (road, marking, curb,
+  curb_lowered, pavement, drain, grass, tree_trunk, tree_canopy, lamp_post; `synth.is_material`). `cls` is what the
+  labelling standard labels: road, road_line, pavement, vegetation, tree_trunk, lamp_post, and 0 for the rest.
 - **Unit tests:**
   - readers (including invalid records and multi-scan poses); store and tiles;
   - source-order round trip;
