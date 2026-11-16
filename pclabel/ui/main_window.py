@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 from pclabel.analysis.frames import Z_FRAME, HeightFrame, PlaneFitParams, frame_from_points, plane_document
 from pclabel.render.camera import ORTHO
 from pclabel.render.renderer import INSIDE_BIT, PointSource
-from pclabel.render.shaders import MODE_INTENSITY, MODE_NAMES, MODE_WRAP, MODE_WRAP_SHADED
+from pclabel.render.shaders import MODE_CLASS, MODE_INTENSITY, MODE_NAMES, MODE_WRAP, MODE_WRAP_SHADED
 from pclabel.render.viewport import Viewport
 from pclabel.settings import Settings
 from pclabel.store.project import Project, source_doc
@@ -60,7 +60,7 @@ from pclabel.ui.trace import TraceController
 from pclabel.ui.label_import import LabelImportController
 from pclabel.ui.undo import UndoStack
 
-MODES = sorted(MODE_NAMES)
+MODES = [k for k in sorted(MODE_NAMES) if k != MODE_CLASS]  # the class mode is for synthetic ground truth
 
 
 class _SelectionResult(QObject):
@@ -1172,7 +1172,7 @@ class MainWindow(QMainWindow):
             self.info.show_rows([("", "no point under the cursor")])
             return
         pick, _ = res
-        self.info.show_rows(fmt_point_rows(self.project, self.taxonomy, pick, self._scan_of_source))
+        self.info.show_rows(fmt_point_rows(self.project, self.taxonomy, pick, self._scan_of_source, self.annot.model))
         if self.viewport.tool in ("segment", "curve"):
             self.annot.add_vertex(pick.index)
         elif self.viewport.tool == "curve_edit":

@@ -25,15 +25,16 @@ here; the dataclass's docstring and the panel's tooltips give the defaults. Meas
 - Shift + left drag, or middle drag, pans; the wheel zooms toward the cursor;
 - right button held and W A S D Q E pressed: fly until the button goes up (the mouse looks, Q E down and up, Shift
   4× faster, the wheel sets the speed);
-- a click without dragging picks the nearest full-resolution point and shows it in **Point info**: world xyz, RGB,
-  intensity, range from the scanner (static scans only), points within 5 and 10 cm, store, source and raw indices,
-  tile.
+- a click without dragging picks the nearest full-resolution point and shows it in **Point info**: world xyz, its
+  class and flags as `python -m pclabel labels` resolves them, the point sets holding it (and a conflict between
+  them, if any), RGB, intensity, range from the scanner (static scans only), points within 5 and 10 cm, store,
+  source and raw indices, tile.
 
 **Views:** `T` looks straight down and `Shift+T` straight up (to see drains under the road); pressing either again
 turns back. `F7` front (looking +y), `F8` side (looking −x), `Home` resets. These are angles of the perspective
 camera; orthographic projection is a separate switch in the View menu.
 
-**Colour modes** (`C` / `Shift+C`, or the Display panel): rgb, intensity, height, flat, class, wrap, wrap ×
+**Colour modes** (`C` / `Shift+C`, or the Display panel): rgb, intensity, height, flat, wrap, wrap ×
 intensity, labels. All are computed in the shader, so switching costs nothing.
 - Intensity is stretched to the scan's 1st to 99th percentile on open: every scan uses less than half of the stored
   range. "Hide points outside the intensity range" draws only points inside it (display only; tools still reach the

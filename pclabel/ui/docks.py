@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pclabel.render.shaders import MODE_NAMES
+from pclabel.render.shaders import MODE_CLASS, MODE_NAMES
 
 
 EXTRA_DECIMALS = 1  # tool panels take one more decimal than they show by default (finer thresholds, 2026-10-20)
@@ -57,7 +57,8 @@ class DisplayDock(QDockWidget):
         f = QFormLayout(w)
         self.mode = QComboBox()
         for k in sorted(MODE_NAMES):
-            self.mode.addItem(MODE_NAMES[k], k)
+            if k != MODE_CLASS:  # a project has no per-point classes: labels live on annotations
+                self.mode.addItem(MODE_NAMES[k], k)
         f.addRow("colour (C)", self.mode)
         ir = QHBoxLayout()
         self.imin, self.imax = _spin(0.0, 1.0, 0.0, 0.01, 3), _spin(0.0, 1.0, 1.0, 0.01, 3)
@@ -311,21 +312,21 @@ class ScanMetaDock(QDockWidget):
         self.project.set_scan_metadata(**vals)
 
 
-def fmt_point_rows(project, taxonomy, pick, scan_of_source) -> list[tuple[str, str]]:
-    """Info-panel rows for a picked store index."""
+def fmt_point_rows(project, taxonomy, pick, scan_of_source, model=None) -> list[tuple[str, str]]:
+    """Info-panel rows for a picked store index; ``model`` (the annotations) gives its labels."""
+    from pclabel.ops.labels import labels_at
+
     i = pick.index
     src_i = int(project.source_index[i])
     raw_i = int(project.raw_index()[src_i])
     p = np.asarray(project.xyz[i], np.float64) + project.offset
-    names = {int(c["id"]): c["name"] for c in taxonomy.classes}
-    lab = int(project.labels[i])
-    fl = int(project.flags[i])
-    flag_names = [f["name"] for f in taxonomy.flags if fl & (1 << int(f["bit"]))]
-    rows = [
-        ("x, y, z (scan frame)", f"{p[0]:.3f}, {p[1]:.3f}, {p[2]:.3f} m"),
-        ("class", f"{lab} {names.get(lab, '?')}"),
-        ("flags", ", ".join(flag_names) or "none"),
-    ]
+    at = labels_at(model, taxonomy, i) if model is not None else None
+    rows = [("x, y, z (scan frame)", f"{p[0]:.3f}, {p[1]:.3f}, {p[2]:.3f} m")]
+    if at is not None:
+        rows += [("class", at["class"] or "unassessed"), ("flags", ", ".join(at["flags"]) or "none"),
+                 ("in point sets", "; ".join(f"{n} ({lab or 'no label'})" for n, lab in at["sets"]) or "none")]  # fmt: skip
+        if at["conflict"]:
+            rows.append(("conflict", at["conflict"]))
     if project.rgb is not None:
         r, g, b = (int(v) for v in project.rgb[i])
         rows.append(("RGB", f"{r}, {g}, {b}"))

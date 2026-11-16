@@ -83,7 +83,13 @@ the same project files, since the user labels while the code changes).
   clean-up takes `locked`); `tools/selection.restrict` is the one result filter of the seed tools. The numba
   kernels are unchanged. `bench/bench_select.py` before and after: 1,208 and 1,199M points/s (mask), 1,182 and
   1,168M (mask and depth test), within run-to-run noise.
-- Next: C7 to C14 as time allows.
+- C12: done. `street_1m` (conftest) is the shared 1M-point scene; `synth.store_order` replaces the tile-and-reorder
+  boilerplate. The UI tests keep a fresh window each (they change annotations; a shared one would make them depend
+  on their order), so the suite still takes about 80 s.
+- C14: done. New projects are schema `pclabel.project/2`, without label columns; schema 1 opens, its columns unread.
+  Point info shows the point's class resolved from the annotations (`ops/labels.labels_at`), the sets holding it,
+  and any conflict. The class colour mode is left out of the app (synthetic ground truth only).
+- Next: C13, C7, C8, then C9 to C11.
 
 Rules for every step:
 

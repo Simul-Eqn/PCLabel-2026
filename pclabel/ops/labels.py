@@ -52,6 +52,28 @@ def resolve(model, taxonomy, n: int) -> ResolvedLabels:
     """Every point set of ``model`` (an ``Annotations``) by its own or inherited label, for a project of ``n``
     points. Larger sets are applied first, so where two classes on different branches overlap, the smaller set's
     class is the point's (as the labels view shows it)."""
+    return _resolve([(label, ps.indices) for label, ps in model.label_layers()], taxonomy, n)
+
+
+def labels_at(model, taxonomy, index: int) -> dict:
+    """One point's labels (store ``index``): {class (name, "" if none), flags [names], sets [(name, label)] of the
+    point sets holding it (largest first), conflict ("" or "a / b")}, by the same rules as ``resolve``."""
+    i = int(index)
+    held = []
+    for label, ps in model.label_layers():
+        idx = ps.indices
+        k = np.searchsorted(idx, i)
+        if k < len(idx) and idx[k] == i:
+            held.append((label, ps))
+    res = _resolve([(label, np.zeros(1, np.int64)) for label, _ in held], taxonomy, 1)
+    code = int(res.classes[0])
+    return {"class": taxonomy_name(taxonomy, code) if code else "",
+            "flags": [f["name"] for f in taxonomy.flags if res.flags[0] & (1 << int(f["bit"]))],
+            "sets": [(ps.name, label) for label, ps in held], "conflict": ", ".join(res.conflict_pairs)}
+
+
+def _resolve(layers, taxonomy, n: int) -> ResolvedLabels:
+    """``layers``: [(label, store indices)], in the order to apply them (largest set first)."""
     classes = np.zeros(n, np.uint8)
     flags = np.zeros(n, np.uint8)
     conflict = np.zeros(n, bool)
@@ -59,8 +81,8 @@ def resolve(model, taxonomy, n: int) -> ResolvedLabels:
     class_ids = {c["name"]: int(c["id"]) for c in taxonomy.classes}
     flag_bits = {f["name"]: int(f["bit"]) for f in taxonomy.flags}
     out = ResolvedLabels(classes, flags)
-    for label, ps in model.label_layers():  # largest first
-        idx = np.asarray(ps.indices, np.int64)
+    for label, indices in layers:
+        idx = np.asarray(indices, np.int64)
         if not label or not idx.size:
             continue
         out.sets += 1

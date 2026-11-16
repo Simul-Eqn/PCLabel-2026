@@ -53,8 +53,9 @@ exports: labels by item (JSON), label maps (PNG + JSON), vectors (DXF, GeoJSON),
    then a uniform random subsample, which is what the LOD needs. Each column is gathered into store order in
    blocks of 16M points (numba, parallel).
 7. **Write** (layout below): the store columns, `source_index`, `raw_index` (only if records were dropped),
-   `tiles.npy`, zero-filled `labels.u8` and `flags.u8` (the `class` colour mode reads them; nothing writes them,
-   since labels live on annotations, D-007), then `project.json`.
+   `tiles.npy`, then `project.json`. There are no per-point label columns: labels live on annotations (D-007).
+   Projects imported before 2026-11-16 (schema 1) also have zero-filled `labels/labels.u8` and `flags.u8`, which
+   are left on disk and not read.
 8. **Hash the source file** (sha256 in a background thread, plain read-only binary reads) and record its size and
    mtime. If either changed during the import, the import fails.
 9. **Progress and cancel** throughout (stages: read, tile, reorder, finish).
@@ -71,8 +72,7 @@ Sizes for `streets 1.e57` (633.6M points):
 | rgb u8 | 1.9 GB |
 | intensity u16 | 1.3 GB |
 | source_index u32 | 2.5 GB |
-| labels u8 + flags u8 | 1.3 GB |
-| **total** | **about 15 GB** |
+| **total** | **about 13 GB** |
 
 ## source order
 
@@ -91,7 +91,7 @@ mapping against the synthetic scan's ground truth.
 
 ```
 <projects>/<name>/
-  project.json            schema pclabel.project/1 (below)
+  project.json            schema pclabel.project/2 (below)
   points/xyz.f32          float32 (n, 3), store order, relative to the offset
   points/rgb.u8           uint8 (n, 3), store order (absent if no scan has colour)
   points/intensity.u16    uint16 (n,), store order, 0..65535 over the scan's intensity range (absent if none)
@@ -99,7 +99,6 @@ mapping against the synthetic scan's ground truth.
   points/raw_index.u32    only if records were dropped: source index -> raw record index (all scans, file order);
                           when absent, the raw index equals the source index
   tiles.npy               structured array (below)
-  labels/labels.u8  flags.u8   uint8 (n,), store order, zero-filled at import (0 = unassessed)
   frames.json             height frames, schema pclabel.frames/1 (below)
   annotations.json        segments, curves, polylines, markers and point sets in directories, schema pclabel.annotations/9 (below)
   annotations/<id>.npy    a point set's store indices (int64, sorted)
@@ -109,7 +108,8 @@ mapping against the synthetic scan's ground truth.
 
 Column files are raw little-endian arrays without headers; their dtype and shape are in `project.json`.
 
-**`project.json`, schema `pclabel.project/1`** (written atomically: temp file, then replace):
+**`project.json`, schema `pclabel.project/2`** (2: no `labels` and `flags` columns; schema 1 still opens, its
+label columns unread. Written atomically: temp file, then replace):
 
 | key | contents |
 |---|---|
@@ -293,7 +293,8 @@ read):
     first.
   - The view repaints until every wanted page is resident.
 - **Shaders** (`render/shaders.py`):
-  - colour modes RGB, intensity (gamma), height, flat, class (256-entry colour/visibility texture), wrap, wrap ×
+  - colour modes RGB, intensity (gamma), height, flat, class (a 256-entry colour/visibility texture over a
+    per-point class array: synthetic ground truth only, not offered in the app), wrap, wrap ×
     intensity, labels (the annotation label code in the label buffer);
   - heights along the active height frame, `h = dot(p − origin, normal)`, for the ramp, the wrap and the slice;
   - the 3D select clip (box, cylinder, or a loop mask texture) and the clip to point sets;

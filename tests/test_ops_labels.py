@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from pclabel.ops.labels import export_labels, resolve, to_source_order
+from pclabel.ops.labels import export_labels, labels_at, resolve, to_source_order
 from pclabel.store.annotations import Annotations, PointSet
 from pclabel.taxonomy import load_taxonomy
 
@@ -81,3 +81,15 @@ def test_tool_labels_come_from_the_taxonomy(tmp_path):
                  "tools: {curb_trace_lip: kerb_lip}\n", encoding="utf-8")  # fmt: skip
     t = load_taxonomy(f)
     assert t.tool_label("curb_trace_lip") == "kerb_lip" and t.tool_label("marking_trace") == "road_line"
+
+
+def test_one_points_labels_follow_the_same_rules():
+    tax, m = load_taxonomy(), _model()
+    whole = resolve(m, tax, 300)
+    for i in (5, 45, 97, 122, 150, 202):
+        at = labels_at(m, tax, i)
+        code = int(whole.classes[i])
+        assert at["class"] == ("" if code == 0 else next(c["name"] for c in tax.classes if int(c["id"]) == code)), i
+    assert labels_at(m, tax, 45)["sets"] == [("points 1", "road"), ("points 2", "road_line")]
+    assert labels_at(m, tax, 97)["conflict"] == "pavement / road" and labels_at(m, tax, 122)["flags"] == ["exclude"]
+    assert labels_at(m, tax, 150) == {"class": "", "flags": [], "sets": [], "conflict": ""}

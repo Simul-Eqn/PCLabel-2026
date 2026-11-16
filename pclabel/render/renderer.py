@@ -87,13 +87,13 @@ class PointSource:
     xyz: np.ndarray
     rgb: np.ndarray | None
     intensity: np.ndarray | None
-    labels: np.ndarray | None
-    flags: np.ndarray | None
+    labels: np.ndarray | None = None  # per-point class ids (the class mode; synthetic ground truth only)
+    flags: np.ndarray | None = None
     offset: np.ndarray = field(default_factory=lambda: np.zeros(3))
 
     @classmethod
     def from_project(cls, p) -> "PointSource":
-        return cls(p.tiles, p.xyz, p.rgb, p.intensity, p.labels, p.flags, p.offset)
+        return cls(p.tiles, p.xyz, p.rgb, p.intensity, offset=p.offset)
 
     @property
     def n(self) -> int:

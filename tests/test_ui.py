@@ -87,7 +87,7 @@ def test_open_stream_and_pick(window):
     vp.pick(QPointF(vp.width() / 2, vp.height() / 2))
     rows = dict((window.info.tree.topLevelItem(i).text(0), window.info.tree.topLevelItem(i).text(1))
                 for i in range(window.info.tree.topLevelItemCount()))  # fmt: skip
-    assert "x, y, z (scan frame)" in rows and rows["class"].startswith("0 ")  # nothing labelled yet
+    assert "x, y, z (scan frame)" in rows and rows["class"] == "unassessed" and rows["in point sets"] == "none"
     assert int(rows["points within 10 cm"].replace(",", "")) >= 1
     src_i = int(rows["source index (export order)"].replace(",", ""))
     store_i = int(rows["store index"].replace(",", ""))
