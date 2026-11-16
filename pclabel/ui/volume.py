@@ -97,7 +97,7 @@ class VolumeDock(QDockWidget):
             f.addRow(label, sp)
             self.spins[name] = (sp, k)
         self.spins["inset"][0].setToolTip("pull the loop in evenly by this much (the same distance everywhere, e.g. off "
-                                          "the kerb line); negative pushes it out")  # fmt: skip
+                                          "the curb line); negative pushes it out")  # fmt: skip
         self.spins["bottom"][0].setToolTip("from the clicked point (box, cylinder) or the curve's plane (loop), along "
                                            "the height axis or the curve's plane normal")  # fmt: skip
         self.step = _spin(0.1, 500, 10.0, 1.0, 2, " cm")

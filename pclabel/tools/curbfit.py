@@ -1,24 +1,24 @@
-"""Smoothing a kerb's top line while keeping it on the kerb (the user's request of 2026-11-06: "a specialized smooth
+"""Smoothing a curb's top line while keeping it on the curb (the user's request of 2026-11-06: "a specialized smooth
 thing that also tries to keep to the ground truth as much as possible and not lose it", and "there is a real case
 when the curb boundary should be drawn at an area where the curb slopes down to meet the road, so we should not
 follow that and keep it to the top of the curb"; for the top edge only, the user's word of the same day).
 
-For a line along the top edge of a kerb (a traced or drawn ``curb_top``):
+For a line along the top edge of a curb (a traced or drawn ``curb_top``):
 1. **Measured edge:** every ``step`` along the line a cross-section of the cloud is taken across it (the curb
-   tracer's, tools/curbtrace.py ``section``, following the top edge, so the road beside the kerb need not be seen),
-   from the road side, and the top of the kerb's face found there (only where the kerb's top was scanned: where
+   tracer's, tools/curbtrace.py ``section``, following the top edge, so the road beside the curb need not be seen),
+   from the road side, and the top of the curb's face found there (only where the curb's top was scanned: where
    only its face was, the face's highest point scanned is no top edge, and on ExchangeGreen 1 such spots scattered
    0-20 cm across): the first bin within ``top_tolerance`` of the
-   kerb top's own height (the median surface ``top_band`` beyond the first bin ``curb_height`` above the road; on a
+   curb top's own height (the median surface ``top_band`` beyond the first bin ``curb_height`` above the road; on a
    sloped or rounded face that first bin can be anywhere up the face). One within ``window`` across of the line is an *anchor*:
-   where the kerb's top edge really is. The kerb's side is found once for the line (where more sections find it).
-2. **Full-height kerb only:** an anchor whose step is lower than ``min_height_ratio`` of the line's median step is
-   left out, and so is a section with no step at all. Where the kerb slopes down to meet the road (a lowered kerb at
+   where the curb's top edge really is. The curb's side is found once for the line (where more sections find it).
+2. **Full-height curb only:** an anchor whose step is lower than ``min_height_ratio`` of the line's median step is
+   left out, and so is a section with no step at all. Where the curb slopes down to meet the road (a lowered curb at
    a crossing or a driveway) the line is therefore not drawn down the slope: a stretch without anchors up to
-   ``max_bridge`` long is carried across from the full-height kerb on either side, its height going straight from
-   the kerb top on one side to the kerb top on the other, its position across following the old line's shape
-   moved by the corrections measured at the two sides (*bridged*). In a longer stretch (no kerb measured: not this
-   scan's, or not a kerb) the line stays where it was, the corrections fading out over half of ``max_bridge``
+   ``max_bridge`` long is carried across from the full-height curb on either side, its height going straight from
+   the curb top on one side to the curb top on the other, its position across following the old line's shape
+   moved by the corrections measured at the two sides (*bridged*). In a longer stretch (no curb measured: not this
+   scan's, or not a curb) the line stays where it was, the corrections fading out over half of ``max_bridge``
    (*kept*).
 3. **Clutter:** an anchor more than ``outlier`` from the curve through the anchors around it (a quadratic along the
    line through those within ``neighbourhood`` either side, itself left out) is dropped: a real corner is followed by
@@ -27,7 +27,7 @@ For a line along the top edge of a kerb (a traced or drawn ``curb_top``):
    averaged along its length (Gaussian, sigma ``smooth``, analysis/curves.py ``smooth_line``) but no point moves
    more than ``max_shift`` from the same line de-noised (a cubic fitted along it ``denoise`` either way, a
    Savitzky-Golay filter: it takes out the measurements' own scatter, 1-3 cm, without pulling a corner in): the result is never further than that from what was measured,
-   so a corner is rounded by at most that much and the measured kerb is not lost.
+   so a corner is rounded by at most that much and the measured curb is not lost.
 
 All parameters and the counts (anchors, low steps left out, outliers, bridged and kept stretches, how far the line
 moved, how far it is from the anchors) go with the result: the line becomes an assisted one.
@@ -45,28 +45,28 @@ from pclabel.tools.curbtrace import CurbTraceParams, Section, section
 
 
 @dataclass(frozen=True)
-class KerbFitParams:
+class CurbFitParams:
     smooth: float = 1.0  # m: the length along the line points are averaged over (sigma)
     max_shift: float = 0.02  # m: no point moves further than this from the (de-noised) line through the measurements
     denoise: float = 0.9  # m either way: the measurements' own scatter is taken out first by a cubic fitted along
     # the line over this (a Savitzky-Golay filter: unlike an average it does not pull a corner in)
-    window: float = 0.20  # m across the line either way: a measured edge further than this is not this kerb's
+    window: float = 0.20  # m across the line either way: a measured edge further than this is not this curb's
     step: float = 0.30  # m along the line between sections
-    curb_height: float = 0.06  # m: the least step that counts as a kerb (as the curb tracer's)
+    curb_height: float = 0.06  # m: the least step that counts as a curb (as the curb tracer's)
     min_height_ratio: float = 0.80  # an anchor's step must be at least this part of the line's median step (lower:
-    # the kerb sloping down to the road, carried over at the top instead)
+    # the curb sloping down to the road, carried over at the top instead)
     outlier: float = 0.05  # m: an anchor this far off the curve through its neighbours is clutter
     neighbourhood: float = 0.9  # m along the line either way: the neighbours that test an anchor
     road_offset: float = 0.35  # m: the section starts this far on the road side of the line
     road_behind: float = 0.25  # m: and looks this much further onto the road (the curb tracer's ``behind``)
-    top_band: float = 0.20  # m beyond the first high bin: the kerb top's height is the median surface there
-    top_tolerance: float = 0.02  # m: the top of the face is the first bin this close to the kerb top's height
-    max_bridge: float = 8.0  # m: a stretch with no full-height kerb up to this long is carried across from the kerb
-    # on either side (a lowered kerb at a driveway or crossing); in a longer one the line keeps to where it was
+    top_band: float = 0.20  # m beyond the first high bin: the curb top's height is the median surface there
+    top_tolerance: float = 0.02  # m: the top of the face is the first bin this close to the curb top's height
+    max_bridge: float = 8.0  # m: a stretch with no full-height curb up to this long is carried across from the curb
+    # on either side (a lowered curb at a driveway or crossing); in a longer one the line keeps to where it was
 
 
-def _sections(xyz, tiles, pts, tangents, axis, sign, p: KerbFitParams, filters):
-    """(lip points (n, 3), NaN where none; step heights (n,)) for the kerb on one side (``sign`` +1: left)."""
+def _sections(xyz, tiles, pts, tangents, axis, sign, p: CurbFitParams, filters):
+    """(lip points (n, 3), NaN where none; step heights (n,)) for the curb on one side (``sign`` +1: left)."""
     n = np.asarray(axis, np.float64) / np.linalg.norm(axis)
     cp = CurbTraceParams(step=p.step, curb_height=p.curb_height, side="left" if sign > 0 else "right",
                          search=p.road_offset + p.window, behind=p.road_behind, follow="lip")  # fmt: skip
@@ -91,8 +91,8 @@ def _sections(xyz, tiles, pts, tangents, axis, sign, p: KerbFitParams, filters):
     return out, hts, unseen
 
 
-def _top_of_face(r: Section, n, p: KerbFitParams):
-    """(point, step height) where the face ends and the kerb's top begins: the first bin past the toe within
+def _top_of_face(r: Section, n, p: CurbFitParams):
+    """(point, step height) where the face ends and the curb's top begins: the first bin past the toe within
     ``top_tolerance`` of the top's height (the median surface ``top_band`` beyond the tracer's lip). On a sloped or
     rounded face the first bin ``curb_height`` above the road (the tracer's lip) can be anywhere up the face."""
     centres, surf = r.profile
@@ -108,7 +108,7 @@ def _top_of_face(r: Section, n, p: KerbFitParams):
     return r.lip + (a_top - r.a_lip) * r.across + dh * n, r.height + dh
 
 
-def _outliers(s, e, use, p: KerbFitParams, total, closed) -> np.ndarray:
+def _outliers(s, e, use, p: CurbFitParams, total, closed) -> np.ndarray:
     """Anchors more than ``p.outlier`` off a quadratic (along the line) through their neighbours."""
     idx = np.flatnonzero(use)
     sa, ea = s[idx], e[idx]
@@ -128,7 +128,7 @@ def _outliers(s, e, use, p: KerbFitParams, total, closed) -> np.ndarray:
     return bad
 
 
-def _through(pts, e, use, s, total, ax, p: KerbFitParams, closed):
+def _through(pts, e, use, s, total, ax, p: CurbFitParams, closed):
     """The line through the anchors: (points, per-sample state 0 anchored / 1 bridged / 2 kept)."""
     m = len(pts)
     h_of = lambda v: v @ ax  # noqa: E731
@@ -145,7 +145,7 @@ def _through(pts, e, use, s, total, ax, p: KerbFitParams, closed):
         if a is not None and b is not None and span <= p.max_bridge:  # bridged: carried across
             t = s_rel / span
             c = (1 - t)[:, None] * corr[a] + t[:, None] * corr[b]
-            hh = (1 - t) * h_of(e[a]) + t * h_of(e[b])  # the kerb top's height, straight across
+            hh = (1 - t) * h_of(e[a]) + t * h_of(e[b])  # the curb top's height, straight across
             q = pts[ks] + c
             T[ks] = q + (hh - h_of(q))[:, None] * ax
             state[ks] = 1
@@ -195,9 +195,9 @@ def _denoise(v, half: float, closed: bool) -> np.ndarray:
     return out
 
 
-def fit(xyz, tiles, vertices, axis, p: KerbFitParams = KerbFitParams(), closed: bool = False, filters=None,
+def fit(xyz, tiles, vertices, axis, p: CurbFitParams = CurbFitParams(), closed: bool = False, filters=None,
         progress=None) -> dict:  # fmt: skip
-    """Fit a line (local (m, 3) vertices) to the top edge of the kerb under it. Returns {vertices (local, about
+    """Fit a line (local (m, 3) vertices) to the top edge of the curb under it. Returns {vertices (local, about
     2 cm apart), samples (the section points), state (per sample: 0 anchored, 1 bridged, 2 kept), bridged and kept
     [(from m, length m)], side, sections, anchors, low_steps, outliers, no_edge, height_median, off_anchors_rms,
     off_anchors_max (m, the result from the anchors), largest_move, mean_move (m, from the old line), params}."""
@@ -213,7 +213,7 @@ def fit(xyz, tiles, vertices, axis, p: KerbFitParams = KerbFitParams(), closed: 
     tan /= np.maximum(np.linalg.norm(tan, axis=1, keepdims=True), 1e-12)
     probe = np.unique(np.linspace(0, m - 1, min(m, 15)).round().astype(int))
     found = {}
-    for sgn in (1, -1):  # the kerb's side: where more of a few sections find it
+    for sgn in (1, -1):  # the curb's side: where more of a few sections find it
         e, _, _ = _sections(xyz, tiles, pts[probe], tan[probe], ax, sgn, p, filters)
         ok = ~np.isnan(e[:, 0])
         found[sgn] = (int(ok.sum()), -float(np.median(np.linalg.norm((e - pts[probe])[ok], axis=1))) if ok.any() else 0.0)
@@ -221,7 +221,7 @@ def fit(xyz, tiles, vertices, axis, p: KerbFitParams = KerbFitParams(), closed: 
         raise InterruptedError("stopped")
     sgn = max(found, key=lambda k: found[k])
     if found[sgn][0] == 0:
-        raise ValueError(f"no kerb top found within {p.window:.2f} m of the line on either side")
+        raise ValueError(f"no curb top found within {p.window:.2f} m of the line on either side")
     edge, hts, unseen = _sections(xyz, tiles, pts, tan, ax, sgn, p, filters)
     if progress is not None and progress(0.9) is False:
         raise InterruptedError("stopped")
@@ -239,9 +239,9 @@ def fit(xyz, tiles, vertices, axis, p: KerbFitParams = KerbFitParams(), closed: 
         outliers += int(bad.sum())
         use &= ~bad
     if use.sum() < 2:
-        raise ValueError("fewer than two measured kerb tops along the line")
+        raise ValueError("fewer than two measured curb tops along the line")
     T, state = _through(pts, edge, use, s, total, ax, p, closed)
-    # the measurements de-noised a little (over denoise: a corner of the kerb survives that), and the smooth line
+    # the measurements de-noised a little (over denoise: a corner of the curb survives that), and the smooth line
     # held within max_shift of it
     Td = curves.resample(T, 0.02, closed)
     R = _denoise(Td, p.denoise / 0.02, closed)

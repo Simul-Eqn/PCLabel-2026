@@ -5,7 +5,7 @@ ARCHITECTURE "annotations").
   level with a colour of its own.
 - **Polylines** come from imported labels (a DXF drawing's lines and outlines, store/label_import.py): exact 3D
   vertices, unlike a curve (smoothed; planar unless its mode is "free").
-- **Curves** in mode "free" have no plane: the nodes stay where they were put, so a curve can follow a kerb up and
+- **Curves** in mode "free" have no plane: the nodes stay where they were put, so a curve can follow a curb up and
   down a slope (the tracers and the join tool save their lines so, with nodes enough to stay within 1 cm).
 - **Markers** are positions: where a thing is (a pole's or a tree's foot, a manhole). One is placed from selected
   points (their mean, or the centre of a circle fitted across the height axis: tools/markers.py) or imported (a
@@ -100,7 +100,7 @@ CURVE_MODES = {
     "ends": "through the start and end points, turned to fit the others",
     "axis": "perpendicular to the height axis, at the points' mean height",
     "fit": "fitted to all the points (least squares, any tilt)",
-    "free": "nowhere: no plane, the points stay where they are (a 3D curve, e.g. a kerb up and down a slope)",
+    "free": "nowhere: no plane, the points stay where they are (a 3D curve, e.g. a curb up and down a slope)",
 }
 
 

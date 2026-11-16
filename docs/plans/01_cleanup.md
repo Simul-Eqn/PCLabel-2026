@@ -107,7 +107,12 @@ the same project files, since the user labels while the code changes).
   split, pieces, label import, selection, seed tools, clearance and kerb fit. Kept: the tracer's and the label
   map's relays (they stream progress) and the import dialog's QThread. Not done: building the panels from the
   parameter dataclasses; it rewrites every tool panel the user works in, for no change in what they do.
-- Next: C11, then C13.
+- C13, in part: "kerb" is "curb" everywhere in the code, tests, configs and the docs that describe the code
+  (`tools/curbfit.py`, `CurbFitParams`, the saved key `curb_fit`; a line's older `kerb_fit` records move to
+  `curb_fit` at its next fit, and are read as they are until then). Not done: "piece" for its four meanings, and
+  one record-name constant per tool module; both rename saved record values and are best done with plan 02's
+  scoring, which reads them.
+- Left: C11 (splitting `ui/annotate.py`, `ui/main_window.py`, `ui/trace.py`).
 
 Rules for every step:
 

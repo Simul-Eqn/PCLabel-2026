@@ -9,7 +9,7 @@
 3. **Growth** from the clicked voxel, as in PCL. A neighbour (an occupied voxel within ``connect``) joins when its
    normal is within ``smoothness`` degrees of the current voxel's (the sign of a normal does not matter). It then
    carries the growth on only if its curvature is below ``curvature`` (PCL's seeds). So the region follows
-   surfaces that bend slowly and stops at creases and edges (kerb lips, wall corners) and on rough surfaces
+   surfaces that bend slowly and stops at creases and edges (curb lips, wall corners) and on rough surfaces
    (vegetation). The growth stays inside the cube of half-size ``radius`` around the click.
 4. **Points:** every point in a grown voxel.
 

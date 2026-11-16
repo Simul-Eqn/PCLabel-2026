@@ -32,9 +32,9 @@ def street(tilt_deg=0.0, seed=0):
 def test_map_of_a_street(tilt):
     xyz, rot, normal = street(tilt)
     road, mark, pole = np.arange(200_000), np.arange(200_000, 220_000), np.arange(220_000, 222_000)
-    kerb = (np.array([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]]) @ rot.T) + OFFSET
+    curb = (np.array([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]]) @ rot.T) + OFFSET
     p = LabelMapParams(pixel=0.05, margin=0.5, line_width=3.0)
-    res = label_map(xyz, OFFSET, normal, OFFSET, rot @ [1.0, 0, 0], [(road, 1), (mark, 2)], [(kerb, 3)], COLORS, p)
+    res = label_map(xyz, OFFSET, normal, OFFSET, rot @ [1.0, 0, 0], [(road, 1), (mark, 2)], [(curb, 3)], COLORS, p)
     t, codes = res["transform"], res["codes"]
     assert (t["width"], t["height"]) == (int(np.ceil(11 / 0.05)), int(np.ceil(5 / 0.05)))
     assert res["rgba"].shape == (t["height"], t["width"], 4) and res["rgba"][0, 0, 3] == 0  # outside: transparent
@@ -43,7 +43,7 @@ def test_map_of_a_street(tilt):
         return codes[int((t["top_left"][1] - y) / p.pixel), int((x - t["top_left"][0]) / p.pixel)]
 
     assert at(5.0, 2.0) == 2 and at(5.0, 1.0) == 1 and at(5.0, 3.0) == 1  # the marking shows over the road
-    assert at(5.0, 0.0) == 3 and at(0.5, 0.02) == 3  # the kerb line on top, along the road's edge
+    assert at(5.0, 0.0) == 3 and at(0.5, 0.02) == 3  # the curb line on top, along the road's edge
     assert at(10.4, 2.0) == 0  # the margin
     # the transform takes a pixel back to the world: the pixel holding the marking's centre lies on the marking
     r, c = int((t["top_left"][1] - 2.0) / p.pixel), int((5.0 - t["top_left"][0]) / p.pixel)

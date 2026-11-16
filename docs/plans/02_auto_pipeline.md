@@ -86,7 +86,7 @@ and has a parameter dataclass. The pieces the pipeline reuses:
 | stage needs | existing function | what it still needs from a human |
 |---|---|---|
 | curb cross-section and trace | `curbtrace.section`, `curbtrace.run_trace` | a start point on the road and a second point for direction |
-| snap a line to the curb top | `kerbfit.fit` | an existing line |
+| snap a line to the curb top | `curbfit.fit` | an existing line |
 | stitch traced pieces | `linejoin.join_lines` | lines to join |
 | smooth | `curves.smooth_line` | a line |
 | local ground grid | `ground.cell_grid` (10 cm cells: surface height, intensity, roughness, count) | a seed, and it reaches only 30 m |
@@ -240,7 +240,7 @@ Acceptance:
 ### P3. Curbs
 
 Pipeline: step candidates from the raster → seeds → `curbtrace.run_trace` → `linejoin.join_lines` →
-`kerbfit.fit` → smoothing → checks → `curb_top` lines.
+`curbfit.fit` → smoothing → checks → `curb_top` lines.
 
 Candidates: cells where the lowest-layer height rises by a curb-like amount (range from P2, measurement 2) within
 about 0.3 m, allowing an empty band between, with a paved low side. Group them into chains, take the direction

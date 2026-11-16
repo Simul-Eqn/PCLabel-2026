@@ -4,7 +4,7 @@ like the magic wand of an image editor, on an intensity picture of the ground.
 1. Picture. The ground surface comes from cells as in ground grow (``ground_cell``, 10 cm: the points within
    ``surface_band`` of a cell's 5th percentile height, their median height). Every point within ``surface_tol`` of
    its cell's surface is a *ground point*. Ground points are binned into square pixels (``pixel``, 2 cm) that hold
-   their mean intensity and mean height. Vehicles, canopy and kerb faces above the ground and drain floors below it
+   their mean intensity and mean height. Vehicles, canopy and curb faces above the ground and drain floors below it
    are not in the picture. Far from the scanner the points lie on scan lines several cm apart, so many pixels there
    are empty.
 2. Gaps. An empty pixel within ``max_gap`` / 2 of a pixel with data takes that pixel's values (the nearest one), as
@@ -17,11 +17,11 @@ like the magic wand of an image editor, on an intensity picture of the ground.
      0.03-0.10), so a factor separates paint from road where a fixed difference cannot. The reference is the
      clicked pixel's intensity, as in an image editor; with ``memory`` > 0 it is a running (geometric) average
      along the fill over about that distance, which follows a line whose intensity fades with range;
-   - its height differs from the current pixel's by at most ``max_step``, so the fill does not climb a kerb onto
-     bright kerb paint.
+   - its height differs from the current pixel's by at most ``max_step``, so the fill does not climb a curb onto
+     bright curb paint.
    Each refused pixel records why. With ``contiguous`` off, every pixel within ``tolerance`` of the clicked one is
    taken, connected to it or not, on the surface the click is on (the ground reachable from it without a height
-   step, e.g. the road between its kerbs): all the dashes of a line, and anything else as bright there. The fill
+   step, e.g. the road between its curbs): all the dashes of a line, and anything else as bright there. The fill
    stays inside the square of half-size ``radius`` around the click.
 4. Points: every ground point in a selected pixel.
 

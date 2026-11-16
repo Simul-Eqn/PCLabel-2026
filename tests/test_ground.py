@@ -1,4 +1,4 @@
-"""Ground grow on the synthetic street (crowned road, markings, drains, a lowered kerb with a pavement ramp)."""
+"""Ground grow on the synthetic street (crowned road, markings, drains, a lowered curb with a pavement ramp)."""
 
 from dataclasses import replace
 
@@ -32,7 +32,7 @@ def test_grows_over_the_road_and_its_markings_only(scene, taxonomy):
     mat = scene["mat"]
     road = is_material(mat, "road", "marking")
     marking = is_material(mat, "marking")
-    assert (sel & ~road).sum() <= 0.005 * sel.sum()  # kerb and drain-lip points at road level, at most 0.5 %
+    assert (sel & ~road).sum() <= 0.005 * sel.sum()  # curb and drain-lip points at road level, at most 0.5 %
     for name in ("pavement", "grass", "tree_trunk", "tree_canopy", "lamp_post"):
         assert not (sel & is_material(mat, name)).any(), name
     assert sel[road].mean() > 0.95
@@ -41,7 +41,7 @@ def test_grows_over_the_road_and_its_markings_only(scene, taxonomy):
 
 
 def test_intensity_is_what_stops_the_walkway(scene, taxonomy):
-    """At the lowered kerb the pavement ramps down to road height: without the intensity checks the grow leaks
+    """At the lowered curb the pavement ramps down to road height: without the intensity checks the grow leaks
     onto it, with them it does not."""
     pavement = is_material(scene["mat"], "pavement")
     leak, _ = selected(scene, replace(P, intensity_step=1.0, intensity_range=1.0, max_step=0.025))
@@ -134,7 +134,7 @@ def test_intensity_is_compared_with_the_local_road_not_the_seed():
     assert local.info["stopped_by"]["intensity vs local road"] < 5
 
 
-def test_gaps_are_crossed_but_not_up_a_kerb():
+def test_gaps_are_crossed_but_not_up_a_curb():
     rng = np.random.default_rng(2)
     # a flat road with a 0.6 m no-point strip across it (a pole's shadow)
     a = flat(rng, 0, 10, 0, 3, 2000)
@@ -142,7 +142,7 @@ def test_gaps_are_crossed_but_not_up_a_kerb():
     xyz, inten, tiles = patch([a, b])
     r = ground_grow(xyz, inten, tiles, np.array([5.0, 1.5, 0.0]), GroundGrowParams(radius=25))
     assert (xyz[r.indices, 0] > 10.6).sum() > 0.95 * len(b[0])
-    # a 15 cm kerb top behind a 0.6 m no-point strip (the strip behind a kerb that faces away)
+    # a 15 cm curb top behind a 0.6 m no-point strip (the strip behind a curb that faces away)
     c = flat(rng, 0, 10, 0, 3, 2000)
     d = flat(rng, 10.6, 20, 0, 3, 2000, z=0.15)
     xyz, inten, tiles = patch([c, d])

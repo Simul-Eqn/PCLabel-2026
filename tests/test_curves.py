@@ -193,7 +193,7 @@ def test_a_traced_line_as_a_curve_within_a_tolerance():
 
     s = np.arange(0, 30, 0.3)
     rng = np.random.default_rng(1)
-    v = np.c_[s, 4 * np.sin(s / 6), 0.04 * s + 0.003 * rng.standard_normal(len(s))]  # a kerb up a slope, with noise
+    v = np.c_[s, 4 * np.sin(s / 6), 0.04 * s + 0.003 * rng.standard_normal(len(s))]  # a curb up a slope, with noise
     for tol in (0.01, 0.02):
         c = Curve.from_line(v, [0, 0, 1], [0, 0, 0], tolerance=tol, source={"tool": "curb_trace"})
         fit = c.source["curve_fit"]

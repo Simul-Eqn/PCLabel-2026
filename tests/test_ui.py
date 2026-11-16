@@ -337,7 +337,7 @@ def test_grow_reports_and_shows_where_it_stopped(window):
     while (window._grow_busy or window._grow_pending) and time.perf_counter() - t0 < 60:
         app.processEvents()
     stops = window.selection_def["result"]["stopped_by"]
-    assert stops["height step"] > 0  # the kerbs
+    assert stops["height step"] > 0  # the curbs
     assert "stopped by (cells):" in window.grow.result.text() and "height step" in window.grow.result.text()
     assert window.viewport.renderer._marks is not None and window.viewport.renderer._marks[2] == sum(stops.values())
     window.grow.show_stops.setChecked(False)
@@ -372,7 +372,7 @@ def test_magic_select_takes_a_dash_and_shift_adds_a_line(window):
     assert window.viewport.renderer._marks is None  # where it stopped: off by default (the outline of every marking)
     click(-3.33, -3.27, "add")  # the south double yellow line, 3.3 m away
     both = w[window.selection]
-    assert (both[:, 1] < -3).sum() > 200 and np.abs(both[:, 1]).max() < 3.6  # not the kerb (3.7 m)
+    assert (both[:, 1] < -3).sum() > 200 and np.abs(both[:, 1]).max() < 3.6  # not the curb (3.7 m)
     assert window.selection_def["result"]["picture_reused"]
     window.magic.show_stops.setChecked(True)
     assert window.viewport.renderer._marks is not None
@@ -974,7 +974,7 @@ def test_split_a_point_set_in_the_app(window):
     a, sp, r = window.annot, window.split, window.viewport.renderer
     p = window.project
     w = np.asarray(p.xyz, np.float64) + p.offset
-    area = np.flatnonzero((np.abs(w[:, 0]) < 3) & (w[:, 1] > -3.5) & (w[:, 1] < 9))  # road, kerb, pavement, grass, tree
+    area = np.flatnonzero((np.abs(w[:, 0]) < 3) & (w[:, 1] > -3.5) & (w[:, 1] < 9))  # road, curb, pavement, grass, tree
     window.set_selection(area, {"tool": "test", "op": "replace"})
     a.points_from_selection()
     ps = a.model.root[-1]
@@ -1849,7 +1849,7 @@ def test_rename_inside_a_directory(window):
     act["Ctrl+G"].trigger()
     a.move([seg.id, inner.id], d.id)
     ps = inner.children[0]
-    for x, new in ((seg, "kerb top"), (ps, "dash 3"), (inner, "east side")):
+    for x, new in ((seg, "curb top"), (ps, "dash 3"), (inner, "east side")):
         t.clearSelection()
         it = a._item_of(x.id)
         it.setSelected(True)
@@ -1864,7 +1864,7 @@ def test_rename_inside_a_directory(window):
         QTest.keyClick(ed, Qt.Key.Key_Return)
         QApplication.instance().processEvents()
         assert a.model.node(x.id).name == new and a._item_of(x.id).text(3) == x.describe()
-    assert sorted(c.name for c in d.children) == ["east side", "kerb top"] and inner.children[0].name == "dash 3"
+    assert sorted(c.name for c in d.children) == ["curb top", "east side"] and inner.children[0].name == "dash 3"
     window.undo()
     assert a.model.node(inner.id).name == "rename inner"  # undo takes back the last rename
     t.clearSelection()
@@ -2279,8 +2279,8 @@ def test_smooth_selected_lines(window):
     a.done()
 
 
-def test_smooth_onto_the_kerb_top(window, monkeypatch):
-    """The Trace panel's "smooth the selected lines": the kerb-top fit runs in a worker; each line is replaced in
+def test_smooth_onto_the_curb_top(window, monkeypatch):
+    """The Trace panel's "smooth the selected lines": the curb-top fit runs in a worker; each line is replaced in
     place (curve stays a curve), its source records the fit; one undo step; a failure is reported."""
     import time
 
@@ -2318,7 +2318,7 @@ def test_smooth_onto_the_kerb_top(window, monkeypatch):
 
         return curves.resample(verts, 0.02)
 
-    monkeypatch.setattr(tr_mod, "kerb_fit", fake_fit)
+    monkeypatch.setattr(tr_mod, "curb_fit", fake_fit)
     tr.dock.f_smooth.setValue(1.5)
     a.dock.tree.clearSelection()
     a._item_of(c.id).setSelected(True)
@@ -2330,10 +2330,10 @@ def test_smooth_onto_the_kerb_top(window, monkeypatch):
     new = a.model.node(c.id)
     assert new is not c and new.kind == "curve" and new.mode == "free" and new.label == "curb_top" and new.name == "top"
     assert np.abs(new.polyline()[:, 1] - o[1]).max() < 0.006 and seen["params"].smooth == 1.5
-    k = new.source["kerb_fit"][0]
+    k = new.source["curb_fit"][0]
     assert new.source["assisted"] and new.source["tool"] == "curb_trace" and "edited" not in new.source
     assert k["anchors"] == 18 and k["bridged"] == [(2.0, 1.2)] and k["params"]["smooth"] == 1.5
     assert a.model.node(pl.id) is pl  # too short: left as it was, and said so
     assert "short: the line is too short" in a.dock.status.text() and "carried across (1.2 m)" in a.dock.status.text()
     window.undo()
-    assert a.model.node(c.id).source.get("edited") and "kerb_fit" not in a.model.node(c.id).source
+    assert a.model.node(c.id).source.get("edited") and "curb_fit" not in a.model.node(c.id).source

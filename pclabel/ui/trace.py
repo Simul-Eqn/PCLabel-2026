@@ -1,7 +1,7 @@
 """The Trace panel (the user's request of 2026-11-05, after LiDAR360MLS's road tools): semi-automatic curb and
 road-marking lines (tools/curbtrace.py, tools/linetrace.py).
 
-- Ctrl+T (curb) or Ctrl+Shift+T (marking), then two clicks: where to start (on the road beside the kerb, or on the
+- Ctrl+T (curb) or Ctrl+Shift+T (marking), then two clicks: where to start (on the road beside the curb, or on the
   paint) and a point further along for the direction. The tracer runs in a worker thread and draws what it has found
   as it goes (curb: the toe orange, the lip yellow; marking: cyan).
 - Space (or "stop") stops it; Backspace (or "back a step") takes back its last step; two more clicks trace another
@@ -49,8 +49,8 @@ from PySide6.QtWidgets import (
 from pclabel.analysis import curves
 from pclabel.ops import trace as trace_ops
 from pclabel.tools.clearance import ClearanceParams, check
-from pclabel.tools.kerbfit import KerbFitParams
-from pclabel.tools.kerbfit import fit as kerb_fit
+from pclabel.tools.curbfit import CurbFitParams
+from pclabel.tools.curbfit import fit as curb_fit
 from pclabel.tools.linejoin import JoinParams, join_lines
 from pclabel.tools.templates import SHAPES, OutlineParams, outline
 from pclabel.tools.curbtrace import CurbTraceParams
@@ -74,7 +74,7 @@ class TraceDock(QDockWidget):
         w = QWidget()
         v = QVBoxLayout(w)
         hint = QLabel("Ctrl+T traces a curb, Ctrl+Shift+T a road marking: click where to start (on the road beside the "
-                      "kerb, or on the paint), then a point further along. Space stops, Backspace takes back a step, "
+                      "curb, or on the paint), then a point further along. Space stops, Backspace takes back a step, "
                       "two more clicks trace on, Enter saves.")  # fmt: skip
         hint.setWordWrap(True)
         v.addWidget(hint)
@@ -87,25 +87,25 @@ class TraceDock(QDockWidget):
         f = QFormLayout(self.curb_box)
         self.c_step = _spin(0.05, 2.0, c.step, 0.05, 2, " m")
         self.c_height = _spin(0.02, 0.5, c.curb_height, 0.01, 3, " m")
-        self.c_height.setToolTip("the least step that counts as a kerb: lower kerbs (lowered, driveways) end the trace")
+        self.c_height.setToolTip("the least step that counts as a curb: lower curbs (lowered, driveways) end the trace")
         self.c_side = QComboBox()
         self.c_side.addItem("found automatically", "auto")
         self.c_side.addItem("on the left", "left")
         self.c_side.addItem("on the right", "right")
-        self.c_side.setToolTip("which side of the direction you clicked the kerb is on (seen from above); found "
-                               "automatically: either side, and a start clicked on the kerb's top moves onto the road")
+        self.c_side.setToolTip("which side of the direction you clicked the curb is on (seen from above); found "
+                               "automatically: either side, and a start clicked on the curb's top moves onto the road")
         self.c_search = _spin(0.2, 5.0, c.search, 0.1, 2, " m")
-        self.c_search.setToolTip("how far across, towards the kerb, to look for the step")
+        self.c_search.setToolTip("how far across, towards the curb, to look for the step")
         self.c_face = _spin(0.02, 1.0, c.max_face, 0.02, 2, " m")
         self.c_face.setToolTip("the most the toe and the lip may be apart across (a face not seen from the scanner)")
         self.c_gap = _spin(0.0, 10.0, c.max_gap, 0.1, 2, " m")
-        self.c_gap.setToolTip("stretches without a kerb step up to this long (a drain inlet) are skipped, and the "
+        self.c_gap.setToolTip("stretches without a curb step up to this long (a drain inlet) are skipped, and the "
                               "lines broken there")  # fmt: skip
         self.c_length = _spin(1.0, 5000.0, c.max_length, 10.0, 0, " m")
         self.c_follow = QComboBox()
         self.c_follow.addItem("the toe (both edges)", "toe")
         self.c_follow.addItem("the top edge only", "lip")
-        self.c_follow.setToolTip("the top edge only: steps along the kerb's lip and needs no road seen beside the kerb "
+        self.c_follow.setToolTip("the top edge only: steps along the curb's lip and needs no road seen beside the curb "
                                  "(a toe hidden from the scanner, a gutter); saves only the lip")  # fmt: skip
         lines = QHBoxLayout()
         self.c_toe = QCheckBox("toe (a helper line, no label)")
@@ -113,7 +113,7 @@ class TraceDock(QDockWidget):
         for b in (self.c_toe, self.c_lip):
             b.setChecked(True)
             lines.addWidget(b)
-        for label, wdg in (("follow", self.c_follow), ("step", self.c_step), ("curb height", self.c_height), ("kerb is", self.c_side),
+        for label, wdg in (("follow", self.c_follow), ("step", self.c_step), ("curb height", self.c_height), ("curb is", self.c_side),
                            ("search across", self.c_search), ("face up to", self.c_face), ("skip gaps up to", self.c_gap),
                            ("at most", self.c_length)):  # fmt: skip
             f.addRow(label, wdg)
@@ -250,23 +250,23 @@ class TraceDock(QDockWidget):
         g3.addRow(self.j_keep)
         g3.addRow(self.j_run)
         v.addWidget(self.join_box)
-        kp = KerbFitParams()
-        self.fit_box = QGroupBox("smooth onto the kerb top")
-        self.fit_box.setToolTip("for curb_top lines: the kerb's top edge measured every 0.3 m along the selected lines "
-                                "(where the kerb top was scanned), the line made smooth but kept within the distance "
-                                "of it; where the kerb slopes down to the road it is carried across at the top")  # fmt: skip
+        kp = CurbFitParams()
+        self.fit_box = QGroupBox("smooth onto the curb top")
+        self.fit_box.setToolTip("for curb_top lines: the curb's top edge measured every 0.3 m along the selected lines "
+                                "(where the curb top was scanned), the line made smooth but kept within the distance "
+                                "of it; where the curb slopes down to the road it is carried across at the top")  # fmt: skip
         g4 = QFormLayout(self.fit_box)
         self.f_smooth = _spin(0.1, 20.0, kp.smooth, 0.1, 2, " m")
         self.f_smooth.setToolTip("the length along the line points are averaged over")
         self.f_shift = _spin(0.0, 0.5, kp.max_shift, 0.005, 3, " m")
-        self.f_shift.setToolTip("the line stays this close to the measured kerb top (its scatter taken out)")
+        self.f_shift.setToolTip("the line stays this close to the measured curb top (its scatter taken out)")
         self.f_window = _spin(0.02, 1.0, kp.window, 0.02, 2, " m")
-        self.f_window.setToolTip("a kerb top measured further across from the line than this is not this kerb's")
+        self.f_window.setToolTip("a curb top measured further across from the line than this is not this curb's")
         self.f_bridge = _spin(0.0, 100.0, kp.max_bridge, 0.5, 1, " m")
-        self.f_bridge.setToolTip("a stretch with no full-height kerb up to this long (a lowered kerb at a driveway or "
-                                 "crossing) is carried across at the kerb top's height; a longer one stays where it was")  # fmt: skip
+        self.f_bridge.setToolTip("a stretch with no full-height curb up to this long (a lowered curb at a driveway or "
+                                 "crossing) is carried across at the curb top's height; a longer one stays where it was")  # fmt: skip
         self.f_ratio = _spin(0.0, 1.0, kp.min_height_ratio, 0.05, 2, "")
-        self.f_ratio.setToolTip("a kerb lower than this part of the line's usual height is sloping down: not followed")
+        self.f_ratio.setToolTip("a curb lower than this part of the line's usual height is sloping down: not followed")
         self.f_run = QPushButton("smooth the selected lines")
         for label, wdg in (("smooth over", self.f_smooth), ("within", self.f_shift), ("search across", self.f_window),
                            ("carry across up to", self.f_bridge), ("full height ≥", self.f_ratio)):  # fmt: skip
@@ -300,8 +300,8 @@ class TraceDock(QDockWidget):
                                search=self.c_search.value(), max_face=self.c_face.value(), max_gap=self.c_gap.value(),
                                max_length=self.c_length.value(), follow=self.c_follow.currentData())  # fmt: skip
 
-    def fit_params(self) -> KerbFitParams:
-        return KerbFitParams(smooth=self.f_smooth.value(), max_shift=self.f_shift.value(), window=self.f_window.value(),
+    def fit_params(self) -> CurbFitParams:
+        return CurbFitParams(smooth=self.f_smooth.value(), max_shift=self.f_shift.value(), window=self.f_window.value(),
                              max_bridge=self.f_bridge.value(), min_height_ratio=self.f_ratio.value())  # fmt: skip
 
     def join_params(self) -> JoinParams:
@@ -364,7 +364,7 @@ class TraceController(QObject):
         self.dock.show()
         self.dock.raise_()
         self.w.viewport.set_tool("trace")
-        what = "on the road beside the kerb" if mode == "curb" else "on the paint"
+        what = "on the road beside the curb" if mode == "curb" else "on the paint"
         self.dock.status.setText(f"click where to start, {what}")
 
     def _on_tool(self, name):
@@ -456,9 +456,9 @@ class TraceController(QObject):
         if run["mode"] == "curb":
             k = len(r["toe"])
             if not k:
-                return f"no kerb found: {r['stopped']}."
+                return f"no curb found: {r['stopped']}."
             h = r["height"]
-            return (f"{k} steps ({int(r['piece'].max()) + 1} pieces), kerb {np.median(h):.3f} m high (median; "
+            return (f"{k} steps ({int(r['piece'].max()) + 1} pieces), curb {np.median(h):.3f} m high (median; "
                     f"{h.min():.3f}..{h.max():.3f}), face seen in {r['seen'].mean():.0%}; stopped: {r['stopped']} "
                     f"({r['seconds']:.1f} s).")  # fmt: skip
         pcs = r["pieces"]
@@ -624,10 +624,10 @@ class TraceController(QObject):
                    f"({res['seconds']:.1f} s)")  # fmt: skip
         self.dock.status.setText(a.dock.status.text())
 
-    # ---- smoothing onto the kerb top ----------------------------------------------------------------------------
+    # ---- smoothing onto the curb top ----------------------------------------------------------------------------
 
     def fit_selected(self):
-        """Smooth the selected lines onto the kerb's top edge (tools/kerbfit.py), in a worker thread; each replaced
+        """Smooth the selected lines onto the curb's top edge (tools/curbfit.py), in a worker thread; each replaced
         in place when done (one undo step)."""
         from pclabel.io.vector_export import geometry
 
@@ -651,7 +651,7 @@ class TraceController(QObject):
         xyz, tiles = w.project.xyz, w.project.tiles
         filters = w._filters() if w.viewport.renderer is not None else None
         self._busy, self._stop = True, False
-        self.dock.status.setText(f"measuring the kerb top along {len(items)} line{'s' * (len(items) != 1)}...")
+        self.dock.status.setText(f"measuring the curb top along {len(items)} line{'s' * (len(items) != 1)}...")
 
         def work():
             out = []
@@ -660,14 +660,14 @@ class TraceController(QObject):
                     break
                 t0 = time.perf_counter()
                 try:
-                    r = kerb_fit(xyz, tiles, v, axis, params, closed, filters, lambda fr: not self._stop)
+                    r = curb_fit(xyz, tiles, v, axis, params, closed, filters, lambda fr: not self._stop)
                     r["seconds"] = time.perf_counter() - t0
                     out.append((iid, r))
                 except (ValueError, InterruptedError) as e:
                     out.append((iid, e))
             return {"results": out, "frame": f.name, "axis": axis, "params": params}
 
-        run_in_worker(work, lambda res, err, s: self._on_fit(res, err), "kerb_fit")
+        run_in_worker(work, lambda res, err, s: self._on_fit(res, err), "curb_fit")
         return True
 
     def _on_fit(self, res, err):
@@ -690,14 +690,14 @@ class TraceController(QObject):
         if not done:
             self.dock.status.setText("; ".join(msgs) or "nothing fitted")
             return
-        a.checkpoint(f"smooth {len(done)} line{'s' * (len(done) != 1)} onto the kerb top")
+        a.checkpoint(f"smooth {len(done)} line{'s' * (len(done) != 1)} onto the curb top")
         stats = []
         for iid, r in done:
             try:
                 x = m.node(iid)
             except KeyError:  # removed meanwhile
                 continue
-            src = trace_ops.kerb_fit_source(getattr(x, "source", {}), r, asdict(res["params"]), res["frame"],
+            src = trace_ops.curb_fit_source(getattr(x, "source", {}), r, asdict(res["params"]), res["frame"],
                                             res["axis"])  # fmt: skip
             new = self._line_item(r["vertices"] + off, x.closed, src, as_kind=x.kind)
             if x.kind == "curve" and new.kind == "curve":
@@ -708,8 +708,8 @@ class TraceController(QObject):
                 a.editing, a.active = new, None
             stats.append(r)
         n_b = sum(len(r["bridged"]) for r in stats)
-        a.changed(f"{len(stats)} line{'s' * (len(stats) != 1)} smoothed onto the kerb top: "
-                   f"{sum(r['anchors'] for r in stats)} kerb tops measured, the line within "
+        a.changed(f"{len(stats)} line{'s' * (len(stats) != 1)} smoothed onto the curb top: "
+                   f"{sum(r['anchors'] for r in stats)} curb tops measured, the line within "
                    f"{max(r['off_anchors_rms'] for r in stats) * 100:.1f} cm (rms) of them, moved up to "
                    f"{max(r['largest_move'] for r in stats) * 100:.0f} cm; {n_b} stretch{'es' * (n_b != 1)} carried "
                    f"across ({sum(b for r in stats for _, b in r['bridged']):.1f} m)"

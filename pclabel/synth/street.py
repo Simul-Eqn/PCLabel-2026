@@ -1,19 +1,19 @@
 """Synthetic street scans with per-point ground truth (ARCHITECTURE.md "testing").
 
 One static TLS setup is simulated by casting rays on an azimuth x elevation grid (constant angular step, column
-by column like a real scanner) against an analytic street. Occlusion, back-facing kerb faces, no-point strips
-behind kerbs, the blind cone under the tripod and density falling with range all follow from the geometry.
+by column like a real scanner) against an analytic street. Occlusion, back-facing curb faces, no-point strips
+behind curbs, the blind cone under the tripod and density falling with range all follow from the geometry.
 
 Layout (metres, z up). The road runs along x and is centred on y = 0. Across y, from the centre outwards:
-road (|y| <= W), kerb unit (W..C), pavement (C..Pv), grass verge (Pv..Y). Both sides are alike. Additional parts:
-- road: crossfall (crowned or one plane) and grade; a dashed centre line and a double yellow line near each kerb
-  (3 mm thick, class road + flag ``marking``); drain pits below the road at the kerb toe at regular intervals;
-- kerb: a step of ``curb_step`` with a lowered section (a crossing) where it drops to ``lowered_step``, with ramps
-  along the kerb and a pavement ramp behind it;
+road (|y| <= W), curb unit (W..C), pavement (C..Pv), grass verge (Pv..Y). Both sides are alike. Additional parts:
+- road: crossfall (crowned or one plane) and grade; a dashed centre line and a double yellow line near each curb
+  (3 mm thick, class road + flag ``marking``); drain pits below the road at the curb toe at regular intervals;
+- curb: a step of ``curb_step`` with a lowered section (a crossing) where it drops to ``lowered_step``, with ramps
+  along the curb and a pavement ramp behind it;
 - grass: value-noise roughness; a tree (trunk cylinder, porous ellipsoid canopy) on the north verge;
 - a lamp post (pole, arm, head) on the south pavement;
-- the scanner stands on the south pavement, so the south kerb face looks away from it (no points) and the road
-  just north of the south toe is shadowed by the kerb lip (a no-point strip).
+- the scanner stands on the south pavement, so the south curb face looks away from it (no points) and the road
+  just north of the south toe is shadowed by the curb lip (a no-point strip).
 
 Ground-truth classes are looked up by name in config/taxonomy.yaml; no class id is hard-coded here.
 """
@@ -32,7 +32,7 @@ from pclabel.taxonomy import Taxonomy, load_taxonomy
 M_NONE, M_ROAD, M_MARK_W, M_MARK_Y, M_CURB, M_CURB_LOW, M_PAVEMENT, M_DRAIN, M_GRASS, M_TRUNK, M_CANOPY, M_LAMP = range(12)
 
 # material -> (material name, the labelling standard's class for its points or "" for none, base rgb, reflectance).
-# The material is the physical truth (a kerb unit, a drain floor); the class is what the standard labels: the curb is
+# The material is the physical truth (a curb unit, a drain floor); the class is what the standard labels: the curb is
 # a line, not points, and the strip with its drains and tree canopies are not labelled (docs/LABELLING_STANDARD.md).
 MATERIALS = {
     M_ROAD: ("road", "road", (68, 68, 70), 0.20),
@@ -63,23 +63,23 @@ class StreetParams:
     # road
     length: float = 60.0
     road_half_width: float = 3.7
-    crown: bool = True  # True: both halves fall towards the kerbs; False: one plane rising towards +y
+    crown: bool = True  # True: both halves fall towards the curbs; False: one plane rising towards +y
     crossfall: float = 0.025
     grade: float = 0.01
-    # kerb
+    # curb
     curb_width: float = 0.15
     curb_step: float = 0.15
     lowered_x: tuple[float, float] = (12.0, 16.0)
     lowered_step: float = 0.02
-    lowered_ramp: float = 1.0  # along the kerb
+    lowered_ramp: float = 1.0  # along the curb
     # pavement and verge
     pavement_width: float = 2.5
-    pavement_slope: float = 0.02  # rises away from the kerb
-    pavement_ramp: float = 1.2  # across the pavement, behind a lowered kerb
+    pavement_slope: float = 0.02  # rises away from the curb
+    pavement_ramp: float = 1.2  # across the pavement, behind a lowered curb
     verge_width: float = 5.0
     grass_drop: float = 0.03
     grass_roughness: float = 0.012
-    # drains (pits below the road at the kerb toe)
+    # drains (pits below the road at the curb toe)
     drain_spacing: float = 10.0
     drain_first: float = -25.0
     drain_length: float = 0.9
@@ -228,7 +228,7 @@ def _zbase(x, y, P):
 
 
 @nb.njit(cache=True)
-def _kerb_step(x, P):
+def _curb_step(x, P):
     a = P[I_LOW_A]
     b = P[I_LOW_B]
     d = 0.0
@@ -261,7 +261,7 @@ def _ground(x, y, P):
         if (0.35 <= e <= 0.45) or (0.60 <= e <= 0.70):
             return zb + P[I_MARK_H], M_MARK_Y, 0
         return zb, M_ROAD, 0
-    s = _kerb_step(x, P)
+    s = _curb_step(x, P)
     if ay <= P[I_C]:
         return zb + s, (M_CURB if s >= full - 1e-9 else M_CURB_LOW), 0
     if ay <= P[I_PV]:

@@ -9,7 +9,7 @@ For lines of one label (e.g. every ``curb_top`` in a "curb trace" directory):
    carries on both lines (it turns no more than ``max_angle`` from either line's direction at its end), and again
    until no pair is left. Each join's length is recorded (a gap bridged: it was not traced).
 3. **Closing:** a line whose two ends come within ``join_gap`` of each other (and is longer than four times that) is
-   closed (a kerb around an island).
+   closed (a curb around an island).
 """
 
 from __future__ import annotations

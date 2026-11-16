@@ -36,7 +36,7 @@ def test_normals_of_a_plane_are_its_normal(scene):
     assert np.percentile(np.abs(v.normal[inner] @ n), 1) > 0.999 and np.percentile(v.curvature[inner], 99) < 1e-3
 
 
-def test_road_grows_and_stops_at_the_kerb_faces(scene):
+def test_road_grows_and_stops_at_the_curb_faces(scene):
     mat = scene["mat"]
     seed = pick(scene, "road", (-2.0, -1.0, 0.0))
     r = normal_grow(scene["xyz"], scene["tiles"], seed, P)

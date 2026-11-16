@@ -122,7 +122,7 @@ def frame_from_points(points_world: np.ndarray, name: str, params: PlaneFitParam
     tilt, rms = report["tilt_deg"], report["rms_m"]
     if tilt > GROUND_TILT_DEG or rms > GROUND_RMS_M:
         report["warning"] = (f"does not look like ground (tilt {tilt:.1f}°, RMS {rms * 100:.1f} cm): the selection "
-                             "may include vegetation, kerbs or objects")  # fmt: skip
+                             "may include vegetation, curbs or objects")  # fmt: skip
     return HeightFrame(name, tuple(map(float, n)), tuple(map(float, f["centroid"])), tuple(map(float, a)), report)
 
 

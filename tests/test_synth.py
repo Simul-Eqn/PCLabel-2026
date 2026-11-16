@@ -51,8 +51,8 @@ def test_only_drains_below_the_road(street, street_params, taxonomy):
     assert np.all(is_material(street.material[below], "drain"))
 
 
-def test_no_point_strip_behind_near_kerb(street, street_params, taxonomy):
-    """The scanner stands on the south pavement: the kerb lip shadows a strip of road north of the south toe."""
+def test_no_point_strip_behind_near_curb(street, street_params, taxonomy):
+    """The scanner stands on the south pavement: the curb lip shadows a strip of road north of the south toe."""
     p = street_params
     W = p.road_half_width
     x, y = street.xyz[:, 0], street.xyz[:, 1]
@@ -65,7 +65,7 @@ def test_no_point_strip_behind_near_kerb(street, street_params, taxonomy):
     assert north.sum() > 100
 
 
-def test_back_facing_kerb_face_has_no_points(street, street_params, taxonomy):
+def test_back_facing_curb_face_has_no_points(street, street_params, taxonomy):
     p = street_params
     x, y, z = street.xyz.T.astype(np.float64)
     toe = road_plane(p, x, np.full_like(y, p.road_half_width))

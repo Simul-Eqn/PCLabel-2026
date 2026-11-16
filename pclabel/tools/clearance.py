@@ -1,11 +1,11 @@
 """Clearance along a road (the user's request of 2026-11-05, after LiDAR360MLS's road clearance analysis): what enters
 the space vehicles need above the road, e.g. branches hanging over the carriageway.
 
-The envelope follows a reference line drawn on the road (a traced kerb toe, a lane line, a curve along the road):
+The envelope follows a reference line drawn on the road (a traced curb toe, a lane line, a curve along the road):
 - across the height axis, up to ``half_width`` from the line (on ``side``: both, or the left or right of the line's
   direction);
 - along the height axis, from ``bottom`` to ``height`` above the line's own height at the nearest point (below
-  ``bottom`` are the road, kerbs and the feet of things);
+  ``bottom`` are the road, curbs and the feet of things);
 - between the line's ends.
 
 Points inside it are hits. Hits closer than ``cluster`` (in the plane across the height axis) are one place; a place

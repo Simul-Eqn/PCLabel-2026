@@ -56,3 +56,15 @@ def test_a_tree_and_a_pole_are_saved_as_the_tree_tool_saves_them():
     assert [h.id for h, _ in todo] == [d.id]
     tree_ops.add_marker(m, *todo[0], tax)
     assert d.children[0].kind == "marker" and np.allclose(d.children[0].position, [11.0, 2.0, 0.0])
+
+
+def test_an_older_lines_kerb_fit_records_move_to_curb_fit():
+    """Lines smoothed onto the curb top before 2026-11-16 keep their fits under ``kerb_fit``; the next fit moves them
+    to ``curb_fit`` and adds its own."""
+    keys = ("side", "sections", "anchors", "low_steps", "outliers", "no_edge", "top_unseen", "height_median",
+            "off_anchors_rms", "off_anchors_max", "largest_move", "mean_move", "bridged", "kept", "seconds")  # fmt: skip
+    result = {k: 0 for k in keys}
+    old = {"tool": "curb_trace", "kerb_fit": [{"seconds": 1.0}], "edited": True, "curve_fit": {"nodes": 3}}
+    src = trace_ops.curb_fit_source(old, result, {"step": 0.3}, "z", (0, 0, 1))
+    assert "kerb_fit" not in src and len(src["curb_fit"]) == 2 and src["curb_fit"][0] == {"seconds": 1.0}
+    assert src["assisted"] and "edited" not in src and "curve_fit" not in src and src["tool"] == "curb_trace"

@@ -181,9 +181,9 @@ read):
     nodes, tolerance}` (Annotations "to curves" / "to polylines"; a polyline from a curve also gets the curve's
     height axis as `axis`), and `edited: true` once the labeller changed a tool's line in curve edit mode;
     `smoothed: [{scale, max_shift, largest_shift, wiggle_deg: [before, after], points}]`, one per "smooth";
-    `kerb_fit: [{params (KerbFitParams), height_axis, side, sections, anchors, low_steps, outliers, no_edge,
+    `curb_fit` (before 2026-11-16 `kerb_fit`, moved to `curb_fit` by the next fit): `[{params (CurbFitParams), height_axis, side, sections, anchors, low_steps, outliers, no_edge,
     top_unseen, height_median, off_anchors_rms, off_anchors_max, largest_move, mean_move, bridged [[from m, m]],
-    kept [[from m, m]], seconds}]`, one per "smooth onto the kerb top" (which also sets `assisted: true`).
+    kept [[from m, m]], seconds}]`, one per "smooth onto the curb top" (which also sets `assisted: true`).
   - `marker` (a position: where a thing is): `position`, `source`. Placed from selected points (Ctrl+M):
     `{tool: "marker", across: "mean" | "circle", height: "mean" | "lowest", points, spread (m, rms across the
     height axis), height_range, height_axis, axis, selection (the selection operations)}`, and for a circle `trim,
@@ -441,7 +441,7 @@ Measured results are in RESULTS.md.
   - grass with roughness; tree trunk and canopy; lamp post; a lane marking (high intensity);
   - Gaussian range noise;
   - density falling with range from a scanner origin; **occlusion** (points on surfaces hidden from the origin
-    removed, giving no-point strips behind kerbs).
+    removed, giving no-point strips behind curbs).
   - Can write E57, so the import path is tested end to end.
 - **`material`** beside `cls` in the synthetic scan: the physical surface of each point (road, marking, curb,
   curb_lowered, pavement, drain, grass, tree_trunk, tree_canopy, lamp_post; `synth.is_material`). `cls` is what the

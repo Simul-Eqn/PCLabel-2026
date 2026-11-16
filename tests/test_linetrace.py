@@ -1,5 +1,5 @@
 """Marking tracing by intensity (tools/linetrace.py) on the synthetic street: a dashed centre line (3 m dashes, 6 m
-gaps, from x = -30) and a double yellow line 0.35-0.45 m and 0.60-0.70 m from each kerb (toe at |y| = 3.70)."""
+gaps, from x = -30) and a double yellow line 0.35-0.45 m and 0.60-0.70 m from each curb (toe at |y| = 3.70)."""
 
 import numpy as np
 import pytest

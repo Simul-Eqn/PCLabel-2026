@@ -25,8 +25,8 @@ ONLY = ("line", "marker")  # the item kinds a class can be kept to
 LINE_KINDS = ("segment", "curve", "polyline")  # items that are lines
 # the labels tools give what they make, unless the taxonomy file's ``tools`` section says otherwise ("" = no label)
 TOOL_LABELS = {
-    "curb_trace_lip": "curb",  # the curb tracer's line along the kerb's top edge: the standard's curb line
-    "curb_trace_toe": "",  # its line along the foot of the kerb: not in the standard, a helper line if saved
+    "curb_trace_lip": "curb",  # the curb tracer's line along the curb's top edge: the standard's curb line
+    "curb_trace_toe": "",  # its line along the foot of the curb: not in the standard, a helper line if saved
     "marking_trace": "road_line",
     "tree_band": "tree_trunk",  # the tree tool's band of a trunk (a pole's band takes the pole's class)
     "pole_kinds": "pole",  # the tree tool offers this class and its kinds besides trees

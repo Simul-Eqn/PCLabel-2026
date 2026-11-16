@@ -21,7 +21,7 @@ layers:
   # the curb: three edge lines
   TOP_OF_CURB:    {label: curb_top, note: "the curb's lip (top edge of the face)"}
   BOTTOM_OF_CURB: {label: curb_bottom, note: "the curb's toe; beside a gutter, its flow line"}
-  BACK_OF_CURB:   {label: curb_back, note: "the back of the kerb unit, on the pavement side"}
+  BACK_OF_CURB:   {label: curb_back, note: "the back of the curb unit, on the pavement side"}
   # the road and what is part of it
   PAVED_ROAD:     {label: road, note: "the edge of the road surface (along the gutter where there is one)"}
   UNPAVED_ROAD:   {label: road, note: "the edge of an unpaved road"}

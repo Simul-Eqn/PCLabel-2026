@@ -1,5 +1,5 @@
 """Magic select by intensity on the synthetic street (dashed centre line, double yellow lines) and on small patches
-(scan-line gaps, a fading line, painted kerbs)."""
+(scan-line gaps, a fading line, painted curbs)."""
 
 from dataclasses import replace
 
@@ -50,7 +50,7 @@ def test_not_contiguous_takes_the_other_markings_on_the_road(scene, taxonomy):
 def test_tolerance_is_a_factor(scene, taxonomy):
     tight, _ = selected(scene, replace(P, tolerance=1.05))  # the dash's own spread is about +-10 %
     assert tight[scene["dash"]].sum() < 0.5 * scene["dash"].sum()
-    wide, r = selected(scene, replace(P, tolerance=10.0))  # takes the road too, but not up the kerbs
+    wide, r = selected(scene, replace(P, tolerance=10.0))  # takes the road too, but not up the curbs
     road = is_material(scene["mat"], "road", "marking")
     assert (wide & road & ~scene["marking"]).sum() > 100_000
     assert not (wide & is_material(scene["mat"], "pavement")).any()
@@ -127,17 +127,17 @@ def test_follow_drift_along_a_fading_line():
     assert np.all((y >= 1.45 - p.pixel) & (y <= 1.6 + p.pixel))  # road points only in edge pixels
 
 
-def test_does_not_climb_onto_kerb_paint():
-    """A line along the kerb toe, and the kerb top (15 cm up) painted as bright: the height step keeps them apart."""
+def test_does_not_climb_onto_curb_paint():
+    """A line along the curb toe, and the curb top (15 cm up) painted as bright: the height step keeps them apart."""
     rng = np.random.default_rng(5)
     road = flat(rng, 0, 6, 0, 1.9, 3000, lambda q: np.full(len(q), 0.05))
     line = flat(rng, 0, 6, 1.9, 2.0, 3000, lambda q: np.full(len(q), 0.45))
-    kerb = flat(rng, 0, 6, 2.0, 2.3, 3000, lambda q: np.full(len(q), 0.45), z=0.15)
-    xyz, inten, tiles = patch([road, line, kerb])
+    curb = flat(rng, 0, 6, 2.0, 2.3, 3000, lambda q: np.full(len(q), 0.45), z=0.15)
+    xyz, inten, tiles = patch([road, line, curb])
     seed = np.array([3.0, 1.95, 0.0])
     r = magic_select(xyz, inten, tiles, seed, MagicSelectParams(radius=4.0))
     q = xyz[r.indices]
     assert np.all(q[:, 2] < 0.1) and len(q) > 0.95 * len(line[0])
     assert r.info["stopped_by"]["height step"] > 0
     climbed = magic_select(xyz, inten, tiles, seed, MagicSelectParams(radius=4.0, max_step=0.3))
-    assert (xyz[climbed.indices, 2] > 0.1).sum() > 0.9 * len(kerb[0])
+    assert (xyz[climbed.indices, 2] > 0.1).sum() > 0.9 * len(curb[0])

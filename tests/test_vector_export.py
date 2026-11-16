@@ -16,7 +16,7 @@ OFF = np.array([586417.0, 4141263.0, -1.0])
 
 def model():
     t = Annotations()
-    d = t.new_directory("kerbs")
+    d = t.new_directory("curbs")
     d.label = "curb_top"
     lip = t.add(Polyline(OFF + [[0, 0, 0.15], [1.25, 0.5, 0.151], [2.5, 0.75, 0.149]], source={"tool": "curb_trace",
                                                                                                  "assisted": True}))  # fmt: skip
@@ -68,6 +68,6 @@ def test_geojson_with_attributes(tmp_path):
     assert lp["properties"]["attributes"]["asset_id"] == "LP-0001" and lp["properties"]["uncertain"]
     assert lp["properties"]["label_path"] == ["pole", "lamp_post"] and not lp["properties"]["assisted"]
     lip = by["curb_top"]["properties"]
-    assert lip["assisted"] and lip["path"] == ["kerbs"] and lip["length_m"] == pytest.approx(1.3463 + 1.2748, abs=1e-3)
+    assert lip["assisted"] and lip["path"] == ["curbs"] and lip["length_m"] == pytest.approx(1.3463 + 1.2748, abs=1e-3)
     ring = by["cover"]["geometry"]["coordinates"]
     assert len(ring) == 5 and ring[0] == ring[-1] and by["cover"]["properties"]["closed"]

@@ -84,13 +84,13 @@ In the app on streets 1, GPU, unless named otherwise.
 | tool | case | result | time | date |
 |---|---|---|---|---|
 | grow, height and intensity | synthetic street, 20 cm cells | 98.5 % of road and 97.6 % of marking points; 0.05 % of the selection not road | | 2026-10-19 |
-| grow, height and intensity | synthetic street, intensity tests off | leaks over the lowered kerb: 436k pavement and 261k grass points | | 2026-10-19 |
-| grow, height and intensity | south kerb site, seed on the road | 6.98M points on 309 m², stops at both kerbs, lane lines included; stopped by height 3,355 cells, intensity step 504, gap 479, roughness 84, intensity vs road 21 | 0.56 s first click; 0.36 s re-grow | 2026-10-19 |
-| grow, geometric | road at the magic-select site | 7.39M points (1.05M voxels from 47M points), stops at the kerb face | 2.3 s; re-run 0.65 s | 2026-10-20 |
+| grow, height and intensity | synthetic street, intensity tests off | leaks over the lowered curb: 436k pavement and 261k grass points | | 2026-10-19 |
+| grow, height and intensity | south curb site, seed on the road | 6.98M points on 309 m², stops at both curbs, lane lines included; stopped by height 3,355 cells, intensity step 504, gap 479, roughness 84, intensity vs road 21 | 0.56 s first click; 0.36 s re-grow | 2026-10-19 |
+| grow, geometric | road at the magic-select site | 7.39M points (1.05M voxels from 47M points), stops at the curb face | 2.3 s; re-run 0.65 s | 2026-10-20 |
 | magic select | synthetic street (1M points), a centre dash | all of the dash, 99.4 % of the selection marking; `contiguous` off: every dash and the yellow lines, 88 % marking, nothing from pavement or grass | | 2026-10-19 |
 | magic select | near dash (22.85, −11.09) | 6,766 points on 0.22 m², accepted intensity 0.10–0.40 | 0.70 s incl. a picture of 176M ground points | 2026-10-19 |
 | magic select | far dash (32.41, −29.03), scan lines ~10 cm apart | 175 points, the whole dash | 0.40 s; re-runs 0.06–0.15 s | 2026-10-19 |
-| magic select | `contiguous` off from the far dash | 52,894 points on 16.9 m², incl. bright patches under trees beyond the kerb | 0.15 s | 2026-10-19 |
+| magic select | `contiguous` off from the far dash | 52,894 points on 16.9 m², incl. bright patches under trees beyond the curb | 0.15 s | 2026-10-19 |
 | 3D select | 1 m cylinder / 6 × 3 m box turned 30° | 107,891 / 645,293 points | 0.16 s / 0.05 s | 2026-10-20 |
 | extrude select | 10 m loop, 20 cm inset / 40 m loop | 31.7M / 212M points | 0.49 s / 2.8 s | 2026-10-20 |
 | clip to a volume | 4 m cylinder | 23.6M points drawn | ~28 ms GPU per frame | 2026-10-20 |
@@ -98,7 +98,7 @@ In the app on streets 1, GPU, unless named otherwise.
 | clean up | curve 11 as a loop, inset 5 cm, −0.10 to +0.05 m (27.3M points) | would add 739k and remove 15 specks | 3.3 s | 2026-10-20 |
 | pieces | `bti_pavement` (9.8M) / `bli_outermask` (34.5M) / `bottom_road_cleaned` (121.1M) | 2 pieces / 3,043 (2,961 small, 34,637 points) / 327 small (6,946 points) | 0.24 / 0.67 / 2.01 s | 2026-10-21 |
 | density | `bottom_road_cleaned` (121.1M) | the dense part (≥ 2,000/m²) holds 99.5 % of the points on 1,168 of 2,250 m²; 2,000/m² is reached about 43 m from the scanner on the bottom road | 1.09 s; 0.61 s per change | 2026-10-21 |
-| split | 6 m cylinder, 4.83M points | verge rough, road smooth; points to look at along the kerb edge and marking edges | 0.61 s; ~0.1 s per change | 2026-10-20 |
+| split | 6 m cylinder, 4.83M points | verge rough, road smooth; points to look at along the curb edge and marking edges | 0.61 s; ~0.1 s per change | 2026-10-20 |
 
 ## voxel tools
 
@@ -110,7 +110,7 @@ cylinder (5.78M points, 10 cm gap) 0.090–0.103 s, 36 pieces; split features of
 
 - Synthetic road with 1.00 % grade and 2.50 % crossfall recovered as 1.0009 % and 2.4994 %, RMS 0.6 mm; unchanged
   with 20 % of other classes mixed in (`tests/test_frames.py`).
-- streets 1, south kerb site, a 100 × 100 px rectangle (3,195 points), 2026-10-19: tilt 2.36°, RMS 1.0 mm, grade
+- streets 1, south curb site, a 100 × 100 px rectangle (3,195 points), 2026-10-19: tilt 2.36°, RMS 1.0 mm, grade
   3.16 % along azimuth 11.6°, crossfall 2.65 %.
 - streets 1 plane 15 (exported to `PCLabel_projects/streets 1 plane 15.json`), 2026-10-19: fitted on 1.89M of 38.7M
   points, RMS 13.5 mm, tilt 1.82°, grade 0.56 %, crossfall −3.12 %.
@@ -136,35 +136,35 @@ cylinder (5.78M points, 10 cm gap) 0.090–0.103 s, 36 pieces; split features of
 
 In the app unless named otherwise; lines compared are the user's, read only.
 
-- **Curb tracer, synthetic street** (2M points, `tests/`): the north kerb traced 16 m in 0.13 s in three pieces
-  broken at the two drains, toe within 3 cm, lip within 2 cm, height 0.149 m (true 0.15); the south kerb (facing
+- **Curb tracer, synthetic street** (2M points, `tests/`): the north curb traced 16 m in 0.13 s in three pieces
+  broken at the two drains, toe within 3 cm, lip within 2 cm, height 0.149 m (true 0.15); the south curb (facing
   away): toe the last road point seen, lip within 3 cm, height 0.147 m.
 - **Curb tracer, streets 1** (2026-11-05): 20 starts 0.2–0.5 m from the user's curb lines: 9 reached the 30 m test
-  limit, the others stopped at lowered kerbs (3 found no step: at most 4 cm of rise); lip within 1–3 cm of the
-  user's lines; kerb heights 0.12–0.19 m.
-- **Curb tracer, ExchangeGreen 1** (2026-11-05): with the 0.10 m curb height no kerb was found (the kerbs step
-  8–10 cm, O-0016); with 0.06 m every start where the kerb was scanned traced to the 10 m test limit. Replaying the
+  limit, the others stopped at lowered curbs (3 found no step: at most 4 cm of rise); lip within 1–3 cm of the
+  user's lines; curb heights 0.12–0.19 m.
+- **Curb tracer, ExchangeGreen 1** (2026-11-05): with the 0.10 m curb height no curb was found (the curbs step
+  8–10 cm, O-0016); with 0.06 m every start where the curb was scanned traced to the 10 m test limit. Replaying the
   user's 21 logged runs from `trace_log.jsonl`: 334 steps (90 m) as they ran, 404 (109 m) after the tight-curve
   changes, 544 (148 m) following the top edge only.
 - **Curb tracer, `mobile-colorized-v2-1`** (595M points, 2026-11-05), started 0.3 m beside 30 of ROCK's
   BOTTOM_OF_CURB lines: 182 m in 1.6 s; toe a median 6.5 cm (xy) and 3 mm (height) from ROCK's bottom line, lip
-  5.0 cm and 4 mm from its top line; kerb 0.142 m (p10–p90 0.131–0.152); about 10 % of steps more than 4 m from any
+  5.0 cm and 4 mm from its top line; curb 0.142 m (p10–p90 0.131–0.152); about 10 % of steps more than 4 m from any
   ROCK line (edges ROCK did not draw).
 - **Marking tracer, synthetic street**: dash ends within 0.1 m; a double line's two lines (0.10 m wide, 0.15 m
   apart) traced separately at y 3.04 and 3.29 (true 3.05, 3.30).
 - **Join, ExchangeGreen 1** "curb trace 01" and its wraparound (2026-11-05): 22 lip pieces (91 m) into 10 lines, 22
   toe pieces into 9, bridging 10 gaps of 0.1–0.7 m (mostly 0.6 m drains).
-- **Curves for traced lines, ExchangeGreen 1** (2026-11-06): the joined kerb lines are 3–35 cm off any one plane (a
-  25.5 m kerb top rises 1.18 m); within 1 cm a curve takes 36–72 nodes for 19–27 m (64–89 traced vertices); within
+- **Curves for traced lines, ExchangeGreen 1** (2026-11-06): the joined curb lines are 3–35 cm off any one plane (a
+  25.5 m curb top rises 1.18 m); within 1 cm a curve takes 36–72 nodes for 19–27 m (64–89 traced vertices); within
   2 cm, 21–45.
 - **Smooth, ExchangeGreen 1** (22.8 m `curb_bottom`, 19.4 m `curb_top`, 2026-11-06): 1 m / 5 cm took the turning
   from 683° to 512° and 435° to 384°; 1 m / 10 cm to 353° and 324°; 0.5 m / 3 cm only to 630° and 397°; ~20 ms a
   line.
-- **Smooth onto the kerb top, ExchangeGreen 1** (2026-11-06): `tli_right` (103 m, hand-drawn) 263 kerb tops
+- **Smooth onto the curb top, ExchangeGreen 1** (2026-11-06): `tli_right` (103 m, hand-drawn) 263 curb tops
   measured, the line within 1.2 cm rms of them, moved 2.6 cm on average (5.5 at most), 10 stretches carried across
   (longest 6.3 m); `curb_top 1` (46.6 m, traced) 134 measured, 1.4 cm, moved at most 7.5 cm, turning 538° to 260°;
   `bi_curb/curb_top 1` (200 m) 371 measured, 1.0 cm, 26 stretches carried across, at most 42 cm moved where the
-  drawn line spiked 30 cm up; 0.5–2.5 s a line. On `lip 1`, 112 of 301 sections saw only the kerb's face.
+  drawn line spiked 30 cm up; 0.5–2.5 s a line. On `lip 1`, 112 of 301 sections saw only the curb's face.
 
 ## trees and markers
 

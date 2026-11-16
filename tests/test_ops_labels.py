@@ -74,13 +74,13 @@ def test_tool_labels_come_from_the_taxonomy(tmp_path):
             assert lab == "" or tax.by_name(lab) is not None, (key, lab)
     f = tmp_path / "t.yaml"
     f.write_text("schema: pclabel.taxonomy/2\nclasses:\n  - {id: 0, name: unassessed, color: '#000000'}\n"
-                 "tools: {curb_trace_lip: kerb_lip, nonsense: x}\n", encoding="utf-8")  # fmt: skip
+                 "tools: {curb_trace_lip: curb_lip, nonsense: x}\n", encoding="utf-8")  # fmt: skip
     with pytest.raises(ValueError, match="unknown tools"):
         load_taxonomy(f)
     f.write_text("schema: pclabel.taxonomy/2\nclasses:\n  - {id: 0, name: unassessed, color: '#000000'}\n"
-                 "tools: {curb_trace_lip: kerb_lip}\n", encoding="utf-8")  # fmt: skip
+                 "tools: {curb_trace_lip: curb_lip}\n", encoding="utf-8")  # fmt: skip
     t = load_taxonomy(f)
-    assert t.tool_label("curb_trace_lip") == "kerb_lip" and t.tool_label("marking_trace") == "road_line"
+    assert t.tool_label("curb_trace_lip") == "curb_lip" and t.tool_label("marking_trace") == "road_line"
 
 
 def test_one_points_labels_follow_the_same_rules():

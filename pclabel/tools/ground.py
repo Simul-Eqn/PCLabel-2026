@@ -5,14 +5,14 @@
    tile, matters: a tile near the scanner holds millions of points, and sampling it as a whole would leave its
    sparser road part with too few points per cell (holes, and straight cut lines along tile edges). Per cell,
    the *ground layer* is the points within ``surface_band`` of the cell's 5th percentile height, so canopy, cars
-   and kerb tops above the ground do not count. For the ground layer the cell
+   and curb tops above the ground do not count. For the ground layer the cell
    keeps a median height, a median intensity and a roughness (standard deviation of height).
 2. Grow (8 directions, from the seed cell). Empty cells (no points: gaps between far scan lines, occlusion shadows
-   of poles and kerbs) are stepped over, up to ``max_gap``. The next cell with data in a direction joins when all of
+   of poles and curbs) are stepped over, up to ``max_gap``. The next cell with data in a direction joins when all of
    these hold:
    - its height differs from the current cell's by at most ``max_step``, plus ``max_slope`` times the extra
-     distance when it lies across a gap: kerbs stop the grow, also behind a no-point strip;
-   - its roughness is at most ``max_roughness``: kerb faces, vegetation and objects stop it;
+     distance when it lies across a gap: curbs stop the grow, also behind a no-point strip;
+   - its roughness is at most ``max_roughness``: curb faces, vegetation and objects stop it;
    - its intensity differs from the current cell's by at most ``intensity_step``, and from the *local road
      intensity* by at most ``intensity_range``. The local road intensity is a running average along the grow
      (memory about ``intensity_memory``), so intensity may drift slowly with range and incidence, but a walkway

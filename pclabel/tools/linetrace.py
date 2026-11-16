@@ -5,7 +5,7 @@ The labeller clicks a point on the paint, then a second point along it for the d
 is taken from the start (``threshold`` None): halfway between the paint's median intensity (points within half a
 line width of the click) and the road's (points ``road_from``..``road_to`` to either side). Then the tracer steps
 along (``step``): each step takes the points ``step`` long and ``search`` to either side of the line's centre, within
-``band`` of the road's height (cars and kerbs are left out), and keeps those at or above the threshold. Where there
+``band`` of the road's height (cars and curbs are left out), and keeps those at or above the threshold. Where there
 are at least ``min_points`` of them and they are no wider than ``2 * line_width``, their median across is the line's
 centre there; the direction follows the centres.
 
@@ -14,7 +14,7 @@ centre there; the direction follows the centres.
 - **Dashed** lines: each dash is its own piece, from where its paint starts to where it ends (measured along the
   line in the first and last step); gaps up to ``dash_gap`` are crossed without drawing. Gaps up to ``dash_join``
   are inside a dash (sparse or worn paint) and bridged, as a solid line's are.
-- The road's intensity for the threshold is the darker of the two sides (the other side may be a kerb or another
+- The road's intensity for the threshold is the darker of the two sides (the other side may be a curb or another
   line).
 
 Stops where the paint ends for longer, where it turns more than ``max_turn`` in a step, or after ``max_length``.

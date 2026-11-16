@@ -535,7 +535,7 @@ class GrowDock(SeedToolDock):
     TITLE, OBJECT = "Grow select", "grow"
     HINT = ("With grow select (G), click a surface: it grows over what is connected to it. Height and intensity: "
             "ground smooth in height and similar in intensity. Geometric: surfaces whose normals turn slowly "
-            "(walls, kerb faces, poles too). Shift+click adds, Ctrl+click subtracts; a changed threshold or mode "
+            "(walls, curb faces, poles too). Shift+click adds, Ctrl+click subtracts; a changed threshold or mode "
             "re-runs the last click.")  # fmt: skip
     NORMAL_FIELDS = (
         ("smoothness", "smoothness", 1, 0.1, 90, 0.5, 1, "°",
@@ -552,7 +552,7 @@ class GrowDock(SeedToolDock):
                      ("#4070ff", "intensity vs road"), ("#30e030", "gap too wide"))  # fmt: skip
     FIELDS = (
         ("max_step", "height step", 100, 0.1, 50, 0.5, 1, " cm",
-         "largest height change between neighbouring cells: kerbs are bigger, road roughness smaller"),
+         "largest height change between neighbouring cells: curbs are bigger, road roughness smaller"),
         ("intensity_step", "intensity step", 1, 0.0, 1.0, 0.005, 3, "",
          "largest intensity change between neighbouring cells (intensity 0..1, as in Point info)"),
         ("intensity_range", "intensity vs road", 1, 0.0, 1.0, 0.01, 3, "",
@@ -564,9 +564,9 @@ class GrowDock(SeedToolDock):
         ("max_gap", "gap", 100, 0, 500, 10, 0, " cm",
          "empty cells (no points: far scan lines, pole shadows) the grow may step over"),
         ("max_slope", "slope across gaps", 100, 0, 50, 1, 0, " %",
-         "extra height allowed per metre across a gap (road grade and crossfall); kerbs are steeper"),
+         "extra height allowed per metre across a gap (road grade and crossfall); curbs are steeper"),
         ("max_roughness", "roughness", 100, 0.1, 50, 0.5, 1, " cm",
-         "cells rougher than this (kerb faces, vegetation, objects) are not ground"),
+         "cells rougher than this (curb faces, vegetation, objects) are not ground"),
         ("surface_tol", "surface tolerance", 100, 0.5, 50, 0.5, 1, " cm",
          "points this close to their cell's surface are selected; drains below and objects above are not"),
         ("cell", "cell size", 100, 2, 100, 1, 0, " cm", "the grid the grow runs on"),
@@ -582,7 +582,7 @@ class GrowDock(SeedToolDock):
         self.mode = QComboBox()
         self.mode.addItem("height and intensity", "height")
         self.mode.addItem("geometric: surface normals", "normals")
-        self.mode.setToolTip("height and intensity: ground (cells, kerbs and walkways stop it); geometric: any "
+        self.mode.setToolTip("height and intensity: ground (cells, curbs and walkways stop it); geometric: any "
                              "surface, by its normals (PCL's region growing)")  # fmt: skip
         self.form.insertRow(1, "mode", self.mode)
         self.normal_spins = {}
@@ -645,7 +645,7 @@ class MagicDock(SeedToolDock):
          "empty strips up to this wide are bridged: far from the scanner the points lie on scan lines several cm "
          "apart. Lower it if two markings close together merge"),
         ("max_step", "height step", 100, 0.1, 50, 0.5, 1, " cm",
-         "largest height change between neighbouring pixels: keeps the fill off kerbs"),
+         "largest height change between neighbouring pixels: keeps the fill off curbs"),
         ("pixel", "pixel size", 100, 0.5, 10, 0.5, 1, " cm",
          "the intensity picture's resolution: selection edges are this precise; smaller needs denser points"),
         ("surface_tol", "surface tolerance", 100, 0.5, 50, 0.5, 1, " cm",
@@ -654,7 +654,7 @@ class MagicDock(SeedToolDock):
     )  # fmt: skip
     CHECKS = (("contiguous", "contiguous",
                "off: every pixel of similar intensity on the surface clicked (reachable without a height step, e.g. "
-               "the road between its kerbs), connected or not: all the dashes of a line, and anything as bright"),)  # fmt: skip
+               "the road between its curbs), connected or not: all the dashes of a line, and anything as bright"),)  # fmt: skip
 
     def __init__(self, parent=None):
         from pclabel.tools.magic import MagicSelectParams

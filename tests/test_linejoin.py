@@ -15,7 +15,7 @@ def test_pieces_and_a_retry_become_one_line():
     a = line(0, 6)  # the first try
     b = line(4.5, 12, y=0.02)[::-1]  # a retry over 4.5..6 (2 cm off), drawn the other way, on to 12
     c = line(12.6, 20)  # after a 0.6 m gap (a drain)
-    far = line(0, 5, y=3.0)  # another kerb across the road
+    far = line(0, 5, y=3.0)  # another curb across the road
     out = join_lines([a, b, c, far])
     assert len(out) == 2
     main = out[0]

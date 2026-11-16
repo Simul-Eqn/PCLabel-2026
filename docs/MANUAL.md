@@ -78,9 +78,9 @@ A selection always holds full-resolution points, not only the drawn ones. Every 
   the same seed.
   - *Height and intensity* (`tools/ground.py`, `GroundGrowParams`): a grid of cells over the ground layer, grown
     8-connected while the height step, roughness, intensity step and intensity against a running road average stay
-    within limits; gaps without points are crossed up to `max_gap` with a slope allowance, so a kerb behind a
+    within limits; gaps without points are crossed up to `max_gap` with a slope allowance, so a curb behind a
     no-point strip still stops it. Markings up to `marking_width` are bridged. "Show where it stopped" colours the
-    refused cells by the test that refused them. Fails: with the intensity tests off it leaks over a lowered kerb
+    refused cells by the test that refused them. Fails: with the intensity tests off it leaks over a lowered curb
     onto the pavement.
   - *Geometric* (`tools/normals.py`, `NormalGrowParams`): region growing on voxel normals after PCL; follows slowly
     bending surfaces of any orientation and stops at creases. The straight edges of a result are its reach.
@@ -95,7 +95,7 @@ A selection always holds full-resolution points, not only the drawn ones. Every 
   clips to it, Enter selects (Shift+Enter adds, Ctrl+Enter subtracts). These keys keep working after typing in one
   of its number fields.
   - **Extrude select** (shape "loop"): a closed curve swept along its plane's normal. `inset` pulls the outline in
-    evenly (`-` and `=` change it by 1 cm); negative pushes it out. Use inset, not scale, to stay clear of a kerb:
+    evenly (`-` and `=` change it by 1 cm); negative pushes it out. Use inset, not scale, to stay clear of a curb:
     scaling a long loop moves its ends far more than its sides.
 - **Tree or pole** (`Shift+U`, `tools/trees.py`, `TreeParams`): click the ground at the foot; a cylinder appears
   1.00 to 1.10 m above it, and 3D select takes over (a click on the trunk slides it sideways only). Enter selects;
@@ -161,20 +161,20 @@ directories and items: point sets, segments, curves, polylines and markers.
 
 Lines and markers these tools draw are marked `assisted` with their parameters. Settings are in the Trace panel.
 
-- **Curb tracer** (`Ctrl+T`, `tools/curbtrace.py`, `CurbTraceParams`): click the road beside a kerb, then a point
+- **Curb tracer** (`Ctrl+T`, `tools/curbtrace.py`, `CurbTraceParams`): click the road beside a curb, then a point
   further along. Cross-sections every `step` find the toe and the lip, both measured; the side is found
-  automatically and a start on the kerb top is moved onto the road. Space stops, Backspace takes back a step, two
+  automatically and a start on the curb top is moved onto the road. Space stops, Backspace takes back a step, two
   more clicks trace on, Enter saves a directory `curb trace NN` of `lip k` lines labelled `curb` and, if "toe" is
-  ticked, unlabelled `toe k` helper lines (the taxonomy's `tools` section sets these labels). "Follow the top edge only" needs no road beside the kerb and saves only the lip. Every run is logged in
-  the project's `trace_log.jsonl`. Gaps at drains are left, never drawn over. Fails: stops at lowered kerbs, rolled
-  faces wider than `max_face`, turns sharper than `max_turn`, and cars at the kerb.
+  ticked, unlabelled `toe k` helper lines (the taxonomy's `tools` section sets these labels). "Follow the top edge only" needs no road beside the curb and saves only the lip. Every run is logged in
+  the project's `trace_log.jsonl`. Gaps at drains are left, never drawn over. Fails: stops at lowered curbs, rolled
+  faces wider than `max_face`, turns sharper than `max_turn`, and cars at the curb.
 - **Marking tracer** (`Ctrl+Shift+T`, `tools/linetrace.py`, `LineTraceParams`): click the paint, then along it;
   solid or dashed, threshold halfway between the paint's and the road's intensity at the start.
 - **Join traced pieces** (`tools/linejoin.py`, `JoinParams`): the selected lines of one label into continuous
   lines; repeats dropped, gaps bridged and recorded.
-- **Smooth onto the kerb top** (`tools/kerbfit.py`, `KerbFitParams`): re-measures the kerb top along a line and
+- **Smooth onto the curb top** (`tools/curbfit.py`, `CurbFitParams`): re-measures the curb top along a line and
   smooths the line while keeping it within a limit of the measurements; lowered stretches are carried across at
-  the kerb top's height.
+  the curb top's height.
 - **Clearance along a line** (`tools/clearance.py`, `ClearanceParams`): the points (of vegetation and tree labels,
   or all) in the space above a line drawn on the road; each place becomes a marker at its lowest point. The scan
   shows only what it captured.

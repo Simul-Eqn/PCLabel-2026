@@ -3,7 +3,7 @@
     python bench/bench_voxels.py ["streets 1"] [--site X,Y] [--runs N]
 
 The site (world x, y; default the magic-select site of streets 1) is on the road; the grow seeds there, and pieces
-and split work on a 6 m cylinder of points around it (road, kerb, verge). Each case runs once to compile, then
+and split work on a 6 m cylinder of points around it (road, curb, verge). Each case runs once to compile, then
 ``--runs`` times; the median is printed. Nothing is written to the project.
 """
 

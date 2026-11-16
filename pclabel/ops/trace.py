@@ -147,15 +147,16 @@ def add_clearance(model, res: dict, offset):
     return d
 
 
-def kerb_fit_source(source: dict, result: dict, params_record: dict, frame: str, axis) -> dict:
-    """A line's source after "smooth onto the kerb top" (``tools.kerbfit.fit``'s ``result``): the fit appended to
-    ``kerb_fit``, marked assisted, its ``curve_fit`` and any ``edited`` mark dropped (later hand edits mark it again)."""
+def curb_fit_source(source: dict, result: dict, params_record: dict, frame: str, axis) -> dict:
+    """A line's source after "smooth onto the curb top" (``tools.curbfit.fit``'s ``result``): the fit appended to
+    ``curb_fit`` (and the fits an older line kept under ``kerb_fit`` moved there), marked assisted, its ``curve_fit`` and any ``edited`` mark dropped (later hand edits mark it again)."""
     rec = {k: result[k] for k in ("side", "sections", "anchors", "low_steps", "outliers", "no_edge", "top_unseen",
                                   "height_median", "off_anchors_rms", "off_anchors_max", "largest_move",
                                   "mean_move", "bridged", "kept", "seconds")}  # fmt: skip
     rec.update(params=params_record, height_axis=frame)
     src = {k: v for k, v in (source or {}).items() if k not in ("curve_fit", "edited")}
-    src["kerb_fit"] = list(src.get("kerb_fit", [])) + [rec]
+    old = src.pop("kerb_fit", [])  # the key before 2026-11-16
+    src["curb_fit"] = list(old) + list(src.get("curb_fit", [])) + [rec]
     src["assisted"] = True
     src.setdefault("axis", [float(c) for c in axis])
     src.setdefault("height_axis", frame)

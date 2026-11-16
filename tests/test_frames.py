@@ -35,7 +35,7 @@ def test_recovers_crossfall_and_grade(tilted_street, taxonomy):
 
 
 def test_robust_to_outliers(tilted_street, taxonomy):
-    """Kerb tops, a tree and drains in the selection must not tilt the plane (MAD trimming)."""
+    """Curb tops, a tree and drains in the selection must not tilt the plane (MAD trimming)."""
     scan, p = tilted_street
     sel = road_patch(scan, taxonomy)
     x, y = scan.xyz[:, 0], scan.xyz[:, 1]

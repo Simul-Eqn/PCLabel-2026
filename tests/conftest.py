@@ -72,7 +72,7 @@ def dense_street(taxonomy):
 
     from pclabel.synth import store_order
 
-    s = make_street(StreetParams(n_target=2_000_000), taxonomy)  # kerb toes at |y| = 3.70, 0.15 m; drains at x = +-5
+    s = make_street(StreetParams(n_target=2_000_000), taxonomy)  # curb toes at |y| = 3.70, 0.15 m; drains at x = +-5
     xyz, tiles, inten = store_order(s.xyz, 40_000, s.intensity)
     w = xyz.astype(np.float64) + s.offset
 
