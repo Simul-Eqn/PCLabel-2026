@@ -1,38 +1,36 @@
 # architecture
 
-How PCLabel is built. Planning decisions are marked **(planning)**; the M0 spike and M1 confirm or replace them, and
-the decision log at the end records what was chosen. Formats carry a `schema` string; bump it on any incompatible
-change.
+How PCLabel is built: the data path, the on-disk and export formats, and the decisions that shape them. What the
+tools do is in [MANUAL.md](MANUAL.md); measured numbers are in [RESULTS.md](RESULTS.md). Formats carry a `schema`
+string; bump it on any incompatible change and keep reading the old one.
 
 ## overview
 
 ```
-source file (.e57/.las/.laz/.ply, read-only)
-   │  import (chunked, worker process/thread)
+source file (.e57, read-only)
+   │  import (chunked, worker thread)
    ▼
 project directory (outside the repo)
-   points/   columns in store order (spatially tiled, randomised within tiles)
-   tiles     tile table: bounds, start, count
-   labels/   labels.u8, flags.u8, instance.u32 (memmapped, same order)
-   journal/  ops.jsonl + per-op data
-   frames, surfaces, regions, observations, derived feature caches
+   points/       columns in store order (spatially tiled, randomised within tiles)
+   tiles.npy     tile table: bounds, start, count
+   frames.json   fitted planes (height axes)
+   annotations.json + annotations/*.npy   the labels: directories, lines, markers, point sets
    │
-   ├── render/  LOD streaming of tile prefixes → GPU buffers → shaders (colour modes, wrap, EDL)
-   ├── tools/   selection kernels (numba) on full-resolution columns → label ops → journal
-   └── analysis/ frames, surfaces, features, stats, queries, lint
+   ├── render/   LOD streaming of tile prefixes → GPU buffers → shaders (colour modes, wrap, EDL)
+   ├── tools/    selection and assisted tools (numba) on full-resolution columns → point sets, lines, markers
+   └── analysis/ height frames, curve geometry
    ▼
-exports: labels in source order (.npy + sidecar), LAS/PLY with labels, observations, reports
+exports: labels by item (JSON), label maps (PNG + JSON), vectors (DXF, GeoJSON), planes (JSON)
 ```
 
 ## import
 
-As built in M1 (`pclabel/store/importer.py`; `python -m pclabel import <file>` or File > Import in the app):
+`pclabel/store/importer.py`; `python -m pclabel import <file>` or File > Import in the app. E57 only.
 
 1. **Read in chunks** of 4M records (`ImportParams.chunk_size`), so peak RAM is bounded whatever the file size.
    - E57: libe57's CompressedVectorNode reader with fixed-size buffers (`pclabel/io/e57.py`). The file is opened
      through `libe57.ImageFile(path, "r")` only, never `pye57.E57`, whose constructor has an error path that
      deletes its file. Scans with no records are skipped (libe57 cannot open a reader on them).
-   - LAS/LAZ: `laspy` chunk iterator. PLY: memmap for binary, streaming for ASCII. (Not yet; E57 only so far.)
 2. **Validity.** Drop records whose `cartesianInvalidState` / `sphericalInvalidState` is non-zero or whose
    coordinates are not finite. Convert spherical coordinates if no cartesian fields exist. Apply each scan's pose.
    Concatenate scans in file order.
@@ -55,7 +53,8 @@ As built in M1 (`pclabel/store/importer.py`; `python -m pclabel import <file>` o
    then a uniform random subsample, which is what the LOD needs. Each column is gathered into store order in
    blocks of 16M points (numba, parallel).
 7. **Write** (layout below): the store columns, `source_index`, `raw_index` (only if records were dropped),
-   `tiles.npy`, zero-filled `labels.u8` and `flags.u8`, then `project.json`.
+   `tiles.npy`, zero-filled `labels.u8` and `flags.u8` (the `class` colour mode reads them; nothing writes them,
+   since labels live on annotations, D-007), then `project.json`.
 8. **Hash the source file** (sha256 in a background thread, plain read-only binary reads) and record its size and
    mtime. If either changed during the import, the import fails.
 9. **Progress and cancel** throughout (stages: read, tile, reorder, finish).
@@ -63,9 +62,6 @@ As built in M1 (`pclabel/store/importer.py`; `python -m pclabel import <file>` o
    - Everything is written into `<projects>/.importing-<name>-<id>/` and renamed to `<projects>/<name>/` only when
      complete. Cancel or failure deletes it.
    - An existing project is never overwritten.
-
-Measured in M1 (ROADMAP): streets 1 imports in 110 s with a peak working set of 22 GB (6.4 GB private), newroad 2
-in 1.6 s.
 
 Sizes for `streets 1.e57` (633.6M points):
 
@@ -76,8 +72,7 @@ Sizes for `streets 1.e57` (633.6M points):
 | intensity u16 | 1.3 GB |
 | source_index u32 | 2.5 GB |
 | labels u8 + flags u8 | 1.3 GB |
-| instance u32 (optional, lazy) | 2.5 GB |
-| **total** | **about 15–17 GB** (about 570 GB free) |
+| **total** | **about 15 GB** |
 
 ## source order
 
@@ -89,8 +84,8 @@ The **source order** is the order in which every export expresses per-point arra
 
 Export: `out = np.zeros(N_valid, uint8); out[source_index] = labels` (store order → source order).
 
-Round-trip test: synthetic E57 written with pye57, including invalid records → import → label by index → export →
-compare with the expected source indices.
+Exported point sets are written as source indices and mapped back to store indices on import. Tests check the
+mapping against the synthetic scan's ground truth.
 
 ## project directory
 
@@ -105,18 +100,11 @@ compare with the expected source indices.
                           when absent, the raw index equals the source index
   tiles.npy               structured array (below)
   labels/labels.u8  flags.u8   uint8 (n,), store order, zero-filled at import (0 = unassessed)
-  labels/instance.u32     created on first use
-  labels/snapshots/       periodic copies of labels+flags with the op id they correspond to (keep last N)
-  journal/ops.jsonl       one line per operation (below)
-  journal/data/<op>.npz   indices and previous values per operation
   frames.json             height frames, schema pclabel.frames/1 (below)
   annotations.json        segments, curves, polylines, markers and point sets in directories, schema pclabel.annotations/9 (below)
   annotations/<id>.npy    a point set's store indices (int64, sorted)
-  surfaces/<name>.npz     reference / relief surfaces (grid origin, cell, heights, mask, parameters)
-  regions.json            assessed regions (polygon, z range, per-class status) and patrol records
-  observations/observations.jsonl   observations/img/*.png
-  derived/                cached features (normals, roughness, ...) keyed by parameters; deletable
-  sessions.jsonl          session logs
+  trace_log.jsonl         one line per curb or marking tracer run (below)
+  auto/                   the automatic pipeline's output (plan 02); never in annotations.json
 ```
 
 Column files are raw little-endian arrays without headers; their dtype and shape are in `project.json`.
@@ -235,7 +223,7 @@ read):
   - Each label is `{label, kind ("class", "flag" or "text"), class_id (null if not a taxonomy class), flag_bit
     (null if not a taxonomy flag), path (the class's ancestors from the top, then itself; [label] for others),
     counts {segment, curve, polyline, marker, points}, points (distinct), uncertain_items, uncertain_points
-    (distinct points in uncertain point sets), items}`. A flag label (e.g. `marking`, R-006) is meant to overlap a
+    (distinct points in uncertain point sets), items}`. A flag label (e.g. `marking`) is meant to overlap a
     class's points.
   - `rollup`: every class in use or above one, in the taxonomy's order, `{label, class_id, parent, depth, labels
     (the classes in use at or below it), items, points (distinct)}`: e.g. `pole` with its lamp posts' and traffic
@@ -254,10 +242,15 @@ read):
 **`config/taxonomy.yaml`, schema `pclabel.taxonomy/2`** (2026-11-04: the classes form a tree; schema 1 had a flat
 `group` per class and `subset_of`, and still loads, its `subset_of` read as `parent`):
 - `{schema, version, classes: [...], flags: [...]}`. A class is `{id, name, parent?, only?, status, enabled, color,
-  key?, countable?, selectable?, def, rule?}`; listed in tree order (a parent before its children).
-- `parent`: the class it is a kind of (none: a top-level class: ground, vegetation, pole, structure, temporary,
-  noise, other). Ids never change when a class moves; the tree, not the id range, says what a class belongs to.
-- `only`: `line` (segments, curves, polylines only: `curb_top`, `curb_bottom`, `curb_back`) or `marker` (`cover`).
+  key?, countable?, selectable?, def}`; listed in tree order (a parent before its children). `status` is `core`,
+  `optional`, `proposed`, `import` or `retired` (the file's header says what each means). `key` is not read by the
+  app yet.
+- `parent`: the class it is a kind of (none: a top-level class: ground, vegetation, tree, pole, structure,
+  temporary, noise, other). Ids never change when a class moves; the tree, not the id range, says what a class belongs to.
+- `only`: `line` (segments, curves and polylines only: `curb` and its kinds) or `marker`, or both (`cover`).
+- `tools` (optional): the label each tool gives what it makes, e.g. `curb_trace_lip: curb`, `curb_trace_toe: ""`
+  (no label), `tree_band: tree_trunk`, `clearance: [vegetation, tree]`. `pclabel.taxonomy.TOOL_LABELS` lists every
+  key with its default; an unknown key is refused.
   Without it a class goes on point sets, lines and markers.
 - The loader refuses duplicate ids or names, a parent that is not a class, parents that go round in a circle, and an
   unknown `only`. `pclabel.taxonomy.Taxonomy` gives `parents`, `ancestors`, `path_of`, `children`, `descendants`,
@@ -265,7 +258,7 @@ read):
 
 ## rendering and LOD
 
-As built in M1 (`pclabel/render/`). `renderer.py` uses moderngl only and runs in tests on an offscreen context;
+`pclabel/render/`. `renderer.py` uses moderngl only and runs in tests on an offscreen context;
 `viewport.py` is the Qt widget around it.
 
 - **Context:** moderngl attached to the `QOpenGLWidget`'s context (OpenGL 4.3 core requested) in `initializeGL`.
@@ -291,9 +284,8 @@ As built in M1 (`pclabel/render/`). `renderer.py` uses moderngl only and runs in
     `memory_full` and stops asking for repaints.
 - **LOD selection per frame** (`render/lod.py`):
   - For each visible tile, project its box and choose `k = min(n, area_px / spacing_px²)`.
-  - Scale all `k` down to fit the global **point budget**. Default 30M from the M0 benchmark (50.7 fps worst
-    case at 2 px; fill rate dominates, so larger points need a smaller budget); 300k in software mode (about
-    15 fps on llvmpipe at 1920 × 1009).
+  - Scale all `k` down to fit the global **point budget**: 30M by default, 300k in software mode (RESULTS,
+    rendering).
   - Draw `k` points from the start of the tile's pages.
 - **Streaming:**
   - A worker thread packs pages from the memmaps (numba).
@@ -302,19 +294,21 @@ As built in M1 (`pclabel/render/`). `renderer.py` uses moderngl only and runs in
     first.
   - The view repaints until every wanted page is resident.
 - **Shaders** (`render/shaders.py`):
-  - colour modes RGB, intensity (gamma), height (z ramp), flat, class (256-entry colour/visibility texture),
-    wrap, wrap × intensity;
+  - colour modes RGB, intensity (gamma), height, flat, class (256-entry colour/visibility texture), wrap, wrap ×
+    intensity, labels (the annotation label code in the label buffer);
+  - heights along the active height frame, `h = dot(p − origin, normal)`, for the ramp, the wrap and the slice;
+  - the 3D select clip (box, cylinder, or a loop mask texture) and the clip to point sets;
   - clip box in world coordinates (points outside are culled in the vertex shader);
   - fixed or adaptive point size: adaptive projects the tile's drawn spacing `sqrt(area_xy / k)` to pixels,
     clamped between the fixed size and a maximum;
   - optional round points.
 
-  Heights for the height and wrap modes are world z for now; M2 adds the frame matrix and the surface texture.
 - **EDL** (eye-dome lighting): a full-screen pass over the offscreen depth texture.
   - It samples 8 neighbours at radius r: shade = exp(−300 · strength · mean(max(0, Δ log2 depth))).
   - In orthographic views the depth difference is scaled as a perspective view at the camera distance would see
     it.
-- **Label updates:** after an operation, re-upload only the label buffers of the affected pages (M3).
+- **Label updates:** an annotation change rewrites the label bytes of the resident pages of the tiles its point
+  sets touch.
 - **Picking:**
   1. Read back the depth near the cursor from the last frame (the nearest drawn pixel).
   2. Unproject it.
@@ -324,23 +318,7 @@ As built in M1 (`pclabel/render/`). `renderer.py` uses moderngl only and runs in
 
 ## selection engine
 
-- **Input:**
-  - a screen polygon (or brush strokes), rasterised once to a mask at viewport resolution;
-  - camera matrices;
-  - optionally a depth-buffer copy;
-  - the active filters.
-- **Candidate tiles:** tile bounding boxes projected to screen, intersected with the mask's bounding box.
-- **numba kernel per tile** (`parallel=True, nogil=True`) over *all* points of the tile, not only the drawn prefix:
-  1. transform to clip space;
-  2. look up the mask pixel;
-  3. optional depth test (point depth ≤ buffer depth + tolerance);
-  4. filters (class, locks, band on `h`/`hs`, clip box, query mask).
-
-  Output: global store indices (sorted uint32/uint64).
-- **Target:** at least 200M points/s tested on the workstation. Points that are not drawn but lie behind drawn
-  surfaces are handled by the depth test, within its tolerance.
-- **Queries** (SPEC §9) compile to the same per-tile kernels or vectorised numpy, limited to a region.
-- **As built (M2, part; `tools/selection.py: select_visible`):**
+- **Shapes** (`tools/selection.py: select_visible`), at least 200M points/s on the workstation:
   - The shape is rasterised at physical viewport resolution.
   - The depth buffer is read back from the last frame and min-filtered over 2 pixels (scipy), so gaps between
     drawn LOD points do not let hidden surfaces through.
@@ -355,7 +333,7 @@ As built in M1 (`pclabel/render/`). `renderer.py` uses moderngl only and runs in
     byte is then full, so the clip to point sets uses bit 0 of a third, GPU-only byte (`INSIDE_BIT`); the shader
     drops unmarked points while `u_set_on` is set.
   - A selection change rewrites the label buffers of the resident pages of affected tiles. Pages packed under an
-    older selection are corrected before upload. Labelling goes through the journal (M3).
+    older selection are corrected before upload.
 - **3D select** (`tools/volume.py`): tiles whose bounds meet the volume's bounding box are tested point by point
   (numba, parallel). The test: height along the axis within [bottom, top]; across it, inside the turned rectangle
   or the circle. The clip box and the slice are applied afterwards, as for shapes.
@@ -397,58 +375,31 @@ As built in M1 (`pclabel/render/`). `renderer.py` uses moderngl only and runs in
   - Magic select keeps its picture (1.5 × the reach) for later clicks. Grids lie on fixed lattices, so results do
     not depend on which picture is reused.
 
-## journal, undo, crash safety
+## undo and saving
 
-**Built so far (2026-10-19): session undo** (`ui/undo.py`).
-- Before the selection, the height frames or the annotation tree change, the window pushes a snapshot of that
-  state. Undo restores it and keeps the current state for redo.
-- Index arrays are never changed in place, so snapshots share them. Annotation snapshots copy segment and curve
-  geometry but share point-set indices.
-- The history is in memory only. Restored annotations and frames are saved to the project at once.
-- The label journal below is still to come (M3).
-
-- **One operation** is one `ops.jsonl` line, schema `pclabel.op/1`:
-  ```
-  {op_id, time, session, tool, params{...}, rules[...], selection{type, polygon|query|seed, camera, filters},
-   target{class|flags|instance}, n_points, standard_sha256, taxonomy_sha256, data: "data/<op>.npz",
-   parent_op (for undo/redo), committed: true}
-  ```
-- **`<op>.npz`:** sorted store indices (delta-encoded, compressed), previous labels, previous flags (and
-  instances), and new values if they are not constant.
-- **Write order:**
-  1. write the npz;
-  2. write the journal line with `committed: false`;
-  3. apply to the memmaps and flush;
-  4. append a commit marker line.
-
-  On open, an uncommitted last operation is re-applied from its npz (idempotent) or rolled back.
-- **Undo** writes a new operation that restores the previous values; history is never deleted. Redo re-applies.
-- **Snapshots** of labels and flags every N operations or M minutes (633 MB each for streets 1) make recovery and
-  "label state at op k" cheap.
-- **Hashes:** `LABELLING_STANDARD.md` and `taxonomy.yaml` are hashed at session start and on change; every
-  operation carries both hashes.
+There is no log of label operations and none is planned (D-004, D-007).
+- **Undo** (`ui/undo.py`): before the selection, the height frames or the annotation tree change, the window pushes
+  a snapshot of that state. Undo restores it and keeps the current state for redo. Index arrays are never changed
+  in place, so snapshots share them; annotation snapshots copy line geometry but share point-set indices. The
+  history is in memory for the session (at most 200 steps and 4 GB of selection arrays).
+- **Saving:** `annotations.json` and `frames.json` are written atomically (temp file, then replace) after every
+  change, an undo included. Point sets keep how they were selected in their provenance.
+- **Not recorded yet:** which taxonomy and standard version a label was made under. The pipeline's `run.json`
+  records it for automatic output (plan 02).
 
 ## exports
 
 | export | contents |
 |---|---|
-| `<scan>.labels.npy` | uint8, length `N_valid`, source order |
-| `<scan>.flags.npy` | uint8 flags, same order |
-| `<scan>.instances.npy` | uint32, if used |
-| `<scan>.labels.json` | sidecar: schema `pclabel.labels/1`, source path/size/sha256/N_valid, taxonomy snapshot, standard version + hash, assessed regions, op count, export time, app version |
-| LAS 1.4 (PDRF 7) | xyz, rgb, intensity; `classification` = class id; `user_data` = flags; extra bytes for instance. Optional crop and/or voxel downsample (majority label) for sharing pieces |
-| PLY | binary, with `label` and `flags` properties |
-| collapsed export | classes mapped to an ancestor in the taxonomy's tree (e.g. to the top level), or a named mapping table in taxonomy.yaml |
-| observations | JSONL as stored, plus markdown in the OBSERVATIONS.md template |
-| threshold / statistics reports | JSON, CSV, markdown (SPEC §10) |
-| frames / surfaces | JSON / npz, so algorithms can use the same "height above road" |
+| labels | JSON, schema `pclabel.annotation-labels/6` (above): everything grouped by label |
+| labels per point | `python -m pclabel labels <project> <stem>` (`ops/labels.py`): `<stem>.classes.npy` and `<stem>.flags.npy`, uint8, one value per valid point in source order, and a sidecar `<stem>.labels.json`, schema `pclabel.labels/1`: `source`, `taxonomy {version, sha256}`, points per class, `unassessed`, points per flag, `conflicts` and `conflict_pairs` (points in sets of two classes on different branches), `free_text_labels`, `point_sets`. Overlaps resolve as the standard says: the more specific class on a branch wins; across branches the smaller set wins and is counted as a conflict. Written outside the project, or under its `auto/` |
 | vectors (CAD) | DXF, ASCII R12 (AC1009): a layer per label (upper-cased; `UNLABELLED`), in the label's colour (nearest AutoCAD colour index); segments as LINE, curves and polylines as 3D POLYLINE (closed where they are), markers as POINT; scan-frame coordinates with the offset; point sets left out (`io/vector_export.py`) |
 | vectors (GIS) | GeoJSON FeatureCollection, `pclabel {schema: "pclabel.vector-export/1", coordinates (scan frame, local metres: not longitude/latitude), source, offset}`; a LineString (closed: first point repeated) or Point per item with `{id, name, kind, label, label_path (the taxonomy path), layer, path (directories), uncertain, closed, length_m, assisted (drawn by a tool), source, attributes}` |
 | annotations | JSON, schema `pclabel.annotations/9` (above): segments, curves, polylines, markers and point sets (source indices) in directories; all, the selected entries, or by label: only the items whose label (own or inherited; "" for none) is in `labels_exported`, each in its directories (which keep their names and labels but only those items), so the file imports with the same labels |
 | label map | PNG (the map, then a 240 px legend strip on the right) and a JSON sidecar, schema `pclabel.label-map/1`: `source`, `offset`, `plane` (the frame), `transform {plane_normal, plane_origin (world), map_x, map_y, pixel, width, height (the map's columns and rows, without the strip), top_left (map metres), pixel_to_world}` (world = plane_origin + (top_left[0] + (col + 0.5) pixel) map_x + (top_left[1] − (row + 0.5) pixel) map_y), `image {png, map_columns, legend_strip}`, `params {pixel, dot, line_width, margin, h_min, h_max (null: none), max_side, context}`, `overlaps` (the drawing order), `legend [{label, color, code, class_id, flag_bit, pixels, points_drawn}]`, `vectors [{name, kind, label, closed, uncertain, map_xy}]` (map metres), `seconds`, `created` |
 | a plane | JSON, schema `pclabel.plane/1`: `name`, `equation {a, b, c, d}` (`a x + b y + c z + d = 0`, unit normal up, scan coordinates: the left side is the height above the plane), `z_of_xy {p, q, r}`, `normal`, `origin`, `along`, `fit` (the frame's report), `source`, `offset` |
 
-Every export writes its sidecar and never overwrites without asking.
+Exports never write a project's `annotations.json` or `annotations/`.
 
 ## threading
 
@@ -456,9 +407,12 @@ Every export writes its sidecar and never overwrites without asking.
 - `QThreadPool` (or `concurrent.futures`) workers for import, streaming reads, kernels, feature computation and
   exports.
 - numba kernels release the GIL.
-- Shared state changes (labels) happen only through the operation pipeline, one at a time.
+- A worker's result is delivered to its handler in the UI thread, which alone changes the selection and the
+  annotations.
 
-## performance targets (measure; record results in ROADMAP.md)
+## performance targets
+
+Measured results are in RESULTS.md.
 
 | operation | target | on |
 |---|---|---|
@@ -469,7 +423,6 @@ Every export writes its sidecar and never overwrites without asking.
 | colour mode / period / frame change | next frame | any |
 | lasso preview / apply | ≤ 0.5 s / ≤ 2 s with 50M candidate points | streets 1 |
 | undo | ≤ 1 s | streets 1 |
-| crash | lose at most the operation in progress | any |
 
 ## testing
 
@@ -480,28 +433,41 @@ Every export writes its sidecar and never overwrites without asking.
   - Gaussian range noise;
   - density falling with range from a scanner origin; **occlusion** (points on surfaces hidden from the origin
     removed, giving no-point strips behind kerbs).
-  - Can write E57 (pye57) and LAS so the import path is tested end to end.
+  - Can write E57, so the import path is tested end to end.
 - **Unit tests:**
   - readers (including invalid records and multi-scan poses); store and tiles;
   - source-order round trip;
   - selection kernels (against a slow reference implementation);
-  - frames (recover plane / crossfall), surfaces, the wrap formula (numpy mirror of the shader);
-  - journal crash recovery (kill between steps); undo/redo;
-  - query parser (rejects anything outside the whitelist);
+  - frames (plane, crossfall and grade recovered), the wrap formula (numpy mirror of the shader);
+  - annotations, old schemas still read, undo and redo;
   - assisted tools against synthetic ground truth.
 - **GL tests** (shader mirror, renderer, UI) run on Mesa llvmpipe through an offscreen Qt context, never on the GPU
   (`PCLABEL_TEST_GL=hardware` opts in).
-- **Benchmarks in `bench/`** print measured numbers; they are not part of pytest. `bench/check_open.py` is the M1
-  manual check (open time, scripted navigation, frame log).
+- **Benchmarks in `bench/`** print measured numbers; they are not part of pytest. `bench/check_open.py` measures
+  open time and scripted navigation. A script whose number RESULTS or OBSERVATIONS cites lives in `bench/`.
 
 ## decision log
 
+Current decisions. "The user" marks a decision the user made; the maintainer may change the others.
+
 | id | decision | status |
 |---|---|---|
-| D-001 | Python 3.12 + PySide6 + moderngl + numpy/numba | confirmed by M0 (2026-10-17): read, selection and render meet their targets (ROADMAP M0) |
-| D-002 | 2D xy quadtree tiles with in-tile random order, LOD = tile prefixes | kept after M0 (100M points tiled in 2.9 s); revisit if M1 shows tall tiles or uneven density problems on real scans (alternative: 3D octree) |
-| D-003 | Labels canonical in store order; `source_index` maps to source order for exports | planning |
-| D-004 | Journal-first label operations with npz deltas and snapshots | planning |
-| D-005 | Selection always on full-resolution columns with an optional depth test | planning |
-| D-006 | Reference frames and surfaces are view/analysis transforms, never applied to stored data | planning |
-| D-007 | Labelling is done by labelling annotations: a label on a directory or item (inherited by what it holds) covers its point sets, segments and curves; "export labels" groups them by label | decided by the user, 2026-10-20. It stands in for M3's per-point label column for now; changes are recorded in `annotations.json` (point sets keep how they were selected) and undoable in the session, but there is no persistent operation journal |
+| D-001 | Python 3.12, PySide6, moderngl, numpy and numba | kept: read, selection and render meet their targets (RESULTS) |
+| D-002 | 2D xy quadtree tiles with a random order inside each tile; LOD = tile prefixes | kept |
+| D-003 | point columns in store order; `source_index` maps to source order for exports | kept |
+| D-004 | no log of label operations: annotations are saved after every change, undo is per session | kept |
+| D-005 | every selection works on full-resolution columns, with an optional depth test | kept |
+| D-006 | height frames are view and analysis transforms, never applied to stored data | kept |
+| D-007 | labels live on annotation directories and items, inherited by what they hold | the user, 2026-10-20 |
+| D-008 | the labels form a tree; a parent label means "a kind of it, not more specific" | the user, 2026-11-04 |
+| D-009 | `other` means assessed, no class; its points are never selected unless unlocked | the user, 2026-10-20 |
+| D-010 | only items, never directories, can be marked uncertain | the user, 2026-10-26 |
+| D-011 | top, bottom, front and side are angles of the perspective camera; orthographic is a separate switch | the user, 2026-10-19 (an orthographic top view could not be told from a perspective one) |
+| D-012 | left and right drag both rotate; flying needs a W A S D Q E key while the right button is held | the user, 2026-10-19 |
+| D-013 | grow select compares intensity, not RGB | the user, 2026-10-19 |
+| D-014 | the depth modes are named *visible* and *through* (not "cloth", which reads as the CSF ground filter) | 2026-10-20 |
+| D-015 | changing a marker's height axis keeps its position, it is not placed again | the user, 2026-11-05 |
+| D-016 | tracers and the join tool save curves with no plane (editable, within 1 cm of the traced line) | the user, 2026-11-06 |
+| D-017 | vector export is DXF and GeoJSON; no KML (needs longitude and latitude) or Shapefile (a new dependency) | the user, 2026-11-05 |
+| D-018 | the old groups format (`pclabel.groups/1`) is not read | the user, 2026-10-19 |
+| D-019 | PCLabel imports no code from the sibling folders | the user (CLAUDE.md) |

@@ -24,8 +24,8 @@ FARO Zone 3D is diagramming software for crash and crime scenes. These sketch pl
 incident investigation, and may end up as evidence. That makes the following matter more than in a typical
 labelling tool:
 
-- **Provenance and reproducibility.** Hash the source, never modify it, journal every edit and version the
-  standard. Any tuned threshold can then be traced back to the labels and rules it was tuned on.
+- **Provenance and reproducibility.** Hash the source, never modify it, record how every label was made, and
+  version the standard. Any tuned threshold can then be traced back to the labels and rules it was tuned on.
 - **Measurement.** Kerb heights, road grade and crossfall, drain depths and positions, and distances, each recorded
   with its method and uncertainty.
 - **Features that matter in a crash reconstruction:**
@@ -56,7 +56,7 @@ LTA about outdated data.
 
 ## the scans
 
-All scans are in `../data/` (read-only):
+Singapore scans, in `../data/` (read-only):
 - local frame, metres, z up, no georeference;
 - one setup per file, with an identity or near-identity pose;
 - no embedded 2D images.
@@ -69,7 +69,15 @@ All scans are in `../data/` (read-only):
 | `ExchangeGreen/BLKARC/Fast/ExchangeGreenFast 1.e57` | 29,701,307 | ~0.6 GB folder | Leica BLK ARC, "Fast" mode. About 100 `Setup 002-*.jpg` photos sit alongside (camera poses unknown). Ground at z ≈ −0.1…−0.3; area about 67 × 129 m. |
 | `ExchangeGreen/BLKARC/Slow/ExchangeGreenSlow 1.e57` | 59,827,968 | ~1.2 GB folder | Same place, "Slow" mode. |
 
-- All five have xyz, RGB and intensity.
+Vendor sample scans from ROCK Robotic, in `../review_commercial/ROCK_planimetrics/` (read-only), US scenes:
+
+| project | points | file size | notes |
+|---|---|---|---|
+| `mobile-colorized-v2-1` | 595,516,000 | 11.4 GB | Mobile mapping, with ROCK's planimetrics drawing (`mobile-colorized-v2-1.dxf`, imported as labels). The drawing is in the scan's coordinates. |
+| `r3-pro-planimetrics-dataset-1` | 252,652,916 | 4.8 GB | ROCK R3 Pro. |
+| `rock-r3-pro-v2-demo-rock-photogrammetry-1` | 16,460,525 | 0.3 GB | ROCK R3 Pro v2 with photogrammetry colour. |
+
+- All eight have xyz, RGB and intensity.
 - The ExchangeGreen set is **one place captured three ways**. Use it to check that the standard and the thresholds
   are not tied to one scanner: density, noise and intensity scale all differ.
 - Whether the three ExchangeGreen captures are co-registered is unknown; check before relying on it.
@@ -98,26 +106,20 @@ All scans are in `../data/` (read-only):
 
 ## singapore street field guide
 
-What to expect in these scenes, with the labelling question each feature raises. Each answered question becomes a
-rule in [LABELLING_STANDARD.md](LABELLING_STANDARD.md). Singapore uses the spelling "kerb"; this project uses
+What to expect in these scenes. How each is labelled is in [LABELLING_STANDARD.md](LABELLING_STANDARD.md); the
+questions left here are the ones it does not answer yet. Singapore uses the spelling "kerb"; this project uses
 "curb" for the class name.
 
 ### ground and edges
 
 - **Raised kerbs** along carriageways, islands and medians. Faces are typically about 0.1–0.2 m; earlier hand
-  measurements on streets 1 found real steps of 0.12–0.33 m.
-  - Q: which points are "curb": the face only, the face and top, or the whole kerb unit?
-  - Q: where exactly is the curb line: the toe at road level, the lip at the top, or both?
+  measurements on streets 1 found real steps of 0.12–0.33 m. Many have a lower strip at road level first (O-0017).
 - **Lowered (dropped) kerbs and kerb ramps** at pedestrian crossings and driveways, usually with **yellow tactile
   tiles** on the ramp. On streets 1, a zebra-crossing kerb drops from 0.12–0.20 m to 0.01–0.04 m.
-  - Q: is a lowered kerb still curb?
-  - Q: where does the ramp stop being curb and start being pavement?
 - **Drains.** Singapore roads are drained heavily: roadside drains, covered drains under slabs or gratings, kerb
   inlets and gratings at intervals along the kerb, sumps, and larger open (monsoon) drains with railings. The user
   has observed that the only points below the road surface belong to the drains that periodically interrupt the
   curbs.
-  - Q: are a grating, an open channel and a drain cover on the pavement all `drain`?
-  - Q: does the curb class, and the curb line, continue across an inlet?
 - **Road surface variants:**
   - asphalt, concrete bus bays, patches;
   - coloured surfacing: red cycling paths, red school-zone markings, possibly others;
@@ -129,31 +131,28 @@ rule in [LABELLING_STANDARD.md](LABELLING_STANDARD.md). Singapore uses the spell
   - zig-zags before crossings, zebra stripes, yellow box junctions;
   - arrows, give-way triangles, text ("SLOW", "LOOK RIGHT"), chevron-hatched areas (painted islands).
 
-  Q: is a marking a property of the surface (a flag) rather than a class? Confirm. Earlier work on streets 1 found
-  two bright intensity lines 0.25 m apart, 0.6–0.8 m from the south kerb, either paint (double yellow?) or a
-  gutter band. Check in RGB.
+  Earlier work on streets 1 found two bright intensity lines 0.25 m apart, 0.6–0.8 m from the south kerb, either
+  paint or the strip beside the road (O-0006).
 - **Pavements and paths:** footpaths, park connectors (decided: pavement), cycling and shared paths, covered
-  linkways (pavement under a roof), bus-stop platforms, steps and ramps. Q: one `pavement` class with attributes,
-  or subclasses?
+  linkways (pavement under a roof), bus-stop platforms, steps and ramps. Q: are dirt paths pavement?
 - **Raised traffic islands and medians:** kerbed, and topped with paving, grass, shrubs or trees. Island noses can
   have no vertical step; earlier work found an island back with only a gradual 0.01–0.04 m change. Q: is a paved
   island top pavement, a planted one grass or shrub, or is `island` its own class?
-- **Driveways and vehicle crossings** over the pavement, often concrete with lowered kerbs. Q: road, pavement or a
-  class of their own?
+- **Driveways and vehicle crossings** over the pavement, often concrete with lowered kerbs.
 - **Vegetated ground:**
   - grass verges, tree planting strips, slopes and embankments;
   - planter boxes;
   - hedges and shrubs, which are very common and often trimmed into box shapes.
 
-  Q: where does grass end and shrub begin (height? roughness?), and how are tree pits and tree grates labelled?
+  Q: how are tree pits and tree grates labelled?
 
 ### objects
 
 - **Poles:** lamp posts (exported by the current product), traffic-light poles with signal heads (also exported),
-  sign posts, bollards, CCTV and enforcement cameras, ERP gantries. Q: do arms and heads belong to the pole? One
-  class per pole type? Earlier pole detection here picked up at least one tree trunk as a pole.
-- **Trees:** trunks are pole-like obstacles; canopies hide the ground and darken RGB beneath them. Q: label trunk
-  and canopy separately?
+  sign posts, bollards, CCTV and enforcement cameras, ERP gantries. Lamp posts are LTA-registered or privately
+  owned. Earlier pole detection here picked up at least one tree trunk as a pole.
+- **Trees:** trunks are pole-like obstacles; canopies hide the ground and darken RGB beneath them. Young trees
+  may have support poles around them.
 - **Street furniture:** railings and pedestrian guardrails, crash barriers, bus shelters, benches, bins, fire
   hydrants, cabinets, bicycle racks.
 - **Structures:** buildings and walls (streets 1 has no real facades), overhead bridges, covered-linkway roofs.
