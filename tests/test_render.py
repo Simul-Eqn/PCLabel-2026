@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from pclabel.render.camera import OrbitCamera
-from pclabel.render.colormaps import cyclic_oklab, sample_repeat_linear, sequential_oklab, wrap_color
+from pclabel.render.colormaps import cyclic_oklab, sequential_oklab, wrap_color
 from pclabel.render.renderer import (
     BYTES_PER_POINT,
     INSIDE_BIT,

@@ -8,7 +8,7 @@ The template's size is a starting point: check it against the scan (the outline 
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 
 import numpy as np
 

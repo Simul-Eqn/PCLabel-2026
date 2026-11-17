@@ -14,7 +14,7 @@ For lines of one label (e.g. every ``curb_top`` in a "curb trace" directory):
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 
 import numpy as np
 from scipy.spatial import cKDTree

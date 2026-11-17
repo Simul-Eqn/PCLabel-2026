@@ -450,7 +450,6 @@ def _trace(ox, oy, oz, dx, dy, dz, P, J, max_range, ray_id, seed):
     best = np.inf
     mat = M_NONE
     cosi = 0.0
-    hs = np.sqrt(dx * dx + dy * dy)
 
     t = _vcyl(ox, oy, oz, dx, dy, dz, J[J_TRUNK_X], J[J_TRUNK_Y], J[J_TRUNK_R], J[J_TRUNK_Z0], J[J_TRUNK_Z1])
     if t < best:

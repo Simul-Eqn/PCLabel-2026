@@ -31,7 +31,7 @@ def street(tilt_deg=0.0, seed=0):
 @pytest.mark.parametrize("tilt", [0.0, 12.0])
 def test_map_of_a_street(tilt):
     xyz, rot, normal = street(tilt)
-    road, mark, pole = np.arange(200_000), np.arange(200_000, 220_000), np.arange(220_000, 222_000)
+    road, mark = np.arange(200_000), np.arange(200_000, 220_000)
     curb = (np.array([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]]) @ rot.T) + OFFSET
     p = LabelMapParams(pixel=0.05, margin=0.5, line_width=3.0)
     res = label_map(xyz, OFFSET, normal, OFFSET, rot @ [1.0, 0, 0], [(road, 1), (mark, 2)], [(curb, 3)], COLORS, p)

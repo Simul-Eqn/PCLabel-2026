@@ -70,7 +70,7 @@ class Driver:
 
     def on_frame(self, item):
         stats, wall = item
-        vp, r = self.vp, self.vp.renderer
+        vp = self.vp
         if self.phase == "stream":
             if self.nvx_before is None:
                 self.nvx_before = glsetup.nvx_memory_kb() if self.check_vram else {}

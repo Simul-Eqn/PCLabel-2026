@@ -27,7 +27,6 @@ import uuid
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-import numba as nb
 import numpy as np
 
 from pclabel.analysis import curves
