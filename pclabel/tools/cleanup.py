@@ -12,8 +12,8 @@ pavement of its area unselected; this takes them in, and drops stray specks.
 4. **Removed** (``remove_specks``): selected points in columns of which less than ``1 - majority`` of the
    surrounding columns are selected, and connected pieces of the footprint (touching columns) with fewer than
    ``min_island`` selected points.
-Only the points the caller allows are considered (``allowed``: visible through the clips and the slice, not locked);
-hidden selected points stay as they are. With ``inside`` (a clip to a point set) the points outside the set are not
+Only the points the filters keep (visible through the clips and the slice) and not locked are considered; hidden
+selected points stay as they are. With a clip to a point set (``filters.inside``) the points outside the set are not
 read at all: they count neither for the surface nor for the footprint.
 """
 
@@ -24,8 +24,9 @@ from dataclasses import asdict, dataclass
 import numba as nb
 import numpy as np
 
+from pclabel.store.tiles import tiles_meeting
 from pclabel.tools import sets
-from pclabel.tools.volume import frame_axes
+from pclabel.analysis.geometry import disk, frame_axes
 
 
 @dataclass(frozen=True)
@@ -55,13 +56,14 @@ def _columns(xyz, a, b, origin, n, u, v, x0, y0, cell, nx, ny, hlo, hhi, col, hg
         hgt[k] = h
 
 
-def clean_selection(xyz, tiles, selection, axis, along, origin, params: CleanParams = CleanParams(), allowed=None,
-                    inside=None):  # fmt: skip
+def clean_selection(xyz, tiles, selection, axis, along, origin, params: CleanParams = CleanParams(), filters=None,
+                    locked=None):  # fmt: skip
     """(added, removed, info): sorted store indices to add to / take out of the selection. ``axis``, ``along`` and
-    ``origin`` (local) give the height frame; ``allowed(store_indices) -> bool mask`` limits the points considered;
-    ``inside`` (a tools.sets.PointMask) limits the points read."""
+    ``origin`` (local) give the height frame. Only points ``filters`` (a tools.selection.SelectFilters) keep are
+    read and touched, and none of ``locked`` (sorted store indices)."""
     from scipy import ndimage
 
+    inside = filters.inside if filters is not None else None
     p = params
     sel = np.asarray(selection, np.int64)
     if sel.size == 0:
@@ -81,10 +83,7 @@ def clean_selection(xyz, tiles, selection, axis, along, origin, params: CleanPar
                         for h in (hlo, hhi)])  # fmt: skip
     lo, hi = corners.min(0), corners.max(0)
     t = tiles
-    cand = np.flatnonzero((t["x1"] >= lo[0]) & (t["x0"] <= hi[0]) & (t["y1"] >= lo[1]) & (t["y0"] <= hi[1])
-                          & (t["zmax"] >= lo[2]) & (t["zmin"] <= hi[2]))  # fmt: skip
-    if inside is not None:
-        cand = inside.keep_tiles(t, cand)
+    cand = tiles_meeting(t, lo, hi, inside)
     idx_parts, col_parts, h_parts = [], [], []
     for k in cand:
         a, m = int(t["start"][k]), int(t["count"][k])
@@ -97,10 +96,10 @@ def clean_selection(xyz, tiles, selection, axis, along, origin, params: CleanPar
     idx = np.concatenate(idx_parts) if idx_parts else np.empty(0, np.int64)
     col = np.concatenate(col_parts) if col_parts else np.empty(0, np.int64)
     hh = np.concatenate(h_parts) if h_parts else np.empty(0)
-    from pclabel.store.annotations import isin_sorted
-
-    is_sel = isin_sorted(idx, sel)
-    ok = allowed(idx) if allowed is not None else np.ones(idx.size, bool)
+    is_sel = sets.isin_sorted(idx, sel)
+    ok = filters.keep(xyz, idx) if filters is not None else np.ones(idx.size, bool)
+    if locked is not None and len(locked) and idx.size:
+        ok &= ~sets.isin_sorted(idx, locked)
     n_cells = nx * ny
     cnt_sel = np.bincount(col[is_sel], minlength=n_cells).reshape(ny, nx)
     sum_h = np.bincount(col[is_sel], weights=hh[is_sel], minlength=n_cells).reshape(ny, nx)
@@ -108,14 +107,13 @@ def clean_selection(xyz, tiles, selection, axis, along, origin, params: CleanPar
     covered = cnt_sel > 0
     has = cnt_all > 0
     r = max(1, int(round(p.radius / p.cell)))
-    yy, xx = np.mgrid[-r : r + 1, -r : r + 1]
-    disk = ((xx**2 + yy**2) <= r * r).astype(float)
-    near_cov = ndimage.convolve(covered.astype(float), disk, mode="constant")
-    near_has = ndimage.convolve(has.astype(float), disk, mode="constant")
+    kernel = disk(r).astype(float)
+    near_cov = ndimage.convolve(covered.astype(float), kernel, mode="constant")
+    near_has = ndimage.convolve(has.astype(float), kernel, mode="constant")
     frac = np.divide(near_cov, near_has, out=np.zeros_like(near_cov), where=near_has > 0)
     # the selected surface: own mean, else the mean of the columns around
     own = np.divide(sum_h, cnt_sel, out=np.full(sum_h.shape, np.nan), where=covered)
-    around = np.divide(ndimage.convolve(np.where(covered, own, 0.0), disk, mode="constant"), near_cov,
+    around = np.divide(ndimage.convolve(np.where(covered, own, 0.0), kernel, mode="constant"), near_cov,
                        out=np.full(sum_h.shape, np.nan), where=near_cov > 0)  # fmt: skip
     surface = np.where(covered, own, around)
     footprint = covered | (p.fill_holes & has & (frac >= p.majority) & np.isfinite(surface))

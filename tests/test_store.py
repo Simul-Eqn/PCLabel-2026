@@ -79,8 +79,9 @@ def test_labels_map_back_to_source_order(street_e57, imported, taxonomy):
     out = p.to_source_order(box(np.asarray(p.xyz)).astype(np.uint8)).astype(bool)
     assert out.sum() > 1000 and np.array_equal(out, box(xyz_src))
     assert taxonomy.class_id("tree_trunk") in set(gt["cls"][out].tolist())
-    # labels and flags start unassessed
-    assert not np.asarray(p.labels).any() and not np.asarray(p.flags).any()
+    # no per-point label columns: labels live on annotations (project schema 2)
+    assert p.meta["schema"] == "pclabel.project/2" and not (p.path / "labels").exists()
+    assert "labels" not in p.meta["columns"] and "flags" not in p.meta["columns"]
 
 
 def test_raw_index_skips_invalid_records(street_e57, imported):
@@ -94,7 +95,7 @@ def test_project_json_and_source_untouched(street_e57, imported):
     path, _, _ = street_e57
     p, before, stages = imported
     m = p.meta
-    assert m["schema"] == "pclabel.project/1"
+    assert m["schema"] == "pclabel.project/2"
     assert m["source"]["sha256"] == before[0] == sha256(path)
     assert path.stat().st_mtime_ns == before[1]
     assert m["source"]["size"] == path.stat().st_size
@@ -157,3 +158,22 @@ def test_multi_scan_poses(tmp_path):
     assert np.allclose(p.scan_origins + p.offset, [s["translation"] for s in scans])
     assert [s["raw_start"] for s in p.meta["scans"]] == [0, 20_000]
     assert "raw_index" not in p.meta["columns"]  # nothing dropped: raw index = source index
+
+
+def test_a_schema_1_project_still_opens(imported, tmp_path):
+    """Before 2026-11-16 projects had zero-filled labels/labels.u8 and flags.u8 columns: they open, unread."""
+    import json
+    import shutil
+
+    p, _, _ = imported
+    old = tmp_path / "old"
+    shutil.copytree(p.path, old)
+    meta = json.loads((old / "project.json").read_text(encoding="utf-8"))
+    (old / "labels").mkdir()
+    for key in ("labels", "flags"):
+        (old / "labels" / f"{key}.u8").write_bytes(bytes(p.n))
+        meta["columns"][key] = {"file": f"labels/{key}.u8", "dtype": "|u1", "shape": [p.n], "order": "store"}
+    meta["schema"] = "pclabel.project/1"
+    (old / "project.json").write_text(json.dumps(meta), encoding="utf-8")
+    q = Project(old)
+    assert q.n == p.n and np.array_equal(np.asarray(q.xyz), np.asarray(p.xyz)) and not hasattr(q, "labels")

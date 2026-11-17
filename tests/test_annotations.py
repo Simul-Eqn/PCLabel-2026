@@ -79,8 +79,8 @@ def test_labels_are_inherited_and_exported_by_label(projects, tmp_path):
     p = Project(projects[0])
     xyz = np.asarray(p.xyz[:20], np.float64) + p.offset
     t = Annotations()
-    kerb = t.new_directory("kerb")
-    kerb.label = "curb"
+    curb = t.new_directory("curb")
+    curb.label = "curb"
     line = t.add(Curve.fit(xyz[:4], (0, 0, 1), (0, 0, 0)))
     seg = t.add(Segment(xyz[4], xyz[5]))
     road = t.add(PointSet(np.arange(0, 1000, dtype=np.int64)))
@@ -88,9 +88,9 @@ def test_labels_are_inherited_and_exported_by_label(projects, tmp_path):
     paint = t.add(PointSet(np.arange(900, 1200, dtype=np.int64), name="paint"))
     paint.label = "lane line"
     loose = t.add(Segment(xyz[6], xyz[7]))
-    t.move([line.id, seg.id], kerb.id)
+    t.move([line.id, seg.id], curb.id)
     seg.label = "curb lip"  # its own label wins over the directory's
-    assert t.label_of(line.id) == ("curb", kerb.id) and t.label_of(seg.id) == ("curb lip", seg.id)
+    assert t.label_of(line.id) == ("curb", curb.id) and t.label_of(seg.id) == ("curb lip", seg.id)
     assert t.label_of(loose.id) == ("", None)
     out = tmp_path / "labels.json"
     summary = t.export_labels(out, p, {"road": 1, "curb": 2})
@@ -98,7 +98,7 @@ def test_labels_are_inherited_and_exported_by_label(projects, tmp_path):
     assert [e["label"] for e in doc["labels"]] == ["road", "curb", "curb lip", "lane line"]  # classes first, by id
     by = {e["label"]: e for e in doc["labels"]}
     assert by["curb"]["class_id"] == 2 and by["lane line"]["class_id"] is None
-    assert by["curb"]["items"][0]["path"] == ["kerb"] and by["curb"]["items"][0]["label_from"] == "kerb"
+    assert by["curb"]["items"][0]["path"] == ["curb"] and by["curb"]["items"][0]["label_from"] == "curb"
     assert by["curb"]["counts"] == {"segment": 0, "curve": 1, "polyline": 0, "marker": 0, "points": 0}
     assert by["road"]["points"] == 1000 and by["road"]["items"][0]["source_indices"] == sorted(
         int(i) for i in p.source_index[np.arange(1000)])  # fmt: skip
@@ -149,7 +149,8 @@ def test_taxonomy_tree(tmp_path):
     assert "island" in order and "island" not in [c["name"] for c, _ in tax.tree_order(enabled_only=True)]
     assert dict((c["name"], d) for c, d in tax.tree_order())["road_line"] == 2
     assert tax.fits("curb_top", "curve") and tax.fits("curb_top", "polyline") and not tax.fits("curb_top", "points")
-    assert tax.fits("cover", "marker") and not tax.fits("cover", "curve") and tax.fits("cover", "directory")
+    assert tax.fits("cover", "marker") and tax.fits("cover", "polyline") and not tax.fits("cover", "points")
+    assert tax.fits("cover", "directory") and not tax.fits("curb_top", "marker")
     assert tax.fits("road", "points") and tax.fits("road", "marker") and tax.fits("any text", "points")
     ids = [int(c["id"]) for c in tax.classes]
     assert len(ids) == len(set(ids))
@@ -189,7 +190,7 @@ def test_taxonomy_tree(tmp_path):
 
 
 def test_locked_labels_and_their_points():
-    from pclabel.store.annotations import isin_sorted
+    from pclabel.tools.sets import isin_sorted
 
     t = Annotations()
     road = t.add(PointSet(np.arange(0, 100, dtype=np.int64)))
@@ -212,11 +213,11 @@ def test_the_project_keeps_its_annotations(projects):
     t = Annotations()
     for x in (seg, c, pts):
         t.add(x)
-    kerb = t.new_directory("kerb")
-    inner = t.new_directory("south", kerb.id)
-    t.move([seg.id], kerb.id)
+    curb = t.new_directory("curb")
+    inner = t.new_directory("south", curb.id)
+    t.move([seg.id], curb.id)
     t.move([c.id], inner.id)
-    kerb.label = "curb"
+    curb.label = "curb"
     t.locks = {"curb", "road"}
     t.unlocked, t.locks_on = {"other"}, False
     c.set_mode("axis")
@@ -224,13 +225,13 @@ def test_the_project_keeps_its_annotations(projects):
     doc = json.loads((p.path / "annotations.json").read_text(encoding="utf-8"))
     assert doc["schema"] == SCHEMA and (p.path / "annotations" / f"{pts.id}.npy").exists()
     u, warnings = Annotations.load(p)
-    assert not warnings and [x.name for x in u.root] == ["points 3", "kerb"]
+    assert not warnings and [x.name for x in u.root] == ["points 3", "curb"]
     k = u.root[1]
     south, s2 = k.children
     c2 = south.children[0]
-    assert south.name == "south" and south.color is None and u.color_of(c2.id) == kerb.color
+    assert south.name == "south" and south.color is None and u.color_of(c2.id) == curb.color
     assert np.array_equal(s2.a, seg.a) and np.allclose(c2.polyline(), c.polyline())
-    assert c2.mode == "axis" and np.allclose(c2.axis, c.axis) and u.label_of(c2.id) == ("curb", kerb.id)
+    assert c2.mode == "axis" and np.allclose(c2.axis, c.axis) and u.label_of(c2.id) == ("curb", curb.id)
     assert u.locks == {"curb", "road"} and u.unlocked == {"other"} and u.locks_on is False
     assert c2.manual().tolist() == c.manual().tolist()
     assert np.array_equal(u.root[0].indices, pts.indices) and u.root[0].provenance[0]["params"]["tolerance"] == 2.0
@@ -277,17 +278,17 @@ def test_export_by_label_keeps_the_directories_that_give_the_labels(projects, tm
     t = Annotations()
     for x in (seg, c, pts):
         t.add(x)
-    kerb = t.new_directory("kerb")
-    kerb.label = "curb"
+    curb = t.new_directory("curb")
+    curb.label = "curb"
     lip = t.add(PointSet(np.arange(10, 20, dtype=np.int64), name="lip"))
     lip.label = "curb lip"  # in the curb directory, with a label of its own
-    t.move([c.id, lip.id], kerb.id)
+    t.move([c.id, lip.id], curb.id)
     pts.label = "road"
     out = tmp_path / "curb.json"
     assert t.export(out, p, labels={"curb"}) == 1
     doc = json.loads(out.read_text(encoding="utf-8"))
     assert doc["schema"] == SCHEMA and doc["labels_exported"] == ["curb"]
-    assert [n["name"] for n in doc["tree"]] == ["kerb"] and doc["tree"][0]["label"] == "curb"
+    assert [n["name"] for n in doc["tree"]] == ["curb"] and doc["tree"][0]["label"] == "curb"
     assert [n["type"] for n in doc["tree"][0]["children"]] == ["curve"]  # not the lip (curb lip)
     back = Annotations()
     back.import_file(out, p)
@@ -310,8 +311,8 @@ def test_join_two_curves_at_the_chosen_ends(first_end, second_end):
     a_pts = np.array([[0.0, 0, 0], [1.0, 0.2, 0], [2.0, 0, 0]])
     b_pts = np.array([[5.0, 0, 0], [6.0, 0.3, 0], [7.0, 0, 0]])
     t = Annotations()
-    d = t.new_directory("kerb")
-    a = t.add(Curve.fit(a_pts, up, (0, 0, 0)), name="south kerb")
+    d = t.new_directory("curb")
+    a = t.add(Curve.fit(a_pts, up, (0, 0, 0)), name="south curb")
     a.label = "curb"
     b = t.add(Curve.fit(b_pts, up, (0, 0, 0)))
     b.drag_handle(1, 1, b.nodes[1] + (0.5, 0.0, 0))  # a manual node: its handles must survive (swapped if reversed)
@@ -321,7 +322,7 @@ def test_join_two_curves_at_the_chosen_ends(first_end, second_end):
     a_seq = a_pts if first_end == "end" else a_pts[::-1]
     b_seq = b_pts if second_end == "start" else b_pts[::-1]
     assert np.allclose(c.picked, np.vstack([a_seq, b_seq]))
-    assert c.name == "south kerb" and c.label == "curb" and t.parent(c.id) is d and len(t.items()) == 1
+    assert c.name == "south curb" and c.label == "curb" and t.parent(c.id) is d and len(t.items()) == 1
     j = 4  # b's middle node, wherever it went
     want_in, want_out = (keep_in, keep_out) if second_end == "start" else (keep_out, keep_in)
     assert np.allclose(c.h_in[j], want_in) and np.allclose(c.h_out[j], want_out)
@@ -346,7 +347,7 @@ def test_set_operations():
     d = t.new_directory("ground")
     a = t.add(PointSet(np.array([1, 5, 9], np.int64), [{"tool": "grow_select"}]), name="road a")
     b = t.add(PointSet(np.array([2, 5, 10], np.int64), [{"tool": "magic_select"}]), name="road b")
-    c = t.add(PointSet(np.array([9, 20], np.int64)), name="kerb")
+    c = t.add(PointSet(np.array([9, 20], np.int64)), name="curb")
     t.move([a.id, b.id], d.id)
     expect = {"union": [1, 2, 5, 9, 10], "intersection": [5], "a_minus_b": [1, 9], "b_minus_a": [2, 10],
               "xor": [1, 2, 9, 10]}  # fmt: skip
@@ -378,21 +379,21 @@ def test_uncertain_labels(projects, tmp_path):
 
     p = Project(projects[0])
     t = Annotations()
-    kerbs = t.new_directory("kerbs")
-    kerbs.label = "curb"
+    curbs = t.new_directory("curbs")
+    curbs.label = "curb"
     a = t.add(PointSet(np.arange(0, 100, dtype=np.int64)), name="a")
     b = t.add(PointSet(np.arange(100, 150, dtype=np.int64)), name="b")
     ramp = t.add(PointSet(np.arange(150, 170, dtype=np.int64)), name="ramp?")
-    t.move([a.id, b.id, ramp.id], kerbs.id)
+    t.move([a.id, b.id, ramp.id], curbs.id)
     ramp.label = "ramp"
-    assert not hasattr(kerbs, "uncertain")  # only items can be uncertain (the user, 2026-10-26)
+    assert not hasattr(curbs, "uncertain")  # only items can be uncertain (the user, 2026-10-26)
     a.uncertain = ramp.uncertain = True
     # saved and read back; directories carry no mark
     t.save(p)
     u, warnings = Annotations.load(p)
     assert not warnings and [x.uncertain for x in u.root[0].children] == [True, False, True]
     doc = json.loads((p.path / "annotations.json").read_text(encoding="utf-8"))
-    assert doc["schema"] == SCHEMA == "pclabel.annotations/7" and "uncertain" not in doc["tree"][0]
+    assert doc["schema"] == SCHEMA == "pclabel.annotations/9" and "uncertain" not in doc["tree"][0]
     # a schema 2 document that marked a directory: the items that took its label carry the mark instead
     old2 = json.loads(json.dumps(doc))
     old2["tree"][0]["uncertain"] = True
@@ -425,3 +426,23 @@ def test_uncertain_labels(projects, tmp_path):
     # a split keeps the mark
     smooth, rough = t.split_point_set(ramp.id, np.arange(20) < 5, {"tool": "split"})
     assert smooth.uncertain and rough.uncertain and smooth.label == "ramp"
+
+
+def test_polyline_editing_and_converting():
+    from pclabel.store.annotations import Annotations, Polyline
+
+    m = Annotations()
+    v = np.array([[0, 0, 0], [1, 0, 0.1], [2, 0, 0.2]])
+    p = m.add(Polyline(v, False, {"axis": [0, 0, 1]}), "l")
+    assert p.insert([1.5, 0.1, 0.15]) == 2 and len(p.nodes) == 4
+    assert p.insert([3, 0, 0.3]) == 4  # beyond the end
+    p.move_node(0, [0, 1, 7])
+    assert p.vertices[0] == pytest.approx([0, 1, 0])  # level
+    p.remove(4)
+    with pytest.raises(ValueError):
+        p.set_closed(True) if len(p.vertices) < 3 else Polyline(v[:2]).remove(0)
+    c = m.convert(p.id, "curve", 0.005)
+    assert c.kind == "curve" and c.mode == "free" and m.root == [c]
+    assert m.convert(c.id, "curve", 0.005) is None  # already a curve
+    q = m.convert(c.id, "polyline", 0.002)
+    assert q.kind == "polyline" and q.source["axis"] == [0, 0, 1] and q.vertices[0] == pytest.approx([0, 1, 0])

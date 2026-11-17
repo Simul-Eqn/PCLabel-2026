@@ -21,18 +21,18 @@ layers:
   # the curb: three edge lines
   TOP_OF_CURB:    {label: curb_top, note: "the curb's lip (top edge of the face)"}
   BOTTOM_OF_CURB: {label: curb_bottom, note: "the curb's toe; beside a gutter, its flow line"}
-  BACK_OF_CURB:   {label: curb_back, note: "the back of the kerb unit, on the pavement side"}
+  BACK_OF_CURB:   {label: curb_back, note: "the back of the curb unit, on the pavement side"}
   # the road and what is part of it
   PAVED_ROAD:     {label: road, note: "the edge of the road surface (along the gutter where there is one)"}
   UNPAVED_ROAD:   {label: road, note: "the edge of an unpaved road"}
-  PAINT_STRIPE:   {label: road_line, note: "painted lines on the road (R-006)"}
-  PARKING_PAINT_STRIPE: {label: road_line, note: "parking bay lines (a marking type, Q-14)"}
-  GUTTER:         {label: gutter, note: "the gutter's outer edge, against the road (Q-10)"}
+  PAINT_STRIPE:   {label: road_line, note: "painted lines on the road"}
+  PARKING_PAINT_STRIPE: {label: road_line, note: "parking bay lines"}
+  GUTTER:         {label: gutter, note: "the gutter's outer edge, against the road"}
   GUTTER_BOTTOM:  {label: gutter, note: "the gutter's lowest line"}
   PAVED_PARKING:  {label: parking, note: "a parking area's edge"}
   PAVED_DRIVEWAY: {label: driveway, note: "a driveway's edge"}
   UNPAVED_DRIVEWAY: {label: driveway, note: "an unpaved driveway's edge"}
-  RAMP:           {label: ramp, note: "a ramp's edge (R-007)"}
+  RAMP:           {label: ramp, note: "a ramp's edge"}
   # other ground
   FOOT_PATH:      {label: pavement, note: "a footpath's edge"}
   DRAINAGE_PIT:   {label: drain, note: "a drainage inlet"}

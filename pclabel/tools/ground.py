@@ -1,18 +1,18 @@
-"""Ground grow: from a seed point, select the connected ground surface (SPEC §11 region grow, on a cell grid).
+"""Ground grow: from a seed point, select the connected ground surface (region grow on a cell grid).
 
 1. Cells. Every point around the seed is binned into square cells, and each cell keeps its first
    ``cell_points`` points (a uniform sample of the cell, because tiles are shuffled). Capping per cell, not per
    tile, matters: a tile near the scanner holds millions of points, and sampling it as a whole would leave its
    sparser road part with too few points per cell (holes, and straight cut lines along tile edges). Per cell,
    the *ground layer* is the points within ``surface_band`` of the cell's 5th percentile height, so canopy, cars
-   and kerb tops above the ground do not count. For the ground layer the cell
+   and curb tops above the ground do not count. For the ground layer the cell
    keeps a median height, a median intensity and a roughness (standard deviation of height).
 2. Grow (8 directions, from the seed cell). Empty cells (no points: gaps between far scan lines, occlusion shadows
-   of poles and kerbs) are stepped over, up to ``max_gap``. The next cell with data in a direction joins when all of
+   of poles and curbs) are stepped over, up to ``max_gap``. The next cell with data in a direction joins when all of
    these hold:
    - its height differs from the current cell's by at most ``max_step``, plus ``max_slope`` times the extra
-     distance when it lies across a gap: kerbs stop the grow, also behind a no-point strip;
-   - its roughness is at most ``max_roughness``: kerb faces, vegetation and objects stop it;
+     distance when it lies across a gap: curbs stop the grow, also behind a no-point strip;
+   - its roughness is at most ``max_roughness``: curb faces, vegetation and objects stop it;
    - its intensity differs from the current cell's by at most ``intensity_step``, and from the *local road
      intensity* by at most ``intensity_range``. The local road intensity is a running average along the grow
      (memory about ``intensity_memory``), so intensity may drift slowly with range and incidence, but a walkway
@@ -24,7 +24,8 @@
 4. Points. Every full-resolution point in a grown cell within ``surface_tol`` of the cell's surface is selected.
    Points below the surface (drains, multipath) and above it (vehicles, canopy) are not.
 
-All parameters are thresholds under study; the result carries them, and labelling records them (M3).
+All parameters are thresholds under study; the result carries them, and a point set saved from it keeps them in its
+provenance.
 """
 
 from __future__ import annotations
@@ -36,7 +37,10 @@ from dataclasses import asdict, dataclass
 import numba as nb
 import numpy as np
 
+from pclabel.analysis.geometry import disk
+from pclabel.store.tiles import tile_box_mask, tiles_meeting
 from pclabel.tools import sets
+from pclabel.tools.selection import reach as filter_reach, restrict
 
 
 @dataclass(frozen=True)
@@ -244,23 +248,18 @@ def _classify(xyz, a, b, x0, y0, cell, nx, ny, region, surf, tol, out):
 
 
 def _roi_tiles(tiles, seed, radius, clip=None, inside=None):
-    t = tiles
-    near = (t["x1"] >= seed[0] - radius) & (t["x0"] <= seed[0] + radius) & (t["y1"] >= seed[1] - radius) & (
-        t["y0"] <= seed[1] + radius
-    )
+    near = tile_box_mask(tiles, (seed[0] - radius, seed[1] - radius), (seed[0] + radius, seed[1] + radius))
     if clip is not None:
-        lo, hi = clip
-        near &= (t["x1"] >= lo[0]) & (t["x0"] <= hi[0]) & (t["y1"] >= lo[1]) & (t["y0"] <= hi[1])
-        near &= (t["zmax"] >= lo[2]) & (t["zmin"] <= hi[2])
+        near &= tile_box_mask(tiles, *clip)
     cand = np.flatnonzero(near)
     return cand if inside is None else inside.keep_tiles(tiles, cand)
 
 
-def cell_grid(xyz, intensity, tiles, seed, params: GroundGrowParams, clip=None, *, extent=None,
-              inside=None) -> CellGrid:  # fmt: skip
-    """Cell statistics around ``seed`` (local coordinates). ``clip`` = (lo, hi) local box and ``inside`` (a
-    tools.sets.PointMask: the clip to a point set) limit the points. ``extent`` = (x0, y0, nx, ny) places the grid
+def cell_grid(xyz, intensity, tiles, seed, params: GroundGrowParams, filters=None, *, extent=None) -> CellGrid:
+    """Cell statistics around ``seed`` (local coordinates), from the points ``filters`` (a
+    tools.selection.SelectFilters) reach: its clip box and point mask. ``extent`` = (x0, y0, nx, ny) places the grid
     explicitly instead (``params.radius`` is then unused)."""
+    clip, inside = filter_reach(filters)
     p = params
     seed = np.asarray(seed, np.float64)
     if extent is None:
@@ -306,12 +305,6 @@ def cell_grid(xyz, intensity, tiles, seed, params: GroundGrowParams, clip=None, 
                     seen.reshape(ny, nx), int(cnt.sum()))  # fmt: skip
 
 
-def _disk(r: float) -> np.ndarray:
-    k = int(np.ceil(r))
-    yy, xx = np.mgrid[-k : k + 1, -k : k + 1]
-    return (xx**2 + yy**2) <= r * r + 1e-9
-
-
 def grow_cells(grid: CellGrid, seed, params: GroundGrowParams):
     """(region, info): grown cells with bridged markings, and figures about the grow."""
     from scipy import ndimage
@@ -343,11 +336,11 @@ def grow_cells(grid: CellGrid, seed, params: GroundGrowParams):
     r = p.marking_width / 2 / grid.cell
     added = np.zeros_like(grown)
     if r >= 0.5 and grown.any():
-        disk = _disk(r)
-        closed = ndimage.binary_closing(grown, structure=disk, border_value=0) | ndimage.binary_fill_holes(grown)
+        kernel = disk(r)
+        closed = ndimage.binary_closing(grown, structure=kernel, border_value=0) | ndimage.binary_fill_holes(grown)
         cand = closed & ~grown & valid & (grid.rough <= p.max_roughness)
         if cand.any():
-            big = _disk(max(r, 1.5 / grid.cell))  # local surface height from grown cells around (up to 1.5 m)
+            big = disk(max(r, 1.5 / grid.cell))  # local surface height from grown cells around (up to 1.5 m)
             s0 = np.where(grown, surf, 0.0)
             num = ndimage.convolve(s0, big.astype(float), mode="constant")
             den = ndimage.convolve(grown.astype(float), big.astype(float), mode="constant")
@@ -379,9 +372,7 @@ def select_region_points(xyz, tiles, grid: CellGrid, region: np.ndarray, params:
     lo = np.array([grid.x0 + xs.min() * grid.cell, grid.y0 + ys.min() * grid.cell])
     hi = np.array([grid.x0 + (xs.max() + 1) * grid.cell, grid.y0 + (ys.max() + 1) * grid.cell])
     t = tiles
-    cand = np.flatnonzero((t["x1"] >= lo[0]) & (t["x0"] <= hi[0]) & (t["y1"] >= lo[1]) & (t["y0"] <= hi[1]))
-    if inside is not None:
-        cand = inside.keep_tiles(t, cand)
+    cand = tiles_meeting(t, lo, hi, inside)
     arr = np.asarray(xyz)
     surf = np.where(region, grid.surf, 0.0)
     parts = []
@@ -390,22 +381,20 @@ def select_region_points(xyz, tiles, grid: CellGrid, region: np.ndarray, params:
         out = np.empty(b - a, np.bool_)
         _classify(arr, a, b, grid.x0, grid.y0, grid.cell, grid.nx, grid.ny, region, surf, params.surface_tol, out)
         idx = np.flatnonzero(out) + a
-        if inside is not None and idx.size:
-            idx = idx[inside.mask[idx]]
-        if clip is not None and idx.size:
-            q = arr[idx]
-            idx = idx[np.all((q >= clip[0]) & (q <= clip[1]), axis=1)]
+        idx = restrict(arr, idx, clip, inside)
         parts.append(idx.astype(np.int64))
     return np.concatenate(parts) if parts else np.empty(0, np.int64)
 
 
 def ground_grow(xyz, intensity, tiles, seed, params: GroundGrowParams = GroundGrowParams(), *, grid=None,
-                clip=None, inside=None) -> GrowResult:  # fmt: skip
-    """Run the whole tool. Pass ``grid`` from a previous run with the same seed area, cell size and clips to
-    re-grow with new thresholds without re-reading the points. ``inside``: only these points (a PointMask)."""
+                filters=None) -> GrowResult:  # fmt: skip
+    """Run the whole tool. Pass ``grid`` from a previous run with the same seed area, cell size and filters to
+    re-grow with new thresholds without re-reading the points. ``filters``: the clip box and point mask the points
+    are read through (tools.selection.reach)."""
     seed = np.asarray(seed, np.float64)
+    clip, inside = filter_reach(filters)
     if grid is None:
-        grid = cell_grid(xyz, intensity, tiles, seed, params, clip, inside=inside)
+        grid = cell_grid(xyz, intensity, tiles, seed, params, filters)
     region, info = grow_cells(grid, seed, params)
     idx = select_region_points(xyz, tiles, grid, region, params, clip, inside)
     info["points"] = int(idx.size)

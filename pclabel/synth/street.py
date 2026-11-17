@@ -1,19 +1,19 @@
 """Synthetic street scans with per-point ground truth (ARCHITECTURE.md "testing").
 
 One static TLS setup is simulated by casting rays on an azimuth x elevation grid (constant angular step, column
-by column like a real scanner) against an analytic street. Occlusion, back-facing kerb faces, no-point strips
-behind kerbs, the blind cone under the tripod and density falling with range all follow from the geometry.
+by column like a real scanner) against an analytic street. Occlusion, back-facing curb faces, no-point strips
+behind curbs, the blind cone under the tripod and density falling with range all follow from the geometry.
 
 Layout (metres, z up). The road runs along x and is centred on y = 0. Across y, from the centre outwards:
-road (|y| <= W), kerb unit (W..C), pavement (C..Pv), grass verge (Pv..Y). Both sides are alike. Additional parts:
-- road: crossfall (crowned or one plane) and grade; a dashed centre line and a double yellow line near each kerb
-  (3 mm thick, class road + flag ``marking``); drain pits below the road at the kerb toe at regular intervals;
-- kerb: a step of ``curb_step`` with a lowered section (a crossing) where it drops to ``lowered_step``, with ramps
-  along the kerb and a pavement ramp behind it;
+road (|y| <= W), curb unit (W..C), pavement (C..Pv), grass verge (Pv..Y). Both sides are alike. Additional parts:
+- road: crossfall (crowned or one plane) and grade; a dashed centre line and a double yellow line near each curb
+  (3 mm thick, class road + flag ``marking``); drain pits below the road at the curb toe at regular intervals;
+- curb: a step of ``curb_step`` with a lowered section (a crossing) where it drops to ``lowered_step``, with ramps
+  along the curb and a pavement ramp behind it;
 - grass: value-noise roughness; a tree (trunk cylinder, porous ellipsoid canopy) on the north verge;
 - a lamp post (pole, arm, head) on the south pavement;
-- the scanner stands on the south pavement, so the south kerb face looks away from it (no points) and the road
-  just north of the south toe is shadowed by the kerb lip (a no-point strip).
+- the scanner stands on the south pavement, so the south curb face looks away from it (no points) and the road
+  just north of the south toe is shadowed by the curb lip (a no-point strip).
 
 Ground-truth classes are looked up by name in config/taxonomy.yaml; no class id is hard-coded here.
 """
@@ -31,20 +31,31 @@ from pclabel.taxonomy import Taxonomy, load_taxonomy
 # material codes (internal to the simulator)
 M_NONE, M_ROAD, M_MARK_W, M_MARK_Y, M_CURB, M_CURB_LOW, M_PAVEMENT, M_DRAIN, M_GRASS, M_TRUNK, M_CANOPY, M_LAMP = range(12)
 
-# material -> (class name, flag name or None, base rgb, reflectance)
+# material -> (material name, the labelling standard's class for its points or "" for none, base rgb, reflectance).
+# The material is the physical truth (a curb unit, a drain floor); the class is what the standard labels: the curb is
+# a line, not points, and the strip with its drains and tree canopies are not labelled (docs/LABELLING_STANDARD.md).
 MATERIALS = {
-    M_ROAD: ("road", None, (68, 68, 70), 0.20),
-    M_MARK_W: ("road", "marking", (225, 225, 220), 0.80),
-    M_MARK_Y: ("road", "marking", (215, 180, 40), 0.70),
-    M_CURB: ("curb", None, (150, 150, 145), 0.45),
-    M_CURB_LOW: ("curb_lowered", None, (150, 150, 145), 0.45),
-    M_PAVEMENT: ("pavement", None, (170, 150, 135), 0.40),
-    M_DRAIN: ("drain", None, (35, 35, 38), 0.10),
-    M_GRASS: ("grass", None, (75, 120, 55), 0.33),
-    M_TRUNK: ("tree_trunk", None, (95, 75, 55), 0.30),
-    M_CANOPY: ("tree_canopy", None, (45, 95, 45), 0.28),
-    M_LAMP: ("lamp_post", None, (120, 125, 130), 0.50),
+    M_ROAD: ("road", "road", (68, 68, 70), 0.20),
+    M_MARK_W: ("marking", "road_line", (225, 225, 220), 0.80),
+    M_MARK_Y: ("marking", "road_line", (215, 180, 40), 0.70),
+    M_CURB: ("curb", "", (150, 150, 145), 0.45),
+    M_CURB_LOW: ("curb_lowered", "", (150, 150, 145), 0.45),
+    M_PAVEMENT: ("pavement", "pavement", (170, 150, 135), 0.40),
+    M_DRAIN: ("drain", "", (35, 35, 38), 0.10),
+    M_GRASS: ("grass", "vegetation", (75, 120, 55), 0.33),
+    M_TRUNK: ("tree_trunk", "tree_trunk", (95, 75, 55), 0.30),
+    M_CANOPY: ("tree_canopy", "", (45, 95, 45), 0.28),
+    M_LAMP: ("lamp_post", "lamp_post", (120, 125, 130), 0.50),
 }
+
+
+def is_material(material: np.ndarray, *names: str) -> np.ndarray:
+    """Which points (a scan's ``material`` codes) are of any of these materials (MATERIALS names)."""
+    codes = [k for k, v in MATERIALS.items() if v[0] in names]
+    unknown = set(names) - {v[0] for v in MATERIALS.values()}
+    if unknown:
+        raise KeyError(f"no materials {sorted(unknown)}")
+    return np.isin(material, codes)
 
 
 @dataclass(frozen=True)
@@ -52,23 +63,23 @@ class StreetParams:
     # road
     length: float = 60.0
     road_half_width: float = 3.7
-    crown: bool = True  # True: both halves fall towards the kerbs; False: one plane rising towards +y
+    crown: bool = True  # True: both halves fall towards the curbs; False: one plane rising towards +y
     crossfall: float = 0.025
     grade: float = 0.01
-    # kerb
+    # curb
     curb_width: float = 0.15
     curb_step: float = 0.15
     lowered_x: tuple[float, float] = (12.0, 16.0)
     lowered_step: float = 0.02
-    lowered_ramp: float = 1.0  # along the kerb
+    lowered_ramp: float = 1.0  # along the curb
     # pavement and verge
     pavement_width: float = 2.5
-    pavement_slope: float = 0.02  # rises away from the kerb
-    pavement_ramp: float = 1.2  # across the pavement, behind a lowered kerb
+    pavement_slope: float = 0.02  # rises away from the curb
+    pavement_ramp: float = 1.2  # across the pavement, behind a lowered curb
     verge_width: float = 5.0
     grass_drop: float = 0.03
     grass_roughness: float = 0.012
-    # drains (pits below the road at the kerb toe)
+    # drains (pits below the road at the curb toe)
     drain_spacing: float = 10.0
     drain_first: float = -25.0
     drain_length: float = 0.9
@@ -106,8 +117,9 @@ class SynthScan:
     offset: np.ndarray  # float64 (3,)
     rgb: np.ndarray  # uint8 (n, 3)
     intensity: np.ndarray  # uint16 (n,)
-    cls: np.ndarray  # uint8 (n,), taxonomy ids
-    flags: np.ndarray  # uint8 (n,)
+    cls: np.ndarray  # uint8 (n,), taxonomy ids: what the labelling standard labels each point (0: no class)
+    flags: np.ndarray  # uint8 (n,): taxonomy flags (none set)
+    material: np.ndarray  # uint8 (n,): MATERIALS codes, the physical surface each point is on
     instance: np.ndarray  # uint32 (n,), 0 = none
     row: np.ndarray  # uint16 (n,), elevation index
     col: np.ndarray  # uint16 (n,), azimuth index
@@ -216,7 +228,7 @@ def _zbase(x, y, P):
 
 
 @nb.njit(cache=True)
-def _kerb_step(x, P):
+def _curb_step(x, P):
     a = P[I_LOW_A]
     b = P[I_LOW_B]
     d = 0.0
@@ -249,7 +261,7 @@ def _ground(x, y, P):
         if (0.35 <= e <= 0.45) or (0.60 <= e <= 0.70):
             return zb + P[I_MARK_H], M_MARK_Y, 0
         return zb, M_ROAD, 0
-    s = _kerb_step(x, P)
+    s = _curb_step(x, P)
     if ay <= P[I_C]:
         return zb + s, (M_CURB if s >= full - 1e-9 else M_CURB_LOW), 0
     if ay <= P[I_PV]:
@@ -438,7 +450,6 @@ def _trace(ox, oy, oz, dx, dy, dz, P, J, max_range, ray_id, seed):
     best = np.inf
     mat = M_NONE
     cosi = 0.0
-    hs = np.sqrt(dx * dx + dy * dy)
 
     t = _vcyl(ox, oy, oz, dx, dy, dz, J[J_TRUNK_X], J[J_TRUNK_Y], J[J_TRUNK_R], J[J_TRUNK_Z0], J[J_TRUNK_Z1])
     if t < best:
@@ -537,18 +548,6 @@ def scanner_origin(p: StreetParams) -> np.ndarray:
     return np.array([sx, sy, _ground(sx, sy, P)[0] + p.scanner_height])
 
 
-def ground_height(p: StreetParams, x, y) -> tuple[np.ndarray, np.ndarray]:
-    """Ground truth surface height and class name per (x, y) (for tests), vectorised over numpy arrays."""
-    P = _param_vector(p)
-    x = np.asarray(x, dtype=np.float64).ravel()
-    y = np.asarray(y, dtype=np.float64).ravel()
-    z = np.empty(x.size)
-    m = np.empty(x.size, np.int64)
-    for i in range(x.size):
-        z[i], m[i], _ = _ground(x[i], y[i], P)
-    return z, np.array([MATERIALS[k][0] for k in m])
-
-
 def _run(p: StreetParams, step_rad: float):
     P = _param_vector(p)
     J = _object_vector(p, P)
@@ -595,16 +594,14 @@ def make_street(params: StreetParams | None = None, taxonomy: Taxonomy | None = 
 
     mat = m[hit]
     lut_cls = np.zeros(256, np.uint8)
-    lut_flag = np.zeros(256, np.uint8)
     lut_rgb = np.zeros((256, 3), np.float32)
     lut_ref = np.zeros(256, np.float32)
-    for code, (name, flag, rgb, refl) in MATERIALS.items():
-        lut_cls[code] = tax.class_id(name)
-        lut_flag[code] = tax.flag_mask(flag) if flag else 0
+    for code, (_, cls_name, rgb, refl) in MATERIALS.items():
+        lut_cls[code] = tax.class_id(cls_name) if cls_name else 0
         lut_rgb[code] = rgb
         lut_ref[code] = refl
     cls = lut_cls[mat]
-    flags = lut_flag[mat]
+    flags = np.zeros(hit.size, np.uint8)
 
     instance = np.zeros(hit.size, np.uint32)
     instance[(mat == M_TRUNK) | (mat == M_CANOPY)] = 1
@@ -625,6 +622,7 @@ def make_street(params: StreetParams | None = None, taxonomy: Taxonomy | None = 
         intensity=intensity,
         cls=cls,
         flags=flags,
+        material=mat.astype(np.uint8),
         instance=instance,
         row=row,
         col=col,
@@ -660,6 +658,7 @@ def tiled_copy(scan: SynthScan, copies: int, gap: float = 2.0) -> SynthScan:
         intensity=rep(scan.intensity),
         cls=rep(scan.cls),
         flags=rep(scan.flags),
+        material=rep(scan.material),
         instance=rep(scan.instance),
         row=rep(scan.row),
         col=rep(scan.col),
@@ -704,6 +703,7 @@ def write_street_e57(scan: SynthScan, path: str | Path, *, invalid_fraction: flo
         path.with_name(path.name + ".gt.npz"),
         cls=scan.cls,
         flags=scan.flags,
+        material=scan.material,
         instance=scan.instance,
         invalid=invalid,
         origin=scan.origin,
@@ -711,3 +711,13 @@ def write_street_e57(scan: SynthScan, path: str | Path, *, invalid_fraction: flo
         taxonomy_sha256=np.array(scan.taxonomy_sha256),
     )
     return path
+
+
+def store_order(xyz, max_points: int, *columns):
+    """Points as a project stores them: tiled (at most ``max_points`` per tile) and reordered. Returns (xyz in store
+    order, the tile table, each of ``columns`` in store order), the arrays contiguous."""
+    from pclabel.store.tiles import TilingParams, build_tiles
+
+    xyz = np.asarray(xyz, np.float32)
+    tiles, order = build_tiles(xyz, TilingParams(max_points=max_points))
+    return (np.ascontiguousarray(xyz[order]), tiles, *(np.ascontiguousarray(np.asarray(c)[order]) for c in columns))

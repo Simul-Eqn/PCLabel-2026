@@ -43,19 +43,15 @@ from PySide6.QtWidgets import (
 
 from pclabel.render.shaders import MODE_LABELS
 from pclabel.store.annotations import PALETTE
-from pclabel.store.importer import write_json_atomic
-from pclabel.tools.labelmap import LABEL_MAP_SCHEMA, LabelMapParams, label_map
+from pclabel.store.util import write_json_atomic
+from pclabel.taxonomy import hex_rgb
+from pclabel.tools.labelmap import LabelMapParams, label_map, map_document
 from pclabel.ui.docks import _spin
 
 NO_LABEL = ""  # point sets, segments and curves without a label (own or inherited)
 GROUP = Qt.ItemDataRole.UserRole + 1  # a legend row for a class not in use itself, above classes in use
 NO_LABEL_COLOR = "#9e9e9e"
 LEGEND_WIDTH = 240  # pixels: the legend strip on the right of the map image
-
-
-def _rgb(hex_color: str) -> tuple:
-    h = hex_color.lstrip("#")
-    return tuple(int(h[i : i + 2], 16) for i in (0, 2, 4))
 
 
 class LabelsDock(QDockWidget):
@@ -90,9 +86,13 @@ class LabelsDock(QDockWidget):
         self.export_ann = QPushButton("export annotations...")
         self.export_ann.setToolTip("the point sets, segments and curves with the ticked labels, in their directories, "
                                    "as an annotations file (like \"export all\"; imports with the same labels)")  # fmt: skip
+        self.export_vec = QPushButton("export vectors...")
+        self.export_vec.setToolTip("the segments, curves, polylines and markers with the ticked labels, for CAD or GIS: "
+                                   "DXF (a layer per label) or GeoJSON (with attributes), in the scan's coordinates")  # fmt: skip
         self.tick_all = QPushButton("tick all")
         self.tick_none = QPushButton("tick none")
         erow.addWidget(self.export_ann)
+        erow.addWidget(self.export_vec)
         erow.addWidget(self.tick_all)
         erow.addWidget(self.tick_none)
         v.addLayout(erow)
@@ -168,6 +168,7 @@ class LabelsController(QObject):
         d.legend.itemDoubleClicked.connect(lambda it, col: self.pick_color(it.data(0, Qt.ItemDataRole.UserRole)))
         d.export.clicked.connect(lambda: self.export_map())
         d.export_ann.clicked.connect(lambda: self.export_annotations())
+        d.export_vec.clicked.connect(lambda: self.export_vectors())
         d.tick_all.clicked.connect(lambda: self.set_shown(self.labels_in_use()))
         d.tick_none.clicked.connect(lambda: self.set_shown([]))
         d.cancel.clicked.connect(self.cancel)
@@ -211,7 +212,7 @@ class LabelsController(QObject):
     def color_table(self, codes) -> np.ndarray:
         table = np.zeros((256, 4), np.uint8)
         for k, c in codes.items():
-            table[c, :3] = _rgb(self.color(k))
+            table[c, :3] = hex_rgb(self.color(k))
             table[c, 3] = 255
         return table
 
@@ -281,6 +282,36 @@ class LabelsController(QObject):
         n = self._model().export(path, w.project, labels=labels)
         shown = ", ".join(lab or "(no label)" for lab in labels)
         self.dock.status.setText(f"exported {n} item{'' if n == 1 else 's'} ({shown}) to {path}")
+        return path
+
+    def export_vectors(self, path=None):
+        """The segments, curves, polylines and markers with the ticked labels as DXF (a layer per label, in the
+        labels' colours) or GeoJSON (with attributes), by the file's suffix (io/vector_export.py)."""
+        from pclabel.io.vector_export import write_vectors
+
+        w = self.w
+        if w.project is None:
+            return None
+        labels = [lab for lab in self.labels_in_use() if lab not in self.hidden]
+        if not labels:
+            self.dock.status.setText("tick the labels to export first")
+            return None
+        if path is None:
+            path, _ = QFileDialog.getSaveFileName(w, "Export vectors with the ticked labels", f"{w.project.name} vectors.dxf",
+                                                  "DXF drawing (*.dxf);;GeoJSON (*.geojson)")  # fmt: skip
+            if not path:
+                return None
+        try:
+            res = write_vectors(path, self._model(), w.project, {k: self.color(k) for k in labels}, labels, w.taxonomy)
+        except (ValueError, OSError) as e:
+            self.dock.status.setText(f"no export: {e}")
+            return None
+        if "layers" in res:
+            parts = ", ".join(f"{k} {n}" for k, n in res["layers"].items())
+            self.dock.status.setText(f"exported {res['entities']} entities in {len(res['layers'])} layers ({parts}) to {path}")
+        else:
+            parts = ", ".join(f"{n} {k}" for k, n in res["by_kind"].items())
+            self.dock.status.setText(f"exported {res['features']} features ({parts}) to {path}")
         return path
 
     def fill_legend(self):
@@ -364,7 +395,7 @@ class LabelsController(QObject):
         lab = self._model().label_of(item.id)[0]
         if lab in self.hidden:
             return None
-        return tuple(v / 255 for v in _rgb(self.color(lab))) + (1.0,)
+        return tuple(v / 255 for v in hex_rgb(self.color(lab))) + (1.0,)
 
     def sync(self, force: bool = False):
         """Bring the legend (unless a click on it is being handled) and, in the labels view, the renderer's label codes
@@ -385,12 +416,9 @@ class LabelsController(QObject):
         codes = self.codes()
         layers = [(ps.indices, codes[lab]) for lab, ps in m.label_layers() if lab in codes]
         vp = self.w.viewport
-        vp.makeCurrent()
-        try:
+        with vp.current():
             r.set_label_colors(self.color_table(codes))
             r.set_label_layers(layers)
-        finally:
-            vp.doneCurrent()
         self._synced = key
         vp.update()
 
@@ -487,7 +515,9 @@ class LabelsController(QObject):
         png = Path(job["path"])
         if png.suffix.lower() != ".png":
             png = png.with_suffix(".png")
-        doc = self._document(job, res, seconds)
+        doc = map_document(self.w.project, self.w.taxonomy, res, job["codes"], {k: self.color(k) for k in job["codes"]},
+                           job["frame"], job["vectors"], Path(job["path"]).with_suffix(".png").name,
+                           LEGEND_WIDTH if job["legend"] else 0, job["context"], seconds)  # fmt: skip
         image = self._image(res["rgba"], doc["legend"] if job["legend"] else None)
         if not image.save(str(png)):
             self.dock.status.setText(f"could not write {png}")
@@ -498,33 +528,6 @@ class LabelsController(QObject):
         t = res["transform"]
         self.dock.status.setText(f"{t['width']:,} x {t['height']:,} px at {100 * t['pixel']:g} cm on {job['frame'].name}"
                                  f", {seconds:.1f} s: {png} (and {side.name})")  # fmt: skip
-
-    def _document(self, job, res, seconds) -> dict:
-        w = self.w
-        src = w.project.meta.get("source", {})
-        class_ids = {c["name"]: int(c["id"]) for c in w.taxonomy.classes}
-        flags = {f["name"]: int(f["bit"]) for f in w.taxonomy.flags}
-        legend = []
-        for lab, code in job["codes"].items():
-            legend.append({"label": lab, "color": self.color(lab), "code": code, "class_id": class_ids.get(lab),
-                           "flag_bit": flags.get(lab), "pixels": res["pixels"].get(code, 0),
-                           "points_drawn": res["points"].get(code, 0)})  # fmt: skip
-        vectors = [dict(info, map_xy=np.round(uv, 4).tolist()) for info, uv in zip(job["vectors"], res["vectors_uv"])]
-        return {
-            "schema": LABEL_MAP_SCHEMA,
-            "source": {"file": Path(src.get("path", "")).name, "sha256": src.get("sha256"), "n_valid": w.project.n},
-            "offset": [float(v) for v in w.project.offset],
-            "plane": job["frame"].to_json(),
-            "transform": res["transform"],
-            "image": {"png": Path(job["path"]).with_suffix(".png").name, "map_columns": res["transform"]["width"],
-                      "legend_strip": LEGEND_WIDTH if job["legend"] else 0},  # fmt: skip
-            "params": dict(res["params"], context=job["context"]),
-            "overlaps": "smaller point sets are drawn over larger ones; segments and curves over the points",
-            "legend": legend,
-            "vectors": vectors,
-            "seconds": round(seconds, 2),
-            "created": time.strftime("%Y-%m-%d %H:%M:%S"),
-        }
 
     def _image(self, rgba, legend) -> QImage:
         h, wd = rgba.shape[:2]

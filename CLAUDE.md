@@ -1,140 +1,115 @@
 # PCLabel: notes for Claude Code
 
-PCLabel is a desktop app for labelling very large outdoor terrestrial laser scans (TLS: xyz + RGB + intensity) of
-Singapore street scenes point by point, with classes such as road, curb, pavement, drain, grass, tree and lamp post.
+PCLabel turns terrestrial laser scans (xyz + RGB + intensity, hundreds of millions of points) of Singapore street
+scenes into a vector map for incident-scene sketch plans. It has two parts on one code base:
 
-**Status:** M0 (stack spike) and M1 (import and view) are done; all five scans are imported. M2 is in progress
-(selection, ground grow, magic select by intensity, plane height axis and its export, slice, and SPEC §13's
-segments, curves and annotation directories built). Labelling is done by labelling annotation directories and
-items (D-007, the user's decision of 2026-10-20). See the results blocks in [docs/ROADMAP.md](docs/ROADMAP.md).
+- a desktop app in which the user labels scans with assisted tools (curb tracer, magic select by intensity, tree
+  tool and others);
+- an automatic pipeline, being built, that produces the same output with no clicks.
 
-**Commands** (conda env `pclabel`; set up as described at the top of `requirements.txt`):
-- `python -m pclabel ["streets 1"] [--gl software]` opens the app (optionally a project by name or path).
-- `python -m pclabel import <file.e57> [--name N]` imports a scan; `python -m pclabel info <project>` summarises one.
-  Projects go to `C:\Users\desktopms\Documents\PCLabel_projects\` (all five scans are imported there).
-- `python -m pytest` runs the tests. GL tests run on Mesa llvmpipe (CPU), never on the GPU.
-- `python bench/bench_read.py`, `bench_select.py` and `bench_render.py [--gl software]` run the benchmarks
-  (`--json <out>` saves raw numbers). `python bench/check_open.py "streets 1" [--gl software]` is the M1 manual
-  check. The GPU benchmarks refuse to measure while another process keeps the GPU busy.
+The app makes the reference labels, shows the pipeline's output beside them, and is where the user corrects it.
 
-**The GPU is shared with training runs** (e.g. the CurbNet Docker container). The user confirmed (2026-10-19) that
-using the GPU for PCLabel alongside training is fine. However, fps measured while training runs is not
-representative: the benchmarks warn and refuse unless `--force`, and results must say so. `--gl software` (Mesa
-llvmpipe in `%LOCALAPPDATA%\PCLabel\mesa-26.2.4`, CPU only) remains available, and the tests always use it.
+**Priorities:** curb lines and road markings first; then trees and poles as a 2D map (a marker each, plus the
+trunk's cross-section for trees); then surfaces.
 
-## why this exists (read before designing anything)
+**Current work:** [docs/plans/02_auto_pipeline.md](docs/plans/02_auto_pipeline.md)
+([docs/plans/01_cleanup.md](docs/plans/01_cleanup.md) is done). Background on the downstream use is in
+[docs/CONTEXT.md](docs/CONTEXT.md).
 
-- The labels are **reference data for tuning and scoring the thresholds of algorithmic (non-ML) methods**. Those
-  methods turn a scan into a vector road map (curb lines, markings, poles) for incident-scene sketch plans. The labels
-  are not mainly ML training data. Background: [docs/CONTEXT.md](docs/CONTEXT.md).
-- The project is at the stage of **setting the labelling standard**. The most valuable output of a labelling
-  session is not the labels themselves. It is the **observations**, e.g. "the only points below the road surface
-  are the drains that periodically interrupt the curbs", and the **decisions** they lead to, e.g. "a park
-  connector counts as pavement". They live in [docs/OBSERVATIONS.md](docs/OBSERVATIONS.md) and
-  [docs/LABELLING_STANDARD.md](docs/LABELLING_STANDARD.md).
-- So the app has two jobs, in this order of design priority:
-  1. make subtle scene facts **visible** (cm-scale height differences, material and intensity changes, occlusion,
-     density) and make **recording** them almost free;
-  2. make labelling fast, precise and reproducible on clouds of 600M+ points.
-- For every view or tool you build, answer two questions: *what can the labeller notice now that they could not
-  before, and how do they record it in two keystrokes or fewer?*
+## you maintain this code
 
-## hard constraints
+You are the only maintainer, and the structure is yours. Nothing in the existing code or docs is fixed.
 
-- **Standalone.** The user does not want PCLabel based on pcview or on other code in the sibling folders (`..`:
-  pcview, Roadrun, CurbNet-main, scene2sketch, …). Design it from scratch and do not import from those folders. The
-  facts about the data and the domain collected in `docs/` are fine to use.
-- **Source scans are read-only.** Never write into `../data/` and never modify a source file. Imported projects
-  (large binaries) go into a projects directory outside the repo (default
-  `C:\Users\desktopms\Documents\PCLabel_projects\`, configurable).
-- **Labels are per point, at full resolution.** A selection applies to every point inside it, not only to the
-  level-of-detail subset that is drawn. Exports map back to the source file's point order exactly
-  ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#source-order)).
-- **0 means unassessed**, never "not this class". "Assessed, and none of the classes" is its own class (`other`).
-- **The taxonomy is data.** It lives in [config/taxonomy.yaml](config/taxonomy.yaml). No class id except 0 is
-  hard-coded.
-- **Every label change goes through the journal**: tool, parameters, selection definition, point count, time,
-  standard version. Undo and redo use the journal. A crash loses at most the operation in progress.
-- **Assisted tools record their parameters.** Those parameters are the thresholds being studied. The labeller's
-  corrections after an assisted operation are the evidence for tuning them.
-- **Coordinates:** local metres, z up, not georeferenced. Store float32 positions relative to a float64 project
-  offset, and never drop the offset from outputs.
+- Merge and delete in preference to adding beside. If a function nearly does what you need, change it.
+- One implementation per algorithm. The pipeline calls the same function as the interactive tool.
+- Docs describe what is built. Plans go in `docs/plans/`. Git history is the archive: delete stale text.
+- Add a rule to this file only after a mistake that the rule would have prevented.
 
-## machine
+Three things are not yours: the labelling standard, the source scans, and the user's labelled projects.
 
-Windows 11 workstation: i9-14900KF (24 cores / 32 threads), 128 GB RAM, NVIDIA RTX A4000 (16 GB VRAM; Windows WMI
-misreports it as 4 GB), NVMe SSD with about 570 GB free. Desktop only: no web server, no browser UI. One user.
+## the labelling standard is the user's
 
-## stack (planning decision; the M0 spike confirms or rejects it)
+- The user's own notes are the standard: `ignore/labelling_standards.md` and `ignore/labelling_procedure.md`
+  (`ignore/` is gitignored and holds the user's notes and images). Where `docs/LABELLING_STANDARD.md` or
+  `config/taxonomy.yaml` differ, the notes win and the repo's files are fixed to match.
+- Never mark a rule `decided`, or change a decided rule, unless the user says so. Write it as `proposed` and ask.
+- When the user mentions something they noticed in the data, offer `/observe`. When they decide a labelling
+  question, offer `/decide`.
 
-Python 3.12 · PySide6 (Qt 6 widgets, docks, shortcuts) · moderngl inside a `QOpenGLWidget` (OpenGL 4.3+ core:
-custom point shaders, SSBOs, compute if needed) · numpy + numba (all per-point work; never Python loops over
-points) · scipy (KD-trees, fitting) · pyqtgraph (histograms, the profile view) · pye57, laspy[lazrs], plyfile (I/O)
-· pyyaml · pytest.
+## mistakes that are costly here
 
-Why this stack:
-- The standard feeds Python threshold algorithms, so tools, statistics and assisted methods must run in the same
-  numpy world.
-- Qt gives a real desktop UI with docks and keyboard shortcuts.
-- moderngl gives full control over the shaders (height wrap, plane-relative height, eye-dome lighting).
+**Data**
+- Source scans and drawings are read-only, wherever they are (`../data/`, `../review_commercial/`). Open E57
+  files only as `io/e57.py` does, with `libe57.ImageFile(path, "r")`. `pye57.E57(path)` can delete its input.
+- The projects in `C:\Users\desktopms\Documents\PCLabel_projects\` hold weeks of hand labelling. No script or
+  pipeline run writes to a project's `annotations.json` or `annotations/*.npy`; pipeline output goes to
+  `<project>/auto/`.
+- Saved projects must keep loading. When an on-disk or export format changes, bump its `schema`, keep reading
+  the old one, and update [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-If the M0 spike misses its targets, stop and report the numbers and the alternatives (e.g. VisPy, or a small
-C++/Rust renderer module) before switching.
+**Meaning of labels**
+- Labels live on annotation items and directories. A point in no labelled set has not been assessed; it is not
+  a negative. "Assessed, none of the classes" is the label `other`.
+- A selection or label applies to every point inside it at full resolution, not to the subset that is drawn.
+- Store order is not source order. Exports go through `source_index`.
+- A tool's output is not evidence for that tool unless the user confirmed or edited it (`assisted`, `edited`).
+- Every assisted or automatic result records its parameter dataclass. Those thresholds are what is being
+  studied.
+- The taxonomy is data ([config/taxonomy.yaml](config/taxonomy.yaml)). No class id or class name is hard-coded.
 
-## planned layout
+**Geometry**
+- Positions are float32 relative to a float64 project offset. Tools return local coordinates; everything
+  written out is in scan coordinates and carries the offset.
+- Roads in one scan slope differently, so no single plane is the ground for a whole scan. The app's height
+  axis is a plane the user fits for the area in view; automatic stages take heights from a local ground
+  surface.
 
-```
-pclabel/              package
-  io/                 E57 / LAS / PLY readers (chunked), exporters
-  store/              project store: columns, tiles, labels, journal
-  render/             GL context, shaders, LOD streaming, EDL, overlays
-  tools/              selection, labelling, assisted tools (numpy/numba, no Qt or GL)
-  analysis/           reference frames and surfaces, features, stats, queries, lint
-  ui/                 Qt windows, docks, keymap
-  synth/              synthetic street generator with ground truth
-config/taxonomy.yaml  classes and flags (source of truth)
-docs/                 context, standard, observations, spec, architecture, roadmap
-tests/                pytest, synthetic data only
-bench/                benchmark scripts (not run by pytest)
-```
+**Code**
+- `tools/`, `analysis/`, `store/`, `io/`, `ops/`, and the planned `auto/` and `scoring/` import no Qt and no GL. What
+  turns a tool's result into annotations lives in `ops/`, so the app and the pipeline save the same things.
+- No Python loops over points: numpy and numba. On selections use the merges in `tools/sets.py`, not
+  `np.union1d`, `setdiff1d` or `unique`, which took tens of seconds at 100M points.
+- Qt: deliver a worker's result to its handler in the UI thread.
+- Windows: open text files with `encoding="utf-8"`. With the cp1252 default a failed write can leave an empty
+  file.
+- The repo's text files have CRLF line endings. Python's `read_text` / `write_text` and `sed -i` produce LF or
+  mixed endings: edit with the Edit tool, or read and write bytes keeping `\r\n`.
+- Do not import code from the sibling folders (`../pcview`, `../Roadrun`, `../CurbNet-main`,
+  `../scene2sketch`). The user wants PCLabel standalone.
+- Ask before adding a dependency.
 
-Keep algorithms (`tools/`, `analysis/`) free of Qt and GL. That way they can be unit-tested and later reused by the
-threshold algorithms.
+**Measuring**
+- Tests use synthetic scenes from `pclabel.synth` and never the real scans. GL tests run on Mesa llvmpipe.
+- The GPU is shared with training runs. The render benchmarks refuse to measure while it is busy; a forced
+  result must say so.
+- Report measured numbers on named scans. A script whose number is cited in the docs lives in `bench/`, not in
+  the scratchpad.
 
-## conventions
+## commands
 
-- Tunable parameters live in dataclasses, one per tool. They are shown in the tool's panel and written into every
-  journal entry and export sidecar.
-- The UI thread never blocks for more than about 100 ms. Long jobs (import, feature computation, region growing on
-  millions of points) run in worker threads with progress and cancel. numba kernels use `nogil=True`.
-- Tests use `pclabel.synth` scenes with known ground truth. No test may need the real multi-GB scans. Real-data
-  checks are manual and listed per milestone in [docs/ROADMAP.md](docs/ROADMAP.md), with their measured results
-  written back there.
-- Windows: always open text files with `encoding="utf-8"`. With the cp1252 default, a failed write can leave an
-  empty file.
-- When behaviour changes, update [docs/SPEC.md](docs/SPEC.md). When an on-disk or export format changes, update
-  [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and bump its `schema` version.
-- Use the session scratchpad for throwaway scripts and keep the repo clean.
-- Ask before adding a dependency that is not in the stack above.
+Conda env `pclabel`; set-up is described at the top of `requirements.txt`. If `conda run -n pclabel` fails in
+the tool shell, call `C:\Users\desktopms\anaconda3\envs\pclabel\python.exe` directly.
 
-## working with the user
-
-- The user is the labeller and owns the labelling standard. Never mark a rule `decided` in LABELLING_STANDARD.md,
-  or change a decided rule, unless the user says so. Write it as `proposed` and ask.
-- The user decides the open questions in [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md) after labelling, from
-  evidence. Don't push for decisions. Until a question is decided, its *meanwhile* line is the working rule. Tools
-  that need a definition (e.g. lint checks) use it, and must make it easy to change later.
-- When the user mentions something they noticed in the data, offer to record it with `/observe`. When they make a
-  labelling decision, offer `/decide`. Observations exported from the app are merged with `/ingest-observations`.
-  The commands are in `.claude/commands/`.
-- At the end of each milestone, give a short "try it" guide: which scan to open, which keys to press and what the
-  labeller should look for. That is how the tool earns observations.
-- Report performance as measured numbers on named files, not impressions.
+- `python -m pclabel ["streets 1"] [--gl software]` opens the app.
+- `python -m pclabel import <file.e57> [--name N]` imports a scan; `python -m pclabel info <project>`
+  summarises one.
+- `python -m pytest` runs the tests.
+- `python bench/bench_read.py`, `bench_select.py`, `bench_render.py [--gl software]` run the benchmarks.
 
 ## data
 
-The source scans (read-only) are in `../data/`; sizes and fields are in
-[docs/CONTEXT.md](docs/CONTEXT.md#the-scans).
-- `newroad 2.e57` (8.4M points): quick checks.
-- `ExchangeGreen/BLKARC/Fast/ExchangeGreenFast 1.e57` (29.7M points): the mid-size case.
-- `streets 1.e57` (634M points, 12 GB): the stress test.
+Source scans are in `../data/` and `../review_commercial/ROCK_planimetrics/`; sizes and fields are in
+[docs/CONTEXT.md](docs/CONTEXT.md#the-scans). Imported projects:
+
+| project | points | labels |
+|---|---|---|
+| `streets 1` | 634M | the user's: curbs, road, road lines, pavement, trees, poles |
+| `ExchangeGreen 1` | 257M | the user's: curbs, road, road lines; trees and poles in part |
+| `mobile-colorized-v2-1` | 596M | a vendor's drawing, imported; a US scene |
+| `newroad 2` | 8.4M | none; the quick check |
+| `ExchangeGreenFast 1`, `ExchangeGreenSlow 1`, two ROCK demo scans | 16M to 253M | none |
+
+## working with the user
+
+- End a feature with a short "try it": which scan to open, which keys to press, what to look for.
+- The machine is one Windows 11 workstation (i9-14900KF, 128 GB RAM, RTX A4000 16 GB). Desktop only, one user.

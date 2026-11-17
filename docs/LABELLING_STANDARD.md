@@ -1,334 +1,139 @@
 # labelling standard
 
-**Version 0.2 (draft), 2026-11-04.** This file and [../config/taxonomy.yaml](../config/taxonomy.yaml) together define
-the standard. The app records a hash of both with every label operation, so labels can always be traced to the
-rules they were made under.
+**Version 0.3, 2026-11-16.** Written from the user's notes, [`ignore/labelling_standards.md`](../ignore/labelling_standards.md)
+and [`ignore/labelling_procedure.md`](../ignore/labelling_procedure.md), which hold the step-by-step methods and
+their screenshots. Where this file and the notes differ, the notes win and this file is fixed. Class ids, names and
+colours are in [`config/taxonomy.yaml`](../config/taxonomy.yaml) (version 0.7); this file says when to use them.
 
-How this file works:
-- Each rule has an id `R-NNN` and a status:
-  - `decided`: the user decided it;
-  - `proposed`: a suggestion waiting for the user's decision;
-  - `superseded`: kept for history, pointing to its replacement.
-- Each rule links the observations (`O-NNNN`, in [OBSERVATIONS.md](OBSERVATIONS.md)) that motivated it.
-- A rule may have a `check:`, a query in the app's query language ([SPEC.md](SPEC.md) §9).
-  The label lint runs it to find points that break the rule. Each hit is either a mislabel or a counterexample worth
-  an observation.
-- Only the user moves a rule to `decided`. Record decisions with `/decide`.
-- Never renumber or delete a rule; supersede it.
+Every rule here is **decided** by the user unless it is marked **proposed**. Only the user decides a rule; record a
+decision with `/decide`. Open questions are in [undecided](#undecided) at the end.
 
-## principles (proposed)
+## general rules
 
-- **P1 Function of the permanent surface.** Label a surface by who it is built for, not by what is on it at the
-  moment. A park connector is for pedestrians and cyclists, so it is pavement. A parked car is `vehicle`; the road
-  under it has no points.
-- **P2 Zero is unassessed.** Inside an assessed region, every point gets a class; `other` exists for "none of
-  these". Unlabelled points are never counted as negatives.
-- **P3 Unsure means flag, not skip.** Label your best guess, set the `ambiguous` flag and log an observation
-  tagged `decision-needed`. Do not leave unsure points at 0 inside an assessed region.
-- **P4 No points, no label.** Do not invent surfaces that were not scanned. Occlusion is recorded as an observation
-  or a region status, not as labels.
-- **P5 Two indicators, zoomed in.** Before placing a boundary, check geometry (height in a flattened frame, a cross
-  section) and appearance (RGB, intensity). Full-scene views mislead: earlier work here twice took a building edge
-  and an embankment for a kerb. If the indicators disagree, log it.
-- **P6 Boundary precision.** Where points exist, place class boundaries to within about 2 cm, the scale of the
-  thresholds being tuned. Where the data does not allow that, set `ambiguous` rather than guessing a sharp edge.
-- **P7 Rules over taste.** If a rule gives a label that looks wrong, follow the rule and log the case. The rule
-  changes; individual points do not.
-- **P8 Labels form a tree — decided** (the user, 2026-11-04). Each class is a kind of its parent (taxonomy
-  `parent`): `road_line`, `gutter`, `parking`, `driveway` and `ramp` are kinds of `road`, which is a kind of
-  `ground`; `pavement` has no sub-labels ("pavement should remain its own specific thing").
-  - In the user's words: use the parent label "if it's not covered by a sub-label, or we're lazy, or not fully sure";
-    otherwise be more specific with the sub-label.
-  - So a parent label says no more than its parent: scoring a sub-label leaves out points labelled only with the
-    parent (they may be any of its kinds), and counts at the parent include every kind below it.
-  - Where point sets overlap along one branch (a road set holding its lines), the more specific label is the
-    point's; overlaps across branches (road and curb) are conflicts.
-  - A few labels are for lines only (the curb's edges: `curb_top`, `curb_bottom`, `curb_back`) or markers only
-    (`cover`). Any other label means its points on a point set, its edge or outline on a line, and where it stands
-    on a marker.
+- **Unassessed is not negative.** A point in no labelled set has not been looked at. "Looked at, none of the
+  classes" is the label `other`, whose points no tool selects.
+- **Labels form a tree** (2026-11-04). A class is a kind of its parent: `road_line`, `ramp` and `driveway` are kinds
+  of `road`. Use the parent when no sub-label fits, when unsure which, or to label quickly. Counting a class counts
+  its kinds.
+- **A label covers every point in its set**, at full resolution, not only the points drawn.
+- **Uncertain** is a mark on an item (a point set, a curve or a marker), never on a directory. The guideline: where
+  the point density is under 500 points/m² (the density tool), an item may be marked uncertain; above it, it is not.
+  Features you are sure of need no mark at any density. A class may add its own guideline. The 500 comes from where
+  intensity select starts to fail on streets 1 (the procedure's road lines section).
+- **Exclude.** Objects in the way (artefacts, things on the pavement) may be saved as a point set labelled `exclude`
+  and locked, so later selections skip them.
 
-## classes (summary; the yaml is authoritative)
+## order of work
 
-The tree (P8; taxonomy 0.5, 2026-11-04). Indented classes are kinds of the class above them.
+Curb, ramp, road, road lines, pavement, trees, vegetation, poles.
 
-| id | class | status | short definition | rule |
-|---|---|---|---|---|
-| 0 | unassessed | core | not yet looked at | R-001 |
-| 100 | **ground** | core | the ground surface and what is built into it | P8 |
-| 1 | · road | core | carriageway surface for vehicles; a line: the road's edge | R-005 |
-| 10 | · · road_line | core (user, 2026-10-28) | painted lines and markings on the road, parking bay lines too | R-006 |
-| 11 | · · gutter | proposed | concrete channel or gutter strip between road and kerb | Q-10 |
-| 12 | · · parking | proposed | parking bays and car park surfaces | — |
-| 8 | · · driveway | core (placed by the user, 2026-11-04) | vehicle crossing over the pavement | R-010 |
-| 9 | · · ramp | core (user, 2026-10-22; under road, 2026-11-04) | sloped surface between pavement and road (extent pending) | R-007 |
-| 2 | · curb | core | raised kerb unit (extent pending) | R-004 |
-| 3 | · · curb_lowered | proposed | kerb unit at a dropped/ramped section | R-007 |
-| 13 / 14 / 15 | · · curb_top / curb_bottom / curb_back | proposed, lines only | the kerb's lip, toe and back | R-004 |
-| 4 | · pavement | core | footpaths, park connectors, cycling/shared paths | R-002, R-009 |
-| 5 | · drain | proposed | inlets, gratings, channels, drain covers, pits | R-003 |
-| 16 | · cover | proposed, markers only | a manhole or utility cover (its points keep their surface's class) | R-005 |
-| 17 | · hard_surface | proposed | other paved ground: pads, aprons, concrete areas | — |
-| 6 | · grass | core | turf, ground cover, bare soil in verges | R-011 |
-| 7 | · island | proposed, disabled | only if R-008 picks a separate class | R-008 |
-| 101 | **vegetation** | core | plants | P8 |
-| 20 | · shrub_hedge | proposed | shrubs, hedges, planted beds | R-011 |
-| 23 | · tree | proposed | one tree; a marker: where it stands | R-015, R-017 |
-| 21 / 22 | · · tree_trunk / tree_canopy | core (split proposed) | trunk and stems / leaves and twigs | R-011 |
-| 102 | **pole** | core | pole-like objects (use it when unsure which kind) | R-012 |
-| 30 | · lamp_post | core | lamp pole with arm and head | R-012 |
-| 31 | · traffic_light_pole | proposed | signal pole with arms and heads | R-012 |
-| 32 | · other_pole | proposed | sign posts, bollards, camera and utility poles | R-012 |
-| 103 | **structure** | core | built structures and furniture | P8 |
-| 40, 45, 41, 43, 42, 46, 44 | · building_wall, wall, fence_railing, barrier, roof_shelter, bridge, street_furniture | proposed | structures and furniture | — |
-| 104 | **temporary** | core | temporary and moving things | R-013 |
-| 50–53 | · vehicle, person, temporary_object, ghost | proposed | | R-013 |
-| 60 | noise | proposed | points on no real surface | R-014 |
-| 61 | other | core | assessed, fits no class ("no class": its points are never selected, taxonomy `selectable: false`, user 2026-10-20) | — |
+## curb
 
-Flags: `ambiguous`, `marking` (R-006), `under_cover`, `exclude`, `reviewed`.
+- The curb is a **line, not points**: a curve along the **top, outermost edge** of the raised curb, label `curb`.
+  The curb's sides and the strip beside it are not selected.
+- Draw the top, not where the curb meets the ground: the scanner often misses the foot because the curb hides it.
+- Where the walkway drops gradually to the road (a crossing, a driveway), the curve runs straight across it.
+- One curb per area is one curve. Pavement and vegetation are selected from that curve.
+- Older labels and the curb tracer write the same line as `curb_top`; it counts as `curb`. `curb_bottom` and
+  `curb_back` exist only so vendor drawings import.
 
-With labels on annotations (D-007), `ambiguous` is the **uncertain** mark on an item: a point set, segment or
-curve, never a directory (added 2026-10-22 at the user's request; items only since 2026-10-26). The label is the
-labeller's best guess, kept out of scoring by default (R-001). It is exported with the labels.
+**The two stages.** A curb often has two stages: a lower strip at road level beside the road (where the drains are),
+then the raised curb. The strip is sometimes faint and sometimes absent. It has **no label**: it is neither road nor
+curb.
 
-## rules
+## ramp
 
-### R-001 Zero means unassessed — proposed
-- **Rule:** label 0 means only "nobody has assessed this point". Assessed regions are drawn in the app. Scoring and
-  threshold statistics use only points inside assessed regions, and exclude `ambiguous` and `exclude` points
-  unless asked.
-- **Why:** partial labelling is the plan; unlabelled must never mean negative.
+- A ramp is a **kind of road** (2026-11-16): its points are road, and ramp says which part.
+- The ramp is the part more than **0.1 m above a plane fitted to the road around it** (3D select from 0.1 m up on that
+  plane).
+- **Proposed:** the method has not been tried yet.
 
-### R-002 Park connectors are pavement — **decided** (user; recorded 2026-10-16)
-- **Rule:** the paved surface of a Park Connector Network path is `pavement`, whatever its colour or material,
-  including where it runs alongside the road.
-- **Why:** it is built for pedestrians and cyclists, not vehicles (P1).
-- **Examples:** O-0001.
-- **Open edge cases:**
-  - where a park connector crosses a road (the crossing is road?);
-  - boardwalks and bridges;
-  - its kerb against the road (curb, as anywhere else?).
+## road
 
-### R-003 Below-road points at curb gaps are drain — proposed
-- **Rule:** points clearly below the local road surface where the curb is interrupted are `drain`: inlet openings,
-  gratings, channel bottoms. "Clearly below" gets a number once measured; start with 3 cm.
-- **From:** O-0002 (the only points below the road are the drains that periodically interrupt the curbs).
-- **Check:** `assessed and hs < -0.03 and class not in (drain, noise)`. This should find almost nothing; every
-  cluster it finds is a mislabel or a counterexample (manhole, pothole, depression, puddle hollow).
-- **Open:**
-  - Is the kerb lintel spanning an inlet curb or drain?
-  - Does the curb *line* continue across the inlet? For a sketch it probably should.
-  - Inlet spacing: measure it (instance tool), since it may be regular enough to help an algorithm.
+- Road is **everything bounded by the lower stage of the curbs**.
+- It does **not** include the strip beside the road.
+- It **includes** features on the road that are flat, can be driven over and would not reasonably be expected to cause
+  accidents, such as a flat drain cover or tiles in the road.
+- It includes ramps (above) and road lines (below).
+- Method: extrude-select from the curb curve with an inset of about −40 cm, matching the lower stage, or draw a curve
+  along the lower stage. Then remove what stands on the road (ground select, 3D select from a fitted plane, clean-up).
+  Check that no part of the lower stage is selected.
+- Driveways, the vehicle crossings over the pavement, are a kind of road (2026-11-04).
 
-### R-004 Which points are curb — proposed, **decision needed**
-Options:
-- **A. Face only:** points on the near-vertical riser between toe and lip.
-- **B. Kerb unit:** the face plus the top of the kerb unit, back to its joint with the pavement or verge where that
-  is visible (material, RGB or intensity change, or a joint line). Where it is not visible, take a fixed width
-  behind the lip (to be measured; start with 0.15 m).
-- **C. Band:** a fixed-width band around the step, like the automatically extended labels of 3D-Curb.
+## road lines
 
-Recommendation: **B**.
-- It matches a physical object and should be stable across scanners.
-- Algorithms can derive both the toe and the lip from it.
-- A has almost no points wherever the face is occluded (the no-point strip).
-- C mixes an algorithm parameter into the definition.
+- Painted lines and markings on the road, label `road_line`. They are also road: the **only points with two
+  classes**.
+- Method: magic select by intensity, clipped to the road set, coloured by intensity; or the marking tracer
+  (`Ctrl+Shift+T`).
 
-Also to decide: which line the vector map calls "the curb line" (toe, lip or face). Proposal: label points now,
-and later draw toe and lip as separate vector features (ROADMAP M9). The sketch can then use either.
+## pavement
 
-**Lines (proposed, 2026-11-04):** the kerb's edges are line labels, `curb_top` (the lip), `curb_bottom` (the toe:
-where the face meets the road or gutter) and `curb_back` (the back of the kerb unit, its joint with the pavement or
-verge). Draw each where it can be seen. ROCK's planimetrics draw exactly these three (O-0013): their top line 14.5 cm
-above and 7 cm out from the toe, the back 8 cm behind the top, which is option B's kerb unit.
+- The part **pedestrians can walk on**, including the yellow tactile paving and the part that slopes down to the
+  road, **up to a 5 cm inset from the curb curve**.
+- Other surfaces people can walk on (a manhole cover in the pavement) are pavement. Things people cannot walk on (a
+  fire hydrant and the raised square around it) are not.
+- Park connectors are pavement, whatever their colour or material (2026-10-16). Pavement has no sub-labels.
+- Method: clip with the curb at a 5 cm inset, label objects in the way `exclude` and lock them, then select the
+  pavement with a curve. Fitting a plane to the road helps: in the wrap-height view the flat pavement shows a regular
+  pattern.
 
-### R-005 Road extent — proposed
-- **Rule:** `road` is all vehicle-trafficable surface between curbs or other edges:
-  - lanes, shoulders, concrete bus bays;
-  - road humps, rumble strips;
-  - painted (chevron) islands, yellow boxes, zebra crossings;
-  - manhole and utility covers flush with the road, patches.
-- **Check:** `assessed and class == road and hs > 0.05` finds humps, vehicles labelled as road, and mislabelled
-  curb tops.
-- **Since 2026-11-04 (proposed):** a manhole or utility cover keeps its points as road (or pavement) and gets a
-  `cover` marker where it is; a gutter strip is `gutter`, a kind of road (Q-10's meanwhile).
+## tree
 
-### R-006 Road lines are a class within the road; other paint is a flag — proposed
-- **Rule:** painted lines and markings on the road (lane, edge and centre lines, stop lines, arrows, text,
-  zig-zags, parking bay lines) are `road_line` (id 10), a class that is **part of `road`** (since 2026-11-04: a kind
-  of road in the label tree, P8; until then taxonomy `subset_of: road`).
-  - The road's point set keeps its line points; the lines get point sets of their own labelled `road_line` (e.g.
-    magic select a dash, `I`, then `Ctrl+G` inside a "road lines" directory labelled `road_line`).
-  - A `road_line` point is a road point too. "Export labels" counts the road with its lines
-    (`points_with_descendants`), marks road ∩ road_line as an expected overlap (`nested: true`), and gives the
-    `road_line` points outside every road set (`outside_ancestors`): each is a line not yet inside the road's set,
-    or a mislabel.
-  - Paint on other surfaces (a painted kerb, markings on a pavement or a cycle path) keeps the class of its surface
-    and the `marking` flag, as before.
-- **History:** first proposed (2026-10-16) as a flag only. On 2026-10-21 the user asked for a "road lines" class
-  and got `marking` point sets overlapping the road. On 2026-10-28 the user asked for a road lines class "which is
-  going to be a subset of the road class": this version.
-- **Open:** whether the blurred edge of a line (mixed returns at the paint's border) is line or road; whether worn
-  or ghost lines count; whether studs and cat's eyes are road_line. Marking type stays Q-14.
-- Marking type (lane, edge, double yellow, zig-zag, arrow, text) is not per point for now. Use instances or vector
-  features later if the algorithms need it.
+- A tree is one directory (the instance) holding:
+  - its **band**: the trunk's points **1.00 to 1.10 m above the base of the tree**, label `tree_trunk`. Singapore
+    measures girth 1 m above the ground (Parks and Trees regulations, amended 2017), and at that height bushes rarely
+    block the trunk;
+  - its **marker**, label `tree`: the centre of a circle fitted to the band projected on the height plane, at the
+    height of the base. A circle still finds the centre when only one side of the trunk was scanned.
+- Canopies are not labelled.
+- Method: the tree tool, `Shift+U`. Click a point at the height of the tree's base, move the cylinder onto the trunk,
+  select, and save into the right directory.
+- Where leaves, early branching or sparse points spoil the band (a short tree), mark it uncertain. In worse cases,
+  do not label it as a tree: label it `vegetation` if it is joined to vegetation, otherwise leave it unlabelled.
 
-### R-007 Lowered kerbs — proposed
-- **Rule:** kerb units at crossings and driveways stay curb (`curb_lowered`) as long as the unit can be told apart
-  (material, joint, or a step of a few cm). The ramp surface behind it is pavement, including the tactile tiles.
-- **Changed proposal (2026-10-22):** the user added a `ramp` class. The sloped surface behind a lowered kerb is then
-  `ramp`, not pavement. On 2026-11-04 the user placed `ramp` under `road` in the label tree ("keep ramp and driveway
-  under road. Pavement should remain its own specific thing"): a ramp counts as road, not pavement. Still open, for the user: where a ramp ends and the pavement begins (the end of the slope,
-  or the end of the tactile tiles), whether the tactile tiles are ramp, and whether driveway slopes for vehicles
-  count (R-010).
-- **Open:** where a full-height kerb becomes lowered. Proposal: the first unit whose step is clearly below full
-  height, with the measured heights recorded in an observation.
+## vegetation
 
-### R-008 Islands and medians — proposed, **decision needed**
-Options:
-- **(a)** Label the surface by its cover: paved → pavement, planted → grass / shrub_hedge / tree. Tag the assessed
-  region as "island".
-- **(b)** A separate `island` class (id 7, currently disabled).
+- One class, `vegetation`, **without instances**: grass and small plants together, any plant without a trunk at
+  least 1 m long (the forestry standard), and tree saplings shorter than 2 m.
+- Bushes can hide how tall a sapling is; curb points can help judge the height.
+- `grass` and `shrub_hedge` are optional finer labels; they are never required.
+- Method: select pavement and vegetation together inside the curb curve (5 cm inset), then split them with the split
+  tool and tidy with 3D select. Keep one and take the other as the set difference.
+- **Proposed, for the map:** vegetation goes on the sketch plan as outlines, each with its height above the local
+  ground (a high percentile of its points). Plants tall enough to block a driver's view come from a threshold on that
+  height, not from a label. The threshold is to be measured.
 
-Recommendation: **(a)**. It keeps the class set small, and the vector map can find islands as closed curbs around
-non-road. Revisit if the algorithms need the distinction. Island noses with no step (O-0007) are the hard case.
+## lamp posts, traffic lights and other poles
 
-### R-009 Cycling and shared paths are pavement — proposed
-- Consistent with R-002. Red-coloured paths remain pavement; the colour is an observation for RGB thresholds.
+- They stand straight up and are easy to tell from trees.
+- Each is a marker at the **height of the ground around it**, at the **middle of the shape**. Either use the tree
+  tool (`Shift+U`; the marker it saves is what matters), or 3D select points near the ground around it (bottom
+  0.05 m) and use the marker tool.
+- Labels (2026-11-16):
+  - `lta_lamp_post`: a lamp post registered with LTA. Its marker's `asset_id` attribute holds its LTA lamp post
+    number (the marker's "attributes..." button);
+  - `lamp_post`: a privately owned lamp post. Every lamp post labelled before 2026-11-16 is one;
+  - `traffic_light_pole`;
+  - `other_pole`: usually road signage; also bollards, camera poles and utility poles;
+  - `pole` when unsure which.
 
-### R-010 Driveways — proposed; placed by the user 2026-11-04
-**The user's placement (2026-11-04):** `driveway` (id 8, now enabled) is a kind of `road` in the label tree. That
-combines the options "road" and "a separate class" below; to record it as decided, use `/decide Q-09`.
+## undecided
 
-Options:
-- road;
-- pavement, with `curb_lowered` at its edge;
-- a separate `driveway` class (id 8, disabled).
-
-Collect at least 3 examples (O- entries) before deciding.
-
-### R-011 Vegetation split — proposed
-- `grass`: turf and low ground cover, including bare soil in verges.
-- `shrub_hedge`: anything planted above ground cover that is not a tree.
-- `tree_trunk`: the trunk and main stems.
-- `tree_canopy`: leaves and small branches.
-- No numeric heights yet; the heights and roughness that separate these are what the threshold explorer should
-  measure.
-- Where a trunk starts and ends, and how trees are split into instances: R-015.
-
-### R-012 Poles include their attachments — proposed
-- **Rule:** arms, lamp heads and signal heads belong to the pole they are mounted on. A sign on a lamp post is part
-  of the lamp post.
-- Each pole gets its own instance id (since 2026-11-04: its own directory, with a marker; R-017).
-- Unsure which kind of pole: label it `pole`, the parent (P8).
-
-### R-013 Temporary objects and ghosts — proposed
-- Vehicles → `vehicle`, people → `person`, cones and barriers → `temporary_object`.
-- Streaks from objects that moved during the scan → `ghost`, not `noise`, so they can be studied and filtered
-  separately.
-
-### R-014 Noise — proposed
-- **Rule:** isolated points, mixed pixels floating between a foreground edge and the background, below-ground
-  multipath and sky noise → `noise`.
-- A mixed pixel that lies near a surface (within about 1 cm) takes that surface's class.
-
-### R-015 Trees: one instance per tree, identified by a band of trunk — proposed
-Proposed 2026-10-23 at the user's request; revised 2026-10-26 to the user's design. The user wants trees as
-instances, located by their trunks, for incident sketch plans. The definition should be easy to select and
-extensible. Evidence: O-0012 (`tree_example`, streets 1); also O-0008, Q-16.
-- **Instance:** one tree = one annotation directory, `tree NN`, inside `trees` or a directory of the labeller's
-  choice (e.g. one per street). Everything labelled in it belongs to that tree:
-  the directory is the instance (the label export gives each item's directory path). Stems that leave the ground at
-  one root collar are one tree; stems with separate collars are separate trees, even in the same pit.
-- **Ground height G:** the height, along the height axis, of a ground point clicked at the foot of the trunk.
-  - Where shrubs hide the foot, click visible ground nearby. The user notes that the ground around most trees is
-    nearly flat (2026-10-23), so this costs little.
-  - Where the ground does slope, click as close to the trunk as possible: `tree_example` stands on ground that
-    falls 0.3 m within 2.5 m (O-0012).
-- **The band (every tree; it identifies the tree):** the trunk's points from 1.00 to 1.10 m above G → `tree_trunk`,
-  in an item named `trunk 1.00 to 1.10 m`.
-  - 1 m is the height at which Singapore measures girth (the Parks and Trees Act, amended in 2017, S 660/2017).
-  - At that height the band is usually above the flare, the buttresses, low shrubs and the first branches.
-  - A 10 cm band is a single cylinder to select. On `tree_example` it holds 47,527 points and leaves 0.9 cm rms
-    off a circle.
-  - The band's height is a parameter, kept with each tree.
-- **Position (derived, not labelled):** the centre of a circle fitted to the band across the height axis, placed at
-  height G. The circle's radius gives the girth.
-  - On a leaning trunk the position sits off the foot by 1.05 m × tan(lean). For `tree_example` (18.5°) that is
-    0.35 m.
-  - A band at 0.10–0.20 m would land 1 cm from the foot, but it holds flare and shrub points (10,778 of 75,752
-    left off the circle there).
-  - Where the foot matters (leaning trees), the optional `trunk` item gives it.
-- **Optional items, in the same directory:**
-  - `trunk`: the whole trunk from G to the first main fork, where the stem stops being one cylinder (a branch or a
-    split) → `tree_trunk`. It overlaps the band, which is fine. On `tree_example` the fork is at 3.0 m.
-    - It includes the root flare, buttresses and exposed roots above the ground surface.
-    - It excludes the ground (the class of its cover, Q-16), shrubs (`shrub_hedge`), leafy growth on the trunk
-      (`tree_canopy`), and things fixed to the tree (stakes, guards, signs, lights: their own class).
-  - `crown`: everything above the fork → `tree_canopy`, main branches included for now (Q-16 a).
-- **Extensible:**
-  - Each tree is a directory, and new parts are new items in it, e.g. main branches apart from leaves, a crown
-    outline curve, or the tree pit's outline.
-  - Nothing labelled earlier is ever relabelled.
-  - A tree with only its band is complete for identifying and locating it. The item names in the export show what
-    else was labelled.
-- **Size (derived):** girth at 1.0 m, Singapore's measure, comes from the band's circle. For comparison with tree
-  inventories, the diameter at 1.3 m (DBH, the forestry standard) can be taken from `trunk`.
-  - Both are best measured across the stem, at right angles to its axis. On `tree_example` the band's level circle
-    gives a girth of 1.20 m; across the stem it is 1.25 m.
-  - Size does not decide the class: any woody plant with a trunk standing on its own is a tree, saplings included
-    (Q-16 d).
-  - A stem that forks below 1 m is still one tree here (one root collar, one position). Forestry would count two
-    trees. Select a band on each stem and save each into the same directory.
-- **Shrubs reaching the band:** the circle fit leaves out points more than 3 cm off the trunk's circle, and says how
-  many. To keep them out of the band itself, use Pieces (`P`) or a lasso before saving.
-  - If the trunk cannot be told apart at the band, raise the band (the tree keeps its own height), mark the item
-    uncertain, and log an observation.
-- **Hidden trunk** (behind a parked car or a bus stop): label what is visible, mark the band uncertain, and log an
-  observation.
-- **In the app** (the tree tool, built 2026-10-26):
-  1. Press `Shift+U` and click the ground at the foot of the trunk.
-  2. A cylinder appears 1.00–1.10 m above that point. Move it onto the trunk with W A S D, or click the trunk: in
-     tree mode a click only slides the cylinder sideways. Set its radius.
-  3. Press Enter to select, then "save the selection as a tree". The position, girth and fit are kept in the
-     point set's provenance.
-- **Marker (2026-11-04):** saving a tree also puts a marker named `position`, labelled `tree`, at that position (the
-  band's circle centre at G) first in its directory; trees saved before get theirs with "add markers to earlier
-  trees". See R-017.
-- **check (for the lint, later):** for each tree:
-  - it has a band;
-  - the band's circle fit is within 2 cm rms and covers at least a quarter of the circumference;
-  - no two trees' positions are closer than the sum of their radii.
-
-### R-017 Trees and poles are located by a marker at the foot — proposed
-Proposed 2026-11-04, from the user's request for markers ("select some points and place marker at mean location")
-and the measurements below.
-- **Rule:** every tree and pole is a directory (the instance) with one marker labelled with what it is (`tree`,
-  `lamp_post`, `traffic_light_pole`, `other_pole`, or `pole` when unsure): where it stands, which is what a sketch
-  plan plots and where ROCK puts its symbols (O-0015).
-- **Where:** across the height axis, the centre of a circle fitted to a band of the trunk or pole 1.00–1.10 m above
-  the ground at its foot (R-015's band; the tree tool, `Shift+U`, does trees and poles); along it, the ground height
-  at the foot.
-- **Not the mean:** a pole or trunk is scanned from one side, so its points' mean sits toward the scanner: 5.6 cm
-  (median; 0.73 radii) on the 127 tree bands of streets 1, up to 31 cm (O-0014). Over a whole lamp post the arm and
-  head would pull it further. The mean (`Ctrl+M`, "mean of the points") is for small objects seen all round, or
-  where no circle fits (a hydrant, a cabinet); say so in the marker's name if it matters.
-- **Why a band:** at 1.0 m the band is above bases, plinths and buttresses, and below lamp arms, signal heads and
-  most signs. Poles stand within a degree or two of vertical, so the band's centre is the foot's to about 2 cm; a
-  leaning tree's is not (O-0012: 0.35 m), which R-015's optional `trunk` item covers.
-- **Kept with the marker:** the band's radius, girth, fit rms and the share of the circumference seen. A fit over
-  less than about a quarter of the circumference (mobile scans see 6–19 %, O-0015) is weak: mark the marker uncertain.
-- **Open:** whether a traffic light also needs markers for its signal heads (the sketch's signal positions, Q-17).
-
-## decision queue
-
-The open questions, each with a provisional "meanwhile" labelling choice and what to watch for, are in
-[OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) (Q-01 … Q-22). Until a rule here is `decided`, label as its question's
-*meanwhile* line says. The user decides after labelling, from evidence.
+- **Petrol kiosk roads:** are they road?
+- **Dirt paths:** are they pavement?
+- **Sapling support poles:** are the poles around a young tree part of the tree?
+- **Growing saplings:** a sapling under 2 m is vegetation, so its label changes when it grows. Is that acceptable?
+- **Ramps:** the 0.1 m method has not been tried.
+- **Vegetation on the map:** the height threshold for plants that block the view (proposed above).
+- **Covers** (manholes, utility covers): future work, not labelled for now. The cover tool stays.
+- **Classes not covered yet:** `structure`, `temporary` and `noise` and their kinds are in the taxonomy as
+  proposed. The standard says nothing about them yet.
 
 ## changelog
 
-- 0.1 (2026-10-16): first draft written during planning. R-002 decided by the user; everything else proposed.
-- 0.2 (2026-11-04): the labels form a tree (P8, decided by the user, with ramp and driveway under road); taxonomy 0.5
-  with the curb's line labels, `cover`, `gutter`, `parking`, `hard_surface`, `tree`, `wall`, `bridge` (proposed);
-  R-017 (markers at the foot, proposed); R-004, R-005, R-006, R-007, R-010, R-012, R-015 updated to match.
+- 0.3 (2026-11-16): rewritten from the user's notes; the maintainer's proposals (R- rules, P- principles and the
+  Q- questions in `OPEN_QUESTIONS.md`) removed, as git history keeps them. Ramp is a kind of road; `lta_lamp_post`
+  added; taxonomy 0.7.
+- 0.2 (2026-11-04): the labels form a tree.
+- 0.1 (2026-10-16): first draft; park connectors are pavement.

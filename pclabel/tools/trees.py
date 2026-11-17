@@ -1,5 +1,4 @@
-"""Trees identified by a band of their trunk (R-015, proposed; the user's design of 2026-10-26), and poles the same
-way (R-017, proposed 2026-11-04).
+"""Trees identified by a band of their trunk, and poles the same way (docs/LABELLING_STANDARD.md, tree and poles).
 
 The labeller clicks the ground at the foot of the trunk or pole: its height along the height axis is the object's
 ground height. A cylinder 1.00-1.10 m above it (``TreeParams``) is moved onto the trunk or pole and sized; the points
@@ -14,7 +13,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from pclabel.tools.volume import frame_axes
+from pclabel.analysis.geometry import frame_axes
 
 
 @dataclass(frozen=True)
@@ -22,6 +21,7 @@ class TreeParams:
     band_bottom: float = 1.00  # m above the clicked ground: the identifying band of the trunk
     band_top: float = 1.10
     radius: float = 0.50  # m, the cylinder's radius when it is placed (then sized to the trunk)
+    trim: float = 0.03  # m: points further than this off the first circle are left out of the fit
 
 
 def _circle(x, y):

@@ -8,15 +8,14 @@
 
 from __future__ import annotations
 
-import threading
-import time
-from dataclasses import replace
+from dataclasses import asdict, replace
 
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, Qt, QTimer
 from PySide6.QtWidgets import QDockWidget, QFormLayout, QHBoxLayout, QLabel, QPushButton, QSpinBox, QWidget
 
 from pclabel.render.renderer import UNSURE_BIT
 from pclabel.tools.pieces import PieceParams, find_pieces
+from pclabel.ui.worker import run_in_worker
 from pclabel.ui.docks import _spin
 
 
@@ -59,10 +58,6 @@ class PiecesDock(QDockWidget):
         return replace(PieceParams(), gap=self.gap.value() / 100, min_points=self.min_points.value())
 
 
-class _Done(QObject):
-    done = Signal(object, object, object, object)  # pieces, seconds, error, what to do next
-
-
 class PiecesController(QObject):
     def __init__(self, window):
         super().__init__(window)
@@ -72,8 +67,6 @@ class PiecesController(QObject):
         self.base = None  # the click tool's selection (its clicks all work on this one)
         self.kept: set = set()  # the click tool's pieces kept so far
         self._busy = False
-        self._done = _Done()
-        self._done.done.connect(self._finished)
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(300)
@@ -107,14 +100,8 @@ class PiecesController(QObject):
         self.dock.result.setText(f"finding the pieces of {selection.size:,} points...")
         xyz = self.w.project.xyz
 
-        def work():
-            t0 = time.perf_counter()
-            try:
-                self._done.done.emit(find_pieces(xyz, selection, p), time.perf_counter() - t0, None, then)
-            except Exception as e:  # reported in the UI thread
-                self._done.done.emit(None, time.perf_counter() - t0, e, None)
-
-        threading.Thread(target=work, daemon=True, name="pieces").start()
+        run_in_worker(lambda: find_pieces(xyz, selection, p),
+                      lambda res, err, s: self._finished(res, s, err, None if err else then), "pieces")
 
     def _finished(self, pieces, seconds, err, then):
         self._busy = False
@@ -133,11 +120,8 @@ class PiecesController(QObject):
         current = p is not None and p.source is self.w.selection
         small = p.small(self.dock.min_points.value()) if p is not None else None
         if vp.renderer is not None:
-            vp.makeCurrent()
-            try:
+            with vp.current():
                 vp.renderer.set_marks(UNSURE_BIT, p.points(small) if current and small.size else None)
-            finally:
-                vp.doneCurrent()
             vp.update()
         if p is None:
             return
@@ -154,8 +138,8 @@ class PiecesController(QObject):
 
     def _record(self, op, ids, extra=None):
         p = self.pieces
-        return {"tool": "pieces", "op": "replace", "action": op, "params": {"gap": p.params.gap,
-                "min_points": self.dock.min_points.value()}, "pieces": int(p.count),
+        params = asdict(replace(p.params, min_points=self.dock.min_points.value()))
+        return {"tool": "pieces", "op": "replace", "action": op, "params": params, "pieces": int(p.count),
                 "kept": [int(p.sizes[i]) for i in sorted(ids)][:20], **(extra or {})}  # fmt: skip
 
     # ---- the buttons: on the current selection --------------------------------------------------------------
@@ -222,9 +206,6 @@ class PiecesController(QObject):
         self.pieces, self.base, self.kept = None, None, set()
         vp = self.w.viewport
         if vp.renderer is not None:
-            vp.makeCurrent()
-            try:
+            with vp.current():
                 vp.renderer.set_marks(UNSURE_BIT, None)
-            finally:
-                vp.doneCurrent()
         self.dock.result.setText("")

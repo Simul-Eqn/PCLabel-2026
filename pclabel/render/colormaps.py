@@ -1,4 +1,4 @@
-"""Colormaps for the shaders, and numpy mirrors of the shader formulas (unit-tested; SPEC §2.1)."""
+"""Colormaps for the shaders, and numpy mirrors of the shader formulas (unit-tested)."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ def _encode_srgb(x):
 def cyclic_oklab(n: int = 256, lightness: float = 0.72, chroma: float = 0.12, hue0_deg: float = 0.0) -> np.ndarray:
     """A perceptually uniform cyclic map: a circle of constant lightness and chroma in OKLab. uint8 (n, 3).
 
-    Constant lightness leaves lightness free for the coarse period of the multi-period wrap (M2).
+    Constant lightness leaves lightness free for a coarse second period (a multi-period wrap, not built).
     """
     h = np.deg2rad(hue0_deg) + 2 * np.pi * np.arange(n) / n
     lin = _oklab_to_linear_srgb(np.full(n, lightness), chroma * np.cos(h), chroma * np.sin(h))

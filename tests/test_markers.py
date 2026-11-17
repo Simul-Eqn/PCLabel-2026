@@ -47,3 +47,25 @@ def test_tilted_height_axis_and_errors():
         place_marker(xyz, [0, 1, 2], (0, 0, 1), MarkerParams(across="circle"))
     with pytest.raises(ValueError, match="unknown"):
         place_marker(xyz, [0], (0, 0, 1), MarkerParams(across="median"))
+
+
+def test_marker_at_a_click_snaps_to_a_pole_and_drops_to_the_ground():
+    from pclabel.synth import store_order
+    from pclabel.tools.markers import marker_at_click
+
+    rng = np.random.default_rng(5)
+    pole = pole_seen_from_one_side(radius=0.12, centre=(2.0, -1.0), z0=0.0, seen_deg=150.0, n=6000)  # 0..1.5 m
+    ground = np.c_[rng.uniform(0, 4, 20000), rng.uniform(-3, 1, 20000), rng.normal(-0.002, 0.002, 20000)]
+    ground = ground[np.hypot(ground[:, 0] - 2.0, ground[:, 1] + 1.0) > 0.12]
+    xyz = np.vstack([pole, ground]).astype(np.float32)
+    xyz, tiles = store_order(xyz, 5000)
+    click = np.array([2.0 - 0.12, -1.0, 1.0])  # on the pole's near side, 1 m up
+    at = marker_at_click(xyz, tiles, click, (0, 0, 1))
+    assert np.allclose(at["position"], click) and at["record"]["across"] == "click"
+    snap = marker_at_click(xyz, tiles, click, (0, 0, 1), MarkerParams(across="circle"))
+    assert np.hypot(snap["position"][0] - 2.0, snap["position"][1] + 1.0) < 0.01 and snap["position"][2] == 1.0
+    assert snap["record"]["radius"] == pytest.approx(0.12, abs=0.01)
+    foot = marker_at_click(xyz, tiles, click, (0, 0, 1), MarkerParams(across="circle", height="lowest"))
+    assert foot["position"][2] == pytest.approx(0.0, abs=0.01) and foot["record"]["height"] == "lowest"
+    lone = marker_at_click(xyz, tiles, np.array([3.5, 0.5, 0.0]), (0, 0, 1), MarkerParams(across="circle"))
+    assert "no circle" in lone["record"].get("note", "") or lone["record"]["across"] == "circle"

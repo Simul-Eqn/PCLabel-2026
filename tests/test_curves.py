@@ -159,3 +159,106 @@ def test_fit_all_points_mode():
     d = np.array([1.0, 1.0, 0.2]) / np.linalg.norm([1.0, 1.0, 0.2])
     assert abs(np.dot(line.normal, d)) < 1e-9 and np.dot(line.normal, UP) == pytest.approx(np.sqrt(1 - d[2] ** 2))
     assert np.allclose(line.nodes, line.picked)  # points on a line stay where they were clicked
+
+
+def test_a_free_curve_has_no_plane_and_follows_a_slope():
+    """Mode "free" (no plane): the nodes stay where they are, up a 1 m rise; a point added keeps its height; a node
+    dragged moves level (in its drag plane across the height axis), its handles with it; read back from a document."""
+    x = np.linspace(0, 10, 6)
+    pts = np.c_[x, np.sin(x / 3), x / 10]  # rising 1 m over 10 m, and curving
+    c = Curve.fit(pts, [0, 0, 1], [0, 0, 0], mode="free")
+    assert np.allclose(c.nodes, pts) and c.spread() == 0.0 and c.heights() == pytest.approx((0.0, 1.0))
+    line = c.polyline()
+    assert line[:, 2].min() == pytest.approx(0) and line[:, 2].max() == pytest.approx(1.0)
+    i = c.insert([5.0, np.sin(5 / 3), 0.5])
+    assert c.nodes[i] == pytest.approx([5.0, np.sin(5 / 3), 0.5])
+    c.activate(i)
+    h0 = c.h_out[i].copy()
+    c.move_node(i, [5.0, 3.0, 9.0])  # level: the height stays
+    assert c.nodes[i] == pytest.approx([5.0, 3.0, 0.5]) and np.allclose(c.h_out[i], h0)
+    c.drag_handle(i, 1, c.nodes[i] + [1.0, 0.0, 2.0])
+    assert c.h_out[i][2] == pytest.approx(0.0)  # handles are dragged level too
+
+
+def test_a_planar_curve_node_moves_in_its_plane():
+    pts = np.array([[0, 0, 0], [1, 1, 0.0], [2, 0, 0]])
+    c = Curve.fit(pts, [0, 0, 1], [0, 0, 0], mode="axis")
+    c.move_node(1, [1, 2, 5.0])
+    assert c.nodes[1] == pytest.approx([1, 2, 0.0])
+
+
+def test_a_traced_line_as_a_curve_within_a_tolerance():
+    """Curve.from_line: as few of the vertices as keep the curve within the tolerance of every one, no plane."""
+    from scipy.spatial import cKDTree
+
+    s = np.arange(0, 30, 0.3)
+    rng = np.random.default_rng(1)
+    v = np.c_[s, 4 * np.sin(s / 6), 0.04 * s + 0.003 * rng.standard_normal(len(s))]  # a curb up a slope, with noise
+    for tol in (0.01, 0.02):
+        c = Curve.from_line(v, [0, 0, 1], [0, 0, 0], tolerance=tol, source={"tool": "curb_trace"})
+        fit = c.source["curve_fit"]
+        assert c.mode == "free" and c.source["tool"] == "curb_trace" and fit["vertices"] == len(v)
+        assert fit["nodes"] == len(c.nodes) < len(v) and fit["largest_off"] <= tol
+        assert cKDTree(c.polyline(0.005)).query(v)[0].max() <= tol + 0.003
+        assert np.allclose(c.nodes[[0, -1]], v[[0, -1]])
+    # a loop stays a loop
+    t = np.linspace(0, 2 * np.pi, 80, endpoint=False)
+    ring = np.c_[3 * np.cos(t), 3 * np.sin(t), 0.2 * np.sin(t)]
+    c = Curve.from_line(ring, [0, 0, 1], [0, 0, 0], tolerance=0.01, closed=True)
+    assert c.closed and c.source["curve_fit"]["largest_off"] <= 0.01 and len(c.nodes) < 80
+
+
+def test_a_free_curve_and_its_source_are_saved_and_read_back():
+    from pclabel.store.annotations import _node_doc, _node_from_doc_body, clone_nodes
+
+    pts = np.array([[0, 0, 0], [1, 1, 0.3], [2, 0, 0.8], [3, -1, 0.5]])
+    c = Curve.fit(pts, [0, 0, 1], [0, 0, 0], mode="free")
+    c.source = {"tool": "curb_trace", "assisted": True}
+    c.activate(1)
+    c.drag_handle(1, 1, c.nodes[1] + [0.5, 0.2, 0])
+    doc = _node_doc(c, None, "file")
+    assert doc["plane"]["mode"] == "free" and doc["source"]["tool"] == "curb_trace"
+    d = _node_from_doc_body(doc, None, None, True, [])
+    assert d.mode == "free" and d.source == c.source and np.allclose(d.nodes, pts)
+    assert np.allclose(d.polyline(), c.polyline())
+    k = clone_nodes([c])[0]
+    k.source["x"] = 1
+    assert "x" not in c.source
+
+
+def test_smoothing_a_line():
+    """curves.smooth_line: noise along a straight line averaged out, no point moved more than the limit, the ends
+    kept; a loop stays closed; Annotations.smooth keeps the item's place and mode and records it."""
+    from pclabel.store.annotations import Annotations, Polyline
+
+    rng = np.random.default_rng(3)
+    x = np.arange(0, 20, 0.3)
+    v = np.c_[x, 0.02 * rng.standard_normal(len(x)), 0.1 + 0.01 * rng.standard_normal(len(x))]
+    s, shift = curves.smooth_line(v, 1.0, 0.05)
+    assert np.allclose(s[[0, -1]], v[[0, -1]]) and shift <= 0.05 + 1e-9
+    p = curves.resample(v, 0.02)
+    assert np.linalg.norm(s - p, axis=1).max() <= 0.05 + 1e-9
+    inner = (s[:, 0] > 2) & (s[:, 0] < 18)
+    assert np.abs(s[inner, 1]).max() < 0.4 * np.abs(v[:, 1]).max() and np.abs(s[inner, 2] - 0.1).max() < 0.01
+    assert curves.wiggle(curves.resample(s, 0.1)) < 0.3 * curves.wiggle(curves.resample(v, 0.1))
+    # a real corner is rounded by no more than the limit
+    corner = np.r_[np.c_[np.arange(0, 5, 0.1), np.zeros(50)], np.c_[np.full(50, 5.0), np.arange(0, 5, 0.1)]]
+    corner = np.c_[corner, np.zeros(len(corner))]
+    s, shift = curves.smooth_line(corner, 1.0, 0.03)
+    assert shift == pytest.approx(0.03) and np.hypot(s[:, 0] - 5, s[:, 1]).min() <= 0.031
+    # a loop
+    t = np.linspace(0, 2 * np.pi, 120, endpoint=False)
+    ring = np.c_[(3 + 0.03 * rng.standard_normal(120)) * np.cos(t), 3 * np.sin(t), np.zeros(120)]
+    s, _ = curves.smooth_line(ring, 0.5, 0.05, closed=True)
+    assert np.abs(np.hypot(s[:, 0], s[:, 1]) - 3).max() < 0.05
+    # in the tree
+    m = Annotations()
+    c = m.add(Curve.from_line(v, [0, 0, 1], [0, 0, 0], tolerance=0.01, source={"tool": "curb_trace"}), "lip")
+    pl = m.add(Polyline(v, False, {}), "pl")
+    c2 = m.smooth(c.id)
+    assert c2.id == c.id and m.root[0] is c2 and c2.mode == "free" and c2.source["tool"] == "curb_trace"
+    r = c2.source["smoothed"][0]
+    assert r["scale"] == 1.0 and r["wiggle_deg"][1] < r["wiggle_deg"][0] and len(c2.nodes) < len(c.nodes)
+    p2 = m.smooth(pl.id, 1.0, 0.05)
+    assert p2.kind == "polyline" and m.root[1] is p2 and len(p2.source["smoothed"]) == 1
+    assert len(m.smooth(c2.id).source["smoothed"]) == 2  # again: smoothed more

@@ -1,4 +1,4 @@
-"""Command line: ``python -m pclabel [app|import|info] ...``."""
+"""Command line: ``python -m pclabel [app|import|info|labels] ...``."""
 
 from __future__ import annotations
 
@@ -54,6 +54,30 @@ def cmd_info(a) -> int:
     return 0
 
 
+def cmd_labels(a) -> int:
+    """The project's annotations as one class and a flags byte per point, in source order (pclabel.ops.labels)."""
+    import json
+
+    from pclabel.ops.labels import export_labels
+    from pclabel.settings import load_settings
+    from pclabel.store.annotations import Annotations
+    from pclabel.store.project import Project
+    from pclabel.taxonomy import load_taxonomy
+
+    path = Path(a.project)
+    if not path.exists():
+        path = Path(load_settings().projects_dir) / a.project
+    project = Project(path)
+    model, warnings = Annotations.load(project)
+    for w in warnings:
+        print(f"warning: {w}", file=sys.stderr)
+    doc = export_labels(a.out, project, model, load_taxonomy())
+    print(json.dumps({k: doc[k] for k in ("classes", "unassessed", "flags", "conflicts", "conflict_pairs",
+                                          "free_text_labels", "seconds")}, indent=1))  # fmt: skip
+    print(f"wrote {a.out}.classes.npy, .flags.npy and .labels.json")
+    return 0
+
+
 def cmd_app(a) -> int:
     from pclabel.ui.app import run
 
@@ -74,11 +98,14 @@ def main(argv=None) -> int:
     p.add_argument("--chunk-size", type=int, default=4_000_000)
     p = sub.add_parser("info", help="summary of a project")
     p.add_argument("project")
+    p = sub.add_parser("labels", help="export the labels as one class per point, in source order (.npy)")
+    p.add_argument("project", help="a project directory, or a project's name in the projects folder")
+    p.add_argument("out", help="output path stem: writes <out>.classes.npy, <out>.flags.npy, <out>.labels.json")
     argv = list(sys.argv[1:] if argv is None else argv)
-    if not argv or argv[0] not in ("app", "import", "info", "-h", "--help"):
+    if not argv or argv[0] not in ("app", "import", "info", "labels", "-h", "--help"):
         argv = ["app"] + argv
     a = ap.parse_args(argv)
-    return {"app": cmd_app, "import": cmd_import, "info": cmd_info}[a.cmd](a)
+    return {"app": cmd_app, "import": cmd_import, "info": cmd_info, "labels": cmd_labels}[a.cmd](a)
 
 
 if __name__ == "__main__":

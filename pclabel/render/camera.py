@@ -16,7 +16,6 @@ PERSPECTIVE, ORTHO = "perspective", "ortho"
 # preset views: (yaw or None to keep the heading, pitch)
 VIEW_ANGLES = {"top": (None, 90.0), "bottom": (None, -90.0), "front": (270.0, 0.0), "side": (0.0, 0.0),
                "perspective": (None, 35.0)}  # fmt: skip
-VIEWS = tuple(VIEW_ANGLES)
 
 
 def perspective(fovy_deg: float, aspect: float, near: float, far: float) -> np.ndarray:
@@ -38,21 +37,6 @@ def orthographic(left, right, bottom, top, near, far) -> np.ndarray:
     m[0, 3] = -(right + left) / (right - left)
     m[1, 3] = -(top + bottom) / (top - bottom)
     m[2, 3] = -(far + near) / (far - near)
-    return m
-
-
-def look_at(eye, target, up=(0.0, 0.0, 1.0)) -> np.ndarray:
-    eye, target, up = (np.asarray(v, dtype=np.float64) for v in (eye, target, up))
-    f = target - eye
-    f /= np.linalg.norm(f)
-    s = np.cross(f, up)
-    if np.linalg.norm(s) < 1e-9:  # looking straight down or up
-        s = np.cross(f, (0.0, 1.0, 0.0))
-    s /= np.linalg.norm(s)
-    u = np.cross(s, f)
-    m = np.eye(4)
-    m[0, :3], m[1, :3], m[2, :3] = s, u, -f
-    m[:3, 3] = -m[:3, :3] @ eye
     return m
 
 
@@ -238,21 +222,3 @@ class OrbitCamera:
         ndc = np.array([2 * px / w - 1, 1 - 2 * py / h, 2 * depth - 1, 1.0])
         q = np.linalg.solve(self.mvp(w / h), ndc)
         return q[:3] / q[3]
-
-
-def frustum_planes(mvp: np.ndarray) -> np.ndarray:
-    """Six planes (a, b, c, d) with inside = a x + b y + c z + d >= 0 (Gribb-Hartmann)."""
-    m = mvp
-    planes = np.array([m[3] + m[0], m[3] - m[0], m[3] + m[1], m[3] - m[1], m[3] + m[2], m[3] - m[2]])
-    return planes / np.linalg.norm(planes[:, :3], axis=1, keepdims=True)
-
-
-def boxes_visible(planes: np.ndarray, lo: np.ndarray, hi: np.ndarray) -> np.ndarray:
-    """Conservative AABB-vs-frustum test for many boxes (lo, hi: (n, 3)). True = possibly visible."""
-    vis = np.ones(lo.shape[0], bool)
-    for a, b, c, d in planes:
-        px = np.where(a >= 0, hi[:, 0], lo[:, 0])
-        py = np.where(b >= 0, hi[:, 1], lo[:, 1])
-        pz = np.where(c >= 0, hi[:, 2], lo[:, 2])
-        vis &= a * px + b * py + c * pz + d >= 0
-    return vis

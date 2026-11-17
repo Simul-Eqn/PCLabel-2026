@@ -1,10 +1,12 @@
-"""Annotations: line segments, curves and point sets, organised in a tree of directories (SPEC §13; format in
+"""Annotations: line segments, curves and point sets, organised in a tree of directories (format in
 ARCHITECTURE "annotations").
 
 - **Items** (segments, curves, point sets, and imported polylines) stand on their own: a new item goes to the top
   level with a colour of its own.
 - **Polylines** come from imported labels (a DXF drawing's lines and outlines, store/label_import.py): exact 3D
-  vertices, unlike a curve (planar, smoothed).
+  vertices, unlike a curve (smoothed; planar unless its mode is "free").
+- **Curves** in mode "free" have no plane: the nodes stay where they were put, so a curve can follow a curb up and
+  down a slope (the tracers and the join tool save their lines so, with nodes enough to stay within 1 cm).
 - **Markers** are positions: where a thing is (a pole's or a tree's foot, a manhole). One is placed from selected
   points (their mean, or the centre of a circle fitted across the height axis: tools/markers.py) or imported (a
   DXF's map symbol). Schema 6's one-vertex polylines are read as markers.
@@ -25,16 +27,21 @@ import uuid
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-import numba as nb
 import numpy as np
 
 from pclabel.analysis import curves
-from pclabel.store.importer import write_json_atomic
+from pclabel.taxonomy import ancestors_in
+from pclabel.tools import sets as sets_
+from pclabel.store.project import source_doc
+from pclabel.store.util import write_json_atomic
 
-SCHEMA = "pclabel.annotations/7"  # 2 added `uncertain` on nodes, 3 keeps it on items only, 4 added `label_colors`,
-# 5 added `labels_exported` (exports by label), 6 added `polyline` items (imported labels), 7 added `marker` items
+SCHEMA = "pclabel.annotations/9"  # 2 added `uncertain` on nodes, 3 keeps it on items only, 4 added `label_colors`,
+# 5 added `labels_exported` (exports by label), 6 added `polyline` items (imported labels), 7 added `marker` items,
+# 8 added a marker's `attributes` (an asset's identifier and fields), 9 added the curve plane mode "free" (no plane)
+# and a curve's `source` (the tool that drew it, as on polylines)
 READ_SCHEMAS = ("pclabel.annotations/1", "pclabel.annotations/2", "pclabel.annotations/3", "pclabel.annotations/4",
-                "pclabel.annotations/5", "pclabel.annotations/6", SCHEMA)  # fmt: skip
+                "pclabel.annotations/5", "pclabel.annotations/6", "pclabel.annotations/7", "pclabel.annotations/8",
+                SCHEMA)  # fmt: skip
 ITEM_KINDS = ("segment", "curve", "polyline", "marker", "points")
 SET_OPS = {  # op -> (symbol, words)
     "union": ("∪", "in A or B"),
@@ -78,7 +85,7 @@ class Segment:
     color: str = PALETTE[0]  # used at the top level; inside a directory the directory's colour applies
     label: str = ""  # empty: the nearest enclosing directory's label
     id: str = field(default_factory=new_id)
-    uncertain: bool = False  # the labeller is unsure of the label here (the taxonomy's `ambiguous` flag)
+    uncertain: bool = False  # the labeller is unsure of the label here (the standard's "uncertain" mark)
     kind = "segment"
 
     def length(self) -> float:
@@ -92,6 +99,7 @@ CURVE_MODES = {
     "ends": "through the start and end points, turned to fit the others",
     "axis": "perpendicular to the height axis, at the points' mean height",
     "fit": "fitted to all the points (least squares, any tilt)",
+    "free": "nowhere: no plane, the points stay where they are (a 3D curve, e.g. a curb up and down a slope)",
 }
 
 
@@ -113,8 +121,21 @@ class Curve:
     label: str = ""
     id: str = field(default_factory=new_id)
     closed: bool = False  # a loop: a last piece joins the last node back to the first
-    uncertain: bool = False  # the labeller is unsure of the label here (the taxonomy's `ambiguous` flag)
+    uncertain: bool = False  # the labeller is unsure of the label here (the standard's "uncertain" mark)
+    source: dict = field(default_factory=dict)  # the tool that drew it (a tracer, the join tool), as on polylines
     kind = "curve"
+
+    @classmethod
+    def from_line(cls, vertices, axis, axis_origin, frame="z (scan frame)", tolerance: float = 0.01, closed=False,
+                  source=None) -> "Curve":  # fmt: skip
+        """A "free" curve (no plane) through as few of a line's vertices as keep it within ``tolerance`` of all of
+        them (curves.nodes_within); how well it fits goes into ``source["curve_fit"]``."""
+        v = np.asarray(vertices, np.float64).reshape(-1, 3)
+        idx, off = curves.nodes_within(v, tolerance, closed)
+        c = cls.fit(v[idx], axis, axis_origin, frame, None, "free", closed and len(idx) >= 3)
+        c.source = dict(source or {}, curve_fit={"tolerance": float(tolerance), "largest_off": off,
+                                                 "vertices": int(len(v)), "nodes": int(len(idx))})  # fmt: skip
+        return c
 
     @classmethod
     def fit(cls, picked, axis, axis_origin, frame="z (scan frame)", picked_source=None, mode="ends",
@@ -143,6 +164,10 @@ class Curve:
             self.normal, self.point = self.axis.copy(), self.axis_origin + h * self.axis
         elif self.mode == "fit":
             self.normal, self.point = curves.fit_plane_through(self.picked, self.axis)
+        elif self.mode == "free":  # no plane: handles are dragged level (across the height axis) at their node
+            self.normal, self.point = self.axis.copy(), self.picked[0].copy()
+            self.nodes = self.picked.copy()
+            return
         else:
             self.normal, self.point = curves.fit_through_ends(self.picked, self.axis), self.picked[0].copy()
         self.nodes = curves.project_onto(self.picked, self.normal, self.point)
@@ -170,8 +195,29 @@ class Curve:
         return float(np.degrees(np.arccos(np.clip(abs(np.dot(self.normal, self.axis)), 0.0, 1.0))))
 
     def spread(self) -> float:
-        """Largest distance of a clicked point from the plane."""
+        """Largest distance of a clicked point from the plane (0 with no plane)."""
+        if self.mode == "free":
+            return 0.0
         return float(np.abs((self.picked - self.point) @ self.normal).max())
+
+    def heights(self) -> tuple[float, float]:
+        """(lowest, highest) node on the height axis."""
+        h = (self.nodes - self.axis_origin) @ self.axis
+        return float(h.min()), float(h.max())
+
+    def drag_plane(self, i: int) -> tuple[np.ndarray, np.ndarray]:
+        """(normal, point) of the plane node i and its handles are dragged in: the curve's plane, or with no plane
+        the level plane through the node."""
+        return self.normal, self.nodes[i].copy()
+
+    def move_node(self, i: int, target_world):
+        """Move node i to a point (in its drag plane); its handles move with it. A planar curve's plane is fitted
+        again."""
+        n, p = self.drag_plane(i)
+        q = curves.project_onto(np.asarray(target_world, np.float64)[None], n, p)[0]
+        self.picked[i] = q
+        self.picked_source[i] = -1  # no longer a clicked cloud point
+        self.refit()
 
     def plane_point(self) -> np.ndarray:
         return self.point
@@ -201,7 +247,9 @@ class Curve:
         """Add a clicked point. It goes between the two nodes of the piece the curve passes closest to it (or before
         the first / after the last node beyond the ends) with automatic handles; the plane is fitted again (a new
         first or last point is a new end of the curve)."""
-        q = curves.project_onto(np.asarray(point_world, np.float64)[None], self.normal, self.point)[0]
+        q = np.asarray(point_world, np.float64)
+        if self.mode != "free":
+            q = curves.project_onto(q[None], self.normal, self.point)[0]
         i = curves.insert_position(self.nodes, self.h_in, self.h_out, q, self.closed)
         nan = np.full(3, np.nan)
         self.picked = np.insert(self.picked, i, point_world, axis=0)
@@ -245,6 +293,60 @@ class Polyline:
     uncertain: bool = False
     kind = "polyline"
 
+    # ---- editing (curve edit mode works on polylines too: straight pieces, no handles) ----------------------------
+
+    @property
+    def nodes(self) -> np.ndarray:
+        return self.vertices
+
+    def handles(self) -> tuple[np.ndarray, np.ndarray]:
+        z = np.zeros_like(np.asarray(self.vertices, np.float64))
+        return z, z.copy()
+
+    def manual(self) -> np.ndarray:
+        return np.zeros(len(self.vertices), bool)
+
+    def activate(self, i: int):
+        pass  # no handles
+
+    def make_auto(self, i: int):
+        pass
+
+    def drag_handle(self, i: int, side: int, target_world):
+        pass
+
+    def height_axis(self) -> np.ndarray:
+        """The axis vertices are dragged level across: the tool's height axis if it recorded one, else z."""
+        a = np.asarray(self.source.get("axis", (0.0, 0.0, 1.0)), np.float64).reshape(-1)
+        return a / np.linalg.norm(a) if a.shape == (3,) and np.linalg.norm(a) > 0 else np.array([0.0, 0.0, 1.0])
+
+    def drag_plane(self, i: int) -> tuple[np.ndarray, np.ndarray]:
+        return self.height_axis(), np.asarray(self.vertices[i], np.float64).copy()
+
+    def move_node(self, i: int, target_world):
+        """Move vertex i level (across the height axis) to under/over a point."""
+        n, p = self.drag_plane(i)
+        self.vertices = np.asarray(self.vertices, np.float64).copy()
+        self.vertices[i] = curves.project_onto(np.asarray(target_world, np.float64)[None], n, p)[0]
+
+    def insert(self, point_world, source_index: int = -1) -> int:
+        """Add a vertex where the line passes closest (or beyond an end)."""
+        v = np.asarray(self.vertices, np.float64)
+        z = np.zeros_like(v)
+        i = curves.insert_position(v, z, z.copy(), np.asarray(point_world, np.float64), self.closed)
+        self.vertices = np.insert(v, i, point_world, axis=0)
+        return i
+
+    def remove(self, i: int):
+        if len(self.vertices) <= (3 if self.closed else 2):
+            raise ValueError(f"a {'closed outline keeps at least three' if self.closed else 'line keeps at least two'} points")
+        self.vertices = np.delete(np.asarray(self.vertices, np.float64), i, axis=0)
+
+    def set_closed(self, closed: bool):
+        if closed and len(self.vertices) < 3:
+            raise ValueError("a closed outline needs at least three points")
+        self.closed = bool(closed)
+
     def polyline(self) -> np.ndarray:
         """The vertices, with the first again at the end of an outline."""
         v = np.asarray(self.vertices, np.float64)
@@ -272,6 +374,7 @@ class Marker:
     label: str = ""
     id: str = field(default_factory=new_id)
     uncertain: bool = False
+    attributes: dict = field(default_factory=dict)  # an asset's fields, e.g. {"asset_id": "LP-0012", "type": "..."}
     kind = "marker"
 
     def polyline(self) -> np.ndarray:
@@ -285,10 +388,13 @@ class Marker:
         s = self.source
         if s.get("block"):
             return f"marker, {s['block']}"
+        tag = f" ({self.attributes['asset_id']})" if self.attributes.get("asset_id") else ""
+        if s.get("tool") == "marker_click":
+            return f"marker{tag}, " + ("clicked, on a circle's centre" if s.get("across") == "circle" else "clicked")
         if "across" in s and "points" in s:
             how = "circle centre" if s["across"] == "circle" else "mean"
-            return f"marker, {how} of {int(s['points']):,} points"
-        return "marker"
+            return f"marker{tag}, {how} of {int(s['points']):,} points"
+        return f"marker{tag}"
 
 
 @dataclass(eq=False)  # nodes are compared by identity (their arrays have no single truth value)
@@ -299,7 +405,7 @@ class PointSet:
     color: str = PALETTE[0]
     label: str = ""
     id: str = field(default_factory=new_id)
-    uncertain: bool = False  # the labeller is unsure of the label here (the taxonomy's `ambiguous` flag)
+    uncertain: bool = False  # the labeller is unsure of the label here (the standard's "uncertain" mark)
     kind = "points"
 
     def describe(self) -> str:
@@ -332,11 +438,11 @@ def clone_nodes(nodes: list) -> list:
         elif x.kind == "curve":
             out.append(replace(x, picked=x.picked.copy(), nodes=x.nodes.copy(), h_in=x.h_in.copy(),
                                h_out=x.h_out.copy(), normal=x.normal.copy(), point=x.point.copy(),
-                               picked_source=list(x.picked_source)))  # fmt: skip
+                               picked_source=list(x.picked_source), source=dict(x.source)))  # fmt: skip
         elif x.kind == "polyline":
             out.append(replace(x, vertices=x.vertices.copy(), source=dict(x.source)))
         elif x.kind == "marker":
-            out.append(replace(x, position=x.position.copy(), source=dict(x.source)))
+            out.append(replace(x, position=x.position.copy(), source=dict(x.source), attributes=dict(x.attributes)))
         else:
             out.append(replace(x, provenance=list(x.provenance)))
     return out
@@ -398,7 +504,7 @@ class Annotations:
                 return anc[-1] if anc else None
         raise KeyError(node_id)
 
-    def _siblings(self, node_id: str) -> list:
+    def siblings(self, node_id: str) -> list:
         p = self.parent(node_id)
         return self.root if p is None else p.children
 
@@ -432,8 +538,6 @@ class Annotations:
         """Store indices (sorted, unique) of the points in point sets whose label (own or inherited) is one of
         ``labels``."""
         labels = set(labels)
-        from pclabel.tools import sets as sets_
-
         return sets_.union_all([x.indices for x in self.items() if x.kind == "points"
                                 and self.label_of(x.id)[0] in labels])  # fmt: skip
 
@@ -458,7 +562,7 @@ class Annotations:
                 picked.append(x)
         dest = self.root if target_id is None else self.node(target_id).children
         for x in picked:
-            self._siblings(x.id).remove(x)
+            self.siblings(x.id).remove(x)
             dest.append(x)
 
     def duplicate(self, node_ids) -> list:
@@ -480,27 +584,23 @@ class Annotations:
             c.name = f"{x.name} copy"
             if c.color:
                 c.color = color
-            sib = self._siblings(x.id)
+            sib = self.siblings(x.id)
             sib.insert(sib.index(x) + 1, c)
             copies.append(c)
         return copies
 
     def remove(self, node_id: str):
         """Remove a node (a directory with everything in it)."""
-        self._siblings(node_id).remove(self.node(node_id))
+        self.siblings(node_id).remove(self.node(node_id))
 
     def points_of(self, node_id: str) -> np.ndarray:
         """Store indices (sorted) of a point set, or of all the point sets in a directory."""
-        from pclabel.tools import sets as sets_
-
         x = self.node(node_id)
         return sets_.union_all([m.indices for m in self.items([x]) if m.kind == "points"])
 
     def set_operation(self, a_id: str, op: str, b_id: str) -> tuple[np.ndarray, dict]:
         """(store indices, record) of A op B, for point sets or directories (all their point sets). ``op``: one of
         SET_OPS."""
-        from pclabel.tools import sets as sets_
-
         a, b = self.points_of(a_id), self.points_of(b_id)
         fn = {"union": sets_.union, "intersection": sets_.intersection, "a_minus_b": sets_.difference,
               "b_minus_a": lambda x, y: sets_.difference(y, x), "xor": sets_.xor}[op]  # fmt: skip
@@ -520,10 +620,76 @@ class Annotations:
             _, color = self._next()
             parts.append(PointSet(ps.indices[mask], [*ps.provenance, dict(record, part=part)], f"{ps.name} {part}",
                                   color, ps.label, uncertain=ps.uncertain))  # fmt: skip
-        sib = self._siblings(ps.id)
+        sib = self.siblings(ps.id)
         i = sib.index(ps)
         sib[i : i + 1] = parts
         return parts[0], parts[1]
+
+    def convert(self, item_id: str, to: str, tolerance: float, axis=(0.0, 0.0, 1.0), axis_origin=(0.0, 0.0, 0.0),
+                frame: str = "z (scan frame)"):  # fmt: skip
+        """Replace a polyline by a curve with no plane within ``tolerance`` of its vertices (Curve.from_line), or a
+        curve by a polyline whose straight pieces stay within ``tolerance`` of the curve; in its place, with its id,
+        name, colour, label and mark; the source says what it was. Returns the new item, or None if it is not one
+        to convert."""
+        x = self.node(item_id)
+        if to == "curve" and x.kind == "polyline" and len(x.vertices) >= 2:
+            v = np.asarray(x.vertices, np.float64)
+            if "axis" in x.source and "height_axis" in x.source:  # the tool's own height axis
+                axis, frame, axis_origin = x.source["axis"], x.source["height_axis"], v[0]
+            src = dict(x.source, converted={"from": "polyline", "vertices": int(len(v))})
+            new = Curve.from_line(v, axis, axis_origin, frame, tolerance, x.closed and len(v) >= 3, src)
+        elif to == "polyline" and x.kind == "curve":
+            line = np.asarray(x.polyline(min(0.01, tolerance)), np.float64)
+            if x.closed and len(line) > 3 and np.linalg.norm(line[-1] - line[0]) < 1e-9:
+                line = line[:-1]
+            idx = curves.simplify(line, tolerance, x.closed)
+            src = {k: v for k, v in x.source.items() if k != "curve_fit"}
+            src["converted"] = {"from": "curve", "mode": x.mode, "nodes": int(len(x.nodes)), "tolerance": float(tolerance)}
+            if "axis" not in src:
+                src["axis"] = [float(a) for a in x.axis]
+            new = Polyline(line[idx], bool(x.closed), src)
+        else:
+            return None
+        return self.replace_node(x, new)
+
+    def replace_node(self, x, new):
+        """``new`` in ``x``'s place, with its id, name, colour, label and mark."""
+        new.name, new.color, new.label, new.id, new.uncertain = x.name, x.color, x.label, x.id, x.uncertain
+        sib = self.siblings(x.id)
+        sib[sib.index(x)] = new
+        return new
+
+    def smooth(self, item_id: str, scale: float = 1.0, max_shift: float = 0.05, tolerance: float = 0.01):
+        """Smooth a curve or polyline (curves.smooth_line: a Gaussian average along it over ``scale`` m, each point
+        moved at most ``max_shift``, an open line's ends kept), in its place: a curve again (its plane mode kept; as
+        few nodes as keep within ``tolerance`` of the smoothed line), or a polyline (straight pieces within 2 mm).
+        The source records it. Returns the new item, or None if it is not a line."""
+        x = self.node(item_id)
+        if x.kind == "curve":
+            line = np.asarray(x.polyline(0.02), np.float64)
+            if x.closed and len(line) > 3 and np.linalg.norm(line[-1] - line[0]) < 1e-9:
+                line = line[:-1]
+        elif x.kind == "polyline" and len(x.vertices) > 1:
+            line = np.asarray(x.vertices, np.float64)
+        else:
+            return None
+        closed = bool(x.closed) and len(line) >= 3
+        before = curves.wiggle(curves.resample(line, 0.1, closed), closed)
+        s, shift = curves.smooth_line(line, scale, max_shift, closed)
+        rec = {"scale": float(scale), "max_shift": float(max_shift), "largest_shift": shift,
+               "wiggle_deg": [before, curves.wiggle(curves.resample(s, 0.1, closed), closed)],
+               "points": int(len(x.nodes))}  # fmt: skip
+        src = {k: v for k, v in x.source.items() if k != "curve_fit"}
+        src["smoothed"] = list(src.get("smoothed", [])) + [rec]
+        if x.kind == "curve":
+            idx, off = curves.nodes_within(s, tolerance, closed)
+            new = Curve.fit(s[idx], x.axis, x.axis_origin, x.frame, None, x.mode, closed)
+            new.source = dict(src, curve_fit={"tolerance": float(tolerance), "largest_off": off,
+                                              "vertices": int(len(s)), "nodes": int(len(idx))})  # fmt: skip
+        else:
+            idx = curves.simplify(s, 0.002, closed)
+            new = Polyline(s[idx], closed, src)
+        return self.replace_node(x, new)
 
     def join_curves(self, first_id: str, first_end: str, second_id: str, second_end: str, close: bool = False,
                     merge_within: float = 0.02) -> "Curve":  # fmt: skip
@@ -546,11 +712,13 @@ class Annotations:
             picked, source, h_in, h_out = picked[:-1], source[:-1], h_in[:-1], h_out[:-1]
         if close and len(picked) < 3:
             raise ValueError("a closed loop needs at least three points")
+        src = {"tool": "curve_join", "from": [a.source, b.source],
+               "assisted": bool(a.source.get("assisted") or b.source.get("assisted"))} if a.source or b.source else {}  # fmt: skip
         c = Curve(picked, a.axis.copy(), a.axis_origin.copy(), a.mode, h_in=h_in, h_out=h_out, frame=a.frame,
                   picked_source=source, name=a.name, color=a.color, label=a.label, closed=bool(close),
-                  uncertain=a.uncertain or b.uncertain)  # fmt: skip
+                  uncertain=a.uncertain or b.uncertain, source=src)  # fmt: skip
         c.refit()
-        sib = self._siblings(a.id)
+        sib = self.siblings(a.id)
         sib[sib.index(a)] = c
         self.remove(b.id)
         return c
@@ -560,11 +728,10 @@ class Annotations:
     def to_doc(self, project, *, points: str) -> dict:
         """The JSON document. ``points``: "file" (store indices in ``annotations/<id>.npy``, the project's copy) or
         "inline" (source indices in the document, for export)."""
-        src = project.meta.get("source", {})
         return {
             "schema": SCHEMA,
             "coordinates": "scan frame (world), metres; store/local = world - offset",
-            "source": {"file": Path(src.get("path", "")).name, "sha256": src.get("sha256"), "n_valid": project.n},
+            "source": source_doc(project),
             "offset": _pt(project.offset),
             "counter": self.counter,
             "locks": sorted(self.locks),
@@ -653,7 +820,7 @@ class Annotations:
         directory path and where the label comes from), counts, the number of distinct points, and the points
         shared with other labels. ``class_ids`` maps taxonomy class names to ids (in the taxonomy's order), for
         labels that are classes; ``flag_bits`` maps taxonomy flag names to bits, for labels that are flags (e.g.
-        ``marking``, R-006: a flag sits on top of the surface's class, so its points are meant to overlap a class's);
+        ``marking``: a flag sits on top of the surface's class, so its points are meant to overlap a class's);
         ``parents`` maps a class to the class it is a kind of (the taxonomy tree: ``road_line`` of ``road``). A class
         is also counted with the classes below it (``points_with_descendants``, and ``rollup`` for every class in
         use or above one), overlaps along a branch are marked ``nested`` (expected: a road set holding its lines),
@@ -674,17 +841,11 @@ class Annotations:
             by_label.setdefault(label, []).append((x, d))
         order = sorted((k for k in by_label if k),
                        key=lambda k: (k not in class_ids, k not in flag_bits, class_pos.get(k, 0), flag_bits.get(k, 0), k))  # fmt: skip
-        from pclabel.tools import sets as sets_
-
         unions = {k: sets_.union_all([x.indices for x, _ in v if x.kind == "points"]) for k, v in by_label.items()}
         unsure = {k: sets_.union_all([x.indices for x, d in v if x.kind == "points" and d["uncertain"]])
                   for k, v in by_label.items()}  # fmt: skip
         def ancestors(k):
-            out = []
-            while k in parents:
-                k = parents[k]
-                out.append(k)
-            return out
+            return ancestors_in(parents, k)
 
         overlaps = []
         for a_i, a in enumerate(order):
@@ -726,11 +887,10 @@ class Annotations:
                             "points": int(sets_.union_all([unions[s] for s in below]).size)})  # fmt: skip
             return out
 
-        src = project.meta.get("source", {})
         doc = {
             "schema": LABELS_SCHEMA,
             "coordinates": "scan frame (world), metres; store/local = world - offset",
-            "source": {"file": Path(src.get("path", "")).name, "sha256": src.get("sha256"), "n_valid": project.n},
+            "source": source_doc(project),
             "offset": _pt(project.offset),
             "labels": [entry(k) for k in order],
             "unlabelled": entry("") if "" in by_label else None,
@@ -799,12 +959,13 @@ def _node_doc(x, project, points: str) -> dict:
             picked_source_indices=[int(i) for i in x.picked_source],
             length_m=curves.length(line),
             polyline=[_pt(p) for p in line],  # about 2 cm apart: the curve for readers without Bézier code
+            **({"source": jsonable(x.source)} if x.source else {}),
         )
     if x.kind == "polyline":
         return dict(base, vertices=[_pt(p) for p in x.vertices], closed=bool(x.closed), length_m=x.length(),
                     source=jsonable(x.source))  # fmt: skip
     if x.kind == "marker":
-        return dict(base, position=_pt(x.position), source=jsonable(x.source))
+        return dict(base, position=_pt(x.position), source=jsonable(x.source), attributes=jsonable(x.attributes))
     d = dict(base, count=int(len(x.indices)), provenance=jsonable(x.provenance))
     if points == "file":
         d["file"] = f"annotations/{x.id}.npy"
@@ -863,7 +1024,7 @@ def _node_from_doc_body(nd: dict, project, base, same_scan: bool, warnings: list
                      np.asarray(axis_origin, np.float64), mode, np.asarray(pl["normal"], np.float64),
                      np.asarray(pl["point"], np.float64), nodes, h_in, h_out, frame,
                      list(nd.get("picked_source_indices", [-1] * len(nodes))), name, color, label, nid,
-                     bool(nd.get("closed", False)))  # fmt: skip
+                     bool(nd.get("closed", False)), source=dict(nd.get("source", {})))  # fmt: skip
     if kind == "polyline":
         v = np.asarray(nd["vertices"], np.float64).reshape(-1, 3)
         if len(v) == 1:  # schema 6 kept an imported map symbol as a one-vertex polyline: it is a marker
@@ -871,7 +1032,7 @@ def _node_from_doc_body(nd: dict, project, base, same_scan: bool, warnings: list
         return Polyline(v, bool(nd.get("closed", False)), dict(nd.get("source", {})), name, color, label, nid)
     if kind == "marker":
         return Marker(np.asarray(nd["position"], np.float64).reshape(3), dict(nd.get("source", {})), name, color,
-                      label, nid)  # fmt: skip
+                      label, nid, attributes={str(k): v for k, v in nd.get("attributes", {}).items()})  # fmt: skip
     if kind == "points":
         prov = list(nd.get("provenance", []))
         if "file" in nd:
@@ -888,27 +1049,11 @@ def _node_from_doc_body(nd: dict, project, base, same_scan: bool, warnings: list
     return None
 
 
-@nb.njit(parallel=True, nogil=True, cache=True)
-def _match(source_index, wanted, out):
-    for i in nb.prange(source_index.shape[0]):
-        s = np.int64(source_index[i])
-        k = np.searchsorted(wanted, s)
-        out[i] = k < wanted.shape[0] and wanted[k] == s
-
-
-def isin_sorted(values, wanted_sorted) -> np.ndarray:
-    """Boolean mask: which ``values`` are in ``wanted_sorted`` (sorted, unique int64), in parallel."""
-    out = np.empty(len(values), np.bool_)
-    if len(values):
-        _match(np.asarray(values), np.asarray(wanted_sorted, np.int64), out)
-    return out
-
-
 def store_indices_of_sources(project, source_indices) -> np.ndarray:
     """Store indices (sorted) of the points with these source indices: one parallel pass over the source index."""
     wanted = np.unique(np.asarray(source_indices, np.int64))
     if wanted.size == 0:
         return np.empty(0, np.int64)
     hit = np.empty(project.n, np.bool_)
-    _match(np.asarray(project.source_index), wanted, hit)
+    sets_.match_sorted(np.asarray(project.source_index), wanted, hit)
     return np.flatnonzero(hit).astype(np.int64)

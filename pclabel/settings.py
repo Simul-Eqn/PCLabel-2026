@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass, fields
+from dataclasses import dataclass, fields
 from pathlib import Path
 
 from pclabel import DEFAULT_PROJECTS_DIR
@@ -26,7 +26,7 @@ class Settings:
     mesa_dir: str = ""
     gpu_memory_gb: float = 8.0  # resident point buffers (hardware)
     software_memory_gb: float = 2.0  # resident point buffers (software)
-    point_budget: int = 30_000_000  # drawn points per frame (hardware): 65.8 fps worst case (bench_render, M1)
+    point_budget: int = 30_000_000  # drawn points per frame (hardware): 65.8 fps worst case (bench_render, docs/RESULTS.md)
     software_point_budget: int = 300_000  # llvmpipe: about 15 fps at 1920 x 1009 (bench_render --gl software)
 
     @property
@@ -61,12 +61,3 @@ def load_settings(path: str | Path | None = None) -> Settings:
     if s.gl not in GL_MODES:
         raise ValueError(f"settings: gl must be one of {GL_MODES}, not {s.gl!r}")
     return s
-
-
-def save_settings(s: Settings, path: str | Path | None = None) -> Path:
-    path = Path(path) if path else settings_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(asdict(s), indent=2), encoding="utf-8")
-    os.replace(tmp, path)
-    return path

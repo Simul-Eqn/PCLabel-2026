@@ -3,29 +3,29 @@
 Things noticed in the scans while labelling. Observations are the main output of this stage: they turn into rules
 ([LABELLING_STANDARD.md](LABELLING_STANDARD.md)), lint checks, threshold experiments and tool features.
 
-- **Ids:** `O-NNNN`, never reused.
+- **Ids:** `O-NNNN`, never reused. Entries before 2026-11-16 cite rules (`R-NNN`) and questions (`Q-NN`) of the
+  standard's version 0.2, which git history keeps; the standard now has one section per class.
 - **Status:**
   - `open`: seen, not followed up;
   - `to verify`: from earlier work or hearsay, not yet checked in PCLabel;
   - `confirmed`: checked in at least two places or scans;
-  - `became R-NNN`;
+  - `decided`: a rule in the standard now says what it showed;
   - `rejected`: wrong, with the reason.
-- **Adding entries:** `/observe <text>` adds one from chat. Observations captured in the app (the `N` key) are merged
-  with `/ingest-observations`.
+- **Adding entries:** `/observe <text>`.
 - **Location frame:** the scan's own coordinates (metres), unless a reference frame is named.
 
 ## template
 
 ```
 ### O-NNNN <one-line statement of what was seen>
-- date / who: YYYY-MM-DD, <labeller>          · app id: <uuid if captured in the app>
+- date / who: YYYY-MM-DD, <labeller>
 - scan: <file>                                 · where: x, y, z or box [xmin, ymin, xmax, ymax]; view bookmark
 - tags: <class names, feature words, decision-needed?>
 - seen: <what exactly, in which colour mode / cross-section; counts and measurements with units>
-- evidence: <screenshot path, measurement ids, query used>
+- evidence: <screenshot path; the bench/experiments command behind any number>
 - seen elsewhere: <other places/scans checked, with result; "not checked">
-- implications: <rule (R-id, proposed change), lint check, threshold idea, tool/view feature>
-- status: open | to verify | confirmed | became R-NNN | rejected (why)
+- implications: <section of the standard (proposed change), threshold idea, tool/view feature>
+- status: open | to verify | confirmed | decided | rejected (why)
 ```
 
 ## entries
@@ -56,6 +56,56 @@ Things noticed in the scans while labelling. Observations are the main output of
   - **Check in other scans:** newroad 2, ExchangeGreen (RTC360 and BLK ARC).
 - status: open
 
+### O-0003 Kerb steps on streets 1 are 0.12–0.33 m
+- seen (earlier): 12 of 13 hand-picked kerb regions showed a real step of 0.12–0.33 m. Kerbs at the main-road
+  junction mouth kept a full 0.13–0.23 m step. The south kerb at x 15..35, y −30..−18 was 0.17–0.21 m.
+- implications: the step-height range for curb thresholds. A step of 0.33 m may not be a plain kerb (a drain edge?
+  a planter?), so check what the tallest ones are.
+- status: to verify
+
+### O-0004 Lowered kerbs at the east zebra crossing of streets 1
+- seen (earlier): both kerb ends drop from 0.12–0.20 m to 0.01–0.04 m along the stripes and step back up (23–40
+  points per flank in the 5 cm data). Both ends of the west crossing were ambiguous.
+- implications: examples for R-007 (`curb_lowered`) and for where a lowered section starts. Look for tactile tiles
+  in RGB.
+- status: to verify
+
+### O-0005 No-point strip behind kerbs that face away from the scanner
+- seen (earlier): at the north kerb of x 15..35, y −30..−18, the kerb face and toe fall inside a 0.4–0.8 m strip
+  with no points (5 cm data). Toe and lip could not be told apart anywhere in that area.
+- implications: whether the strip shrinks at full resolution. A density / range colour mode should make occlusion
+  obvious. For R-004, option A (face only) fails here.
+- status: to verify
+
+### O-0006 Two bright lines 0.25 m apart, 0.6–0.8 m from the south kerb
+- where: x 15..35, y −30..−18 (road direction about −26.6°)
+- seen (earlier): an intensity-contrast raster showed two bright parallel lines; possibly paint or a gutter band.
+- implications: check in RGB. Double yellow lines along the kerb would mean `marking` flags (R-006). A concrete
+  channel would raise a road-surface question (is the gutter road?).
+- status: to verify
+
+### O-0007 Island noses and backs with little or no step
+- where: island nose by the west crossing x 2..12, y 15..25; curved island kerb x −12..−2, y 10..20
+- seen (earlier): the kerb was partly under shrubs; the nose had no vertical step; the island back changed only
+  gradually by 0.01–0.04 m. About 69 % of one island-nose kerb had no step that a detector could find.
+- implications: the hard cases for R-004, R-008 and R-011. Expect step-based thresholds to fail here; record what
+  other indicators (roughness, RGB, intensity) separate island from road.
+- status: to verify
+
+### O-0008 A tree trunk can pass as a pole
+- seen (earlier): of 6 automatic pole-like candidates on streets 1, about 4 were real poles and 1 was a tree (side
+  view).
+- implications: trunk vs pole features (straightness, a canopy above, radius, intensity) for the threshold explorer.
+  Label both with instance ids.
+- status: to verify
+
+### O-0009 streets 1 has no real building facades
+- seen (earlier): a RANSAC wall search found nothing. The scene includes an embankment, which a classifier without
+  absolute height took for road.
+- implications: `building_wall` stays disabled for now. The embankment is a good negative for road-surface
+  thresholds (a flat-ish surface that is not road).
+- status: to verify
+
 ### O-0010 Drain inlets only sometimes have points below the road level
 - date / who: 2026-10-19, user
 - scan: not recorded                           · where: not recorded
@@ -77,7 +127,7 @@ Things noticed in the scans while labelling. Observations are the main output of
     which inlets look flat. Then check newroad 2 and ExchangeGreen.
   - **Algorithm:** a below-road detector would find only the drains seen from close by. Far drains need other cues
     (the kerb gap, grating intensity). Threshold studies on drains should be split by range.
-  - **View:** the diverging ±5 cm view (M2, not built) would show below-road points. A "range from the scanner"
+  - **View:** a diverging ±5 cm view (not built) would show below-road points. A "range from the scanner"
     colour mode would show where the depth stops being visible.
 - status: open
 
@@ -134,7 +184,7 @@ Things noticed in the scans while labelling. Observations are the main output of
   - **Lean:** 18.5°, toward azimuth 38°. The centre at 0.1–0.5 m above G is 1 cm from the centre of the flare;
     the centre at 1.2–1.4 m is 0.42 m away from it.
   - **Coverage:** the slices cover 81–89 % of the trunk's circumference, so circle fits are well constrained.
-- evidence: scratchpad scripts `tree_profile.py`, `tree_axis.py`, `tree_base.py`, `tree_girth.py`, `tree_band.py`
+- evidence: scratchpad scripts `tree_profile.py`, `tree_axis.py`, `tree_base.py`, `tree_girth.py`, `tree_band.py`, since lost: **not reproducible** until re-measured with a script in `bench/experiments/`
   (this session)
 - seen elsewhere: not measured. The user notes (2026-10-23) that the ground around most trees does not slope
   much, so this tree's ground is probably an exception, and that shrubs are sometimes right against the trunk,
@@ -168,7 +218,7 @@ Things noticed in the scans while labelling. Observations are the main output of
   - FOOT_PATH runs along BACK_OF_CURB (4.8 cm, where it is within 1.5 m of it: 54 % of its vertices); PAVED_PARKING
     along BOTTOM_OF_CURB (4.5 cm).
   - Each curb layer has 55 polylines of about 2.8 km in all.
-- evidence: scratchpad script `rock_line_gaps.py` (this session); earlier (O-0011's session) the lowest scan
+- evidence: scratchpad script `rock_line_gaps.py`, since lost: **not reproducible** until re-measured with a script in `bench/experiments/`; earlier (O-0011's session) the lowest scan
   points below TOP_OF_CURB were a median 14 cm lower, consistent with the 14.5 cm.
 - seen elsewhere: not checked (ROCK's r3_pro drawing `planimetrics-dataset-with-r3-pro-try-2-3d-1-.dxf`; no
   Singapore scan has a ROCK drawing)
@@ -198,7 +248,7 @@ Things noticed in the scans while labelling. Observations are the main output of
     radii. 83 % of the offsets point toward the scanner (taken at the scan's origin).
   - by coverage: under 50 % (55 bands) median 6.9 cm (0.80 radii); 50–75 % (48) 4.8 cm (0.71); 75 % and more (24)
     3.4 cm (0.50).
-- evidence: scratchpad script `tree_mean_bias.py` (this session). In theory a circular arc of half-angle a has its
+- evidence: scratchpad script `tree_mean_bias.py`, since lost: **not reproducible** until re-measured with a script in `bench/experiments/`. In theory a circular arc of half-angle a has its
   points' mean r·sin(a)/a from the centre: 0.64 r for a half circle.
 - seen elsewhere: not checked
 - implications:
@@ -226,7 +276,7 @@ Things noticed in the scans while labelling. Observations are the main output of
     4.3 / 6.3 / 9.7 cm.
   - The mobile scan sees each pole from one side: the columns cover only 6–19 % of their circumference, so these
     circle centres are themselves uncertain by several cm. The columns' plain means were 6–9 cm (median) off them.
-- evidence: scratchpad script `rock_symbols_vs_poles.py` (this session)
+- evidence: scratchpad script `rock_symbols_vs_poles.py`, since lost: **not reproducible** until re-measured with a script in `bench/experiments/`
 - seen elsewhere: not checked (no Singapore scan has a ROCK drawing)
 - implications:
   - **Rule:** ROCK places a pole's or tree's symbol at its foot, on or near its axis: the same reference as R-017
@@ -237,58 +287,120 @@ Things noticed in the scans while labelling. Observations are the main output of
     detections, misses and distances, is a possible tool.
 - status: open
 
+### O-0016 ExchangeGreen's kerbs step 8-10 cm, about half of streets 1's
+- date / who: 2026-11-05, measured by Claude while finding why the user's curb traces failed
+- scan: `ExchangeGreen/RTC360/ExchangeGreen 1.e57` · where: along the user's curves `tli_curb/tli_left` and
+  `tli_curb/tli_right` (e.g. near x 2.2, y 11.0 and x -9.2, y -51.7)
+- tags: curb, step height, threshold, R-004, Q-01
+- seen: cross-sections (20th percentile of heights in 0.1 m bins across the curve) step from road to kerb top by 8-10
+  cm at most places, 12 cm at one; the pavement behind keeps rising a few cm. In one place the kerb's face was
+  scanned (300 points in 4 cm) but not its top. On streets 1, by the curb tracer at the user's curb lines: 0.12-0.19
+  m (median about 0.165 m); O-0003 found 0.12-0.33 m there.
+- evidence: scratchpad scripts `trace_eg1.py`, `debug_section.py`, `trace_streets1.py`, since lost: **not reproducible** until re-measured with a script in `bench/experiments/`
+- seen elsewhere: not checked (newroad 2, the BLK ARC captures of ExchangeGreen)
+- implications:
+  - **Threshold:** a fixed curb height of 0.10 m (LiDAR360MLS's default) misses these kerbs; the tracer now uses 0.06
+    m. A curb algorithm's step threshold has to go below 8 cm for ExchangeGreen, which brings it near lowered
+    kerbs' 2-4 cm (O-0004): worth measuring how far apart the two stay.
+  - **Rule:** R-004's kerb unit is unchanged; the measured height belongs with each traced line (it is recorded).
+- status: open
+
 ### Prior observations from earlier work in this workspace (status `to verify`)
 
 These come from `../Roadrun/docs/experiments.md` and `../Roadrun/docs/project_brief.md`, made on a 5 cm voxel
 downsample of `streets 1.e57`. Coordinates are in that downsample's frame, which should equal the E57 frame (identity
 pose); check on first open. Verifying them at full resolution is a cheap source of first observations.
 
-### O-0003 Kerb steps on streets 1 are 0.12–0.33 m
-- seen (earlier): 12 of 13 hand-picked kerb regions showed a real step of 0.12–0.33 m. Kerbs at the main-road
-  junction mouth kept a full 0.13–0.23 m step. The south kerb at x 15..35, y −30..−18 was 0.17–0.21 m.
-- implications: the step-height range for curb thresholds. A step of 0.33 m may not be a plain kerb (a drain edge?
-  a planter?), so check what the tallest ones are.
-- status: to verify
+### O-0017 Curbs have two stages: a strip at road level, then the raised curb
+- date / who: before 2026-11-16, user (from `ignore/streets_labelling_observations/obs.md` and the standard's supplementary)
+- scan: streets 1                              · where: around −22.075, 19.725, −1.547
+- tags: curb, road, strip beside road, drain
+- seen: the road, then an area where the curb meets the road (it may have drains), then the curb itself. The lower
+  stage is sometimes hard to see and sometimes absent (photos in `ignore/images/`: `strip_at_side.jpg`,
+  `strip_around_not_defined.jpg`, `no_strip_around.jpg`, `chinatown_road_edge.png`).
+- evidence: `ignore/streets_labelling_observations/images/curbs_stages.png`
+- seen elsewhere: not checked in other scans. O-0006's two bright lines near the south kerb may be this strip.
+- implications: the standard leaves the strip unlabelled and ends the road at its outer edge. The pipeline needs to
+  find the strip's outer edge as well as the curb's top.
+- status: decided
 
-### O-0004 Lowered kerbs at the east zebra crossing of streets 1
-- seen (earlier): both kerb ends drop from 0.12–0.20 m to 0.01–0.04 m along the stripes and step back up (23–40
-  points per flank in the 5 cm data). Both ends of the west crossing were ambiguous.
-- implications: examples for R-007 (`curb_lowered`) and for where a lowered section starts. Look for tactile tiles
-  in RGB.
-- status: to verify
+### O-0018 Lines near the road edge are bright too; intensity still separates a walkway sloping to the road
+- date / who: before 2026-11-16, user (`ignore/streets_labelling_observations/obs.md`)
+- scan: streets 1                              · where: −21.869, 18.814, −1.577 (bright lines); 14.978, 5.914, −1.270 (walkway)
+- tags: road_line, intensity, curb, pavement
+- seen: where the walkway goes down to the road, intensity separates walkway from road. Near the road edge there are
+  also high-intensity lines.
+- evidence: `ignore/streets_labelling_observations/images/lines_near_road-edge.png`, `walkway_go_near_road.png`
+- seen elsewhere: not checked
+- implications: magic select for road lines should be clipped to the road set so it does not pick up the edge; check
+  whether the bright edge lines are paint or the strip of O-0017.
+- status: open
 
-### O-0005 No-point strip behind kerbs that face away from the scanner
-- seen (earlier): at the north kerb of x 15..35, y −30..−18, the kerb face and toe fall inside a 0.4–0.8 m strip
-  with no points (5 cm data). Toe and lip could not be told apart anywhere in that area.
-- implications: whether the strip shrinks at full resolution. A density / range colour mode should make occlusion
-  obvious. For R-004, option A (face only) fails here.
-- status: to verify
+### O-0019 Roads in one scan tilt relative to each other
+- date / who: before 2026-11-16, user (`ignore/streets_labelling_observations/obs.md`)
+- scan: streets 1                              · where: the top and bottom roads (top view)
+- tags: road, ground plane, wrap height
+- seen: with the ground fitted to the bottom road, the top road shows an orderly alternating pattern at a 6 cm wrap
+  period: it is rotated relative to the plane. The part that goes down in the top view slopes up significantly
+  (seen at a 10 cm wrap period).
+- evidence: `ignore/streets_labelling_observations/images/roads_tilted.png`, `roads_tilted_2.png`
+- seen elsewhere: not checked
+- implications: no single plane is the ground for a whole scan; automatic stages use a local ground surface.
+- status: decided
 
-### O-0006 Two bright lines 0.25 m apart, 0.6–0.8 m from the south kerb
-- where: x 15..35, y −30..−18 (road direction about −26.6°)
-- seen (earlier): an intensity-contrast raster showed two bright parallel lines; possibly paint or a gutter band.
-- implications: check in RGB. Double yellow lines along the kerb would mean `marking` flags (R-006). A concrete
-  channel would raise a road-surface question (is the gutter road?).
-- status: to verify
+### O-0020 Flat surfaces show a regular wrap-height pattern
+- date / who: before 2026-11-16, user (the standard's supplementary; `ignore/labelling_progress.md`)
+- scan: streets 1                              · where: (not recorded)
+- tags: pavement, road, wrap height, vegetation
+- seen: with the wrap-height view on a plane fitted to a flat surface such as the road, the pavement shows a regular
+  pattern; vegetation, which is not flat, does not. Different surfaces seem to have different wrap patterns.
+- evidence: `ignore/streets_labelling_observations/images/pavement_pattern.png`, `ignore/images/wrap_z_pattern.png`
+- seen elsewhere: not checked
+- implications: the regularity of the wrap pattern (local height roughness after removing a plane) could be a feature
+  for telling pavement from vegetation, measured on the labelled pavement and vegetation sets.
+- status: open
 
-### O-0007 Island noses and backs with little or no step
-- where: island nose by the west crossing x 2..12, y 15..25; curved island kerb x −12..−2, y 10..20
-- seen (earlier): the kerb was partly under shrubs; the nose had no vertical step; the island back changed only
-  gradually by 0.01–0.04 m. About 69 % of one island-nose kerb had no step that a detector could find.
-- implications: the hard cases for R-004, R-008 and R-011. Expect step-based thresholds to fail here; record what
-  other indicators (roughness, RGB, intensity) separate island from road.
-- status: to verify
+### O-0021 The ground near a tree rises toward its trunk
+- date / who: before 2026-11-16, user (`ignore/images/obs2.md`)
+- scan: streets 1 (the images are filed with its observations) · where: (not recorded)
+- tags: vegetation, grass, tree, ground height
+- seen: the grass around trees tends to rise toward the trunk; usually not by much, perhaps because of roots.
+- evidence: `ignore/streets_labelling_observations/images/around_trees_up0.png`, `around_trees_up1.png`
+- seen elsewhere: not checked
+- implications: a tree's base height clicked a little away from the trunk sits low, which moves the 1.00–1.10 m band
+  up by the same amount. Measure the rise on a few labelled trees.
+- status: open
 
-### O-0008 A tree trunk can pass as a pole
-- seen (earlier): of 6 automatic pole-like candidates on streets 1, about 4 were real poles and 1 was a tree (side
-  view).
-- implications: trunk vs pole features (straightness, a canopy above, radius, intensity) for the threshold explorer.
-  Label both with instance ids.
-- status: to verify
+### O-0022 Ground select leaves diagonal gaps behind trees
+- date / who: before 2026-11-16, user (`ignore/streets_labelling_observations/images/aa.md`)
+- scan: streets 1                              · where: −57.008, 26.370, −1.351
+- tags: road, ground select, occlusion, tree
+- seen: ground select with an intensity filter sometimes leaves diagonal gaps, probably where a tree blocked the
+  scanner.
+- evidence: `ignore/streets_labelling_observations/images/gg_gaps0.png`
+- seen elsewhere: not checked
+- implications: like O-0005, missing points are occlusion, not a class. Check that the gaps line up with rays from the
+  scanner through a trunk; the road mask should not treat them as holes in the road.
+- status: open
 
-### O-0009 streets 1 has no real building facades
-- seen (earlier): a RANSAC wall search found nothing. The scene includes an embankment, which a classifier without
-  absolute height took for road.
-- implications: `building_wall` stays disabled for now. The embankment is a good negative for road-surface
-  thresholds (a flat-ish surface that is not road).
-- status: to verify
+### O-0023 A walkway looks like a road in intensity
+- date / who: before 2026-11-16, user (`ignore/exchangegreen_labelling_observations/observations.md`)
+- scan: ExchangeGreen 1                        · where: (not recorded)
+- tags: pavement, road, intensity, tactile paving
+- seen: a walkway with yellow tactile paving (so not a road) is hard to tell from a road by intensity alone, unless
+  one uses the fact that there are no curbs around it.
+- evidence: `ignore/exchangegreen_labelling_observations/images/walkway_not_road.png`, `walkway_not_road_intensity.png`
+- seen elsewhere: not checked
+- implications: road and pavement cannot be separated by intensity alone; the road mask should depend on the curbs,
+  and tactile paving (RGB) is evidence for pavement.
+- status: open
+
+### O-0024 An unexplained feature in streets 1
+- date / who: before 2026-11-16, user (`ignore/labelling_progress.md`, "figure out what this anomaly is")
+- scan: streets 1                              · where: near 21.161, 19.365, −0.757
+- tags: decision-needed
+- seen: (not recorded beyond the screenshot)
+- evidence: `ignore/images/1028_notsure.png`
+- seen elsewhere: not checked
+- implications: none yet; label it `other` or leave it unassessed until it is identified.
+- status: open

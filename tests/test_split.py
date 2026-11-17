@@ -1,6 +1,5 @@
 """Splitting a point set by roughness, with the clean-up and the points to look at."""
 
-from dataclasses import replace
 
 import numpy as np
 import pytest

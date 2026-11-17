@@ -134,3 +134,20 @@ def xor(a, b) -> np.ndarray:
     if b.size == 0:
         return np.asarray(a, np.int64)
     return _op(a, b, True, True, False)
+
+
+@nb.njit(parallel=True, nogil=True, cache=True)
+def match_sorted(values, wanted, out):
+    """out[i] = values[i] is in ``wanted`` (sorted, unique int64), in parallel."""
+    for i in nb.prange(values.shape[0]):
+        s = np.int64(values[i])
+        k = np.searchsorted(wanted, s)
+        out[i] = k < wanted.shape[0] and wanted[k] == s
+
+
+def isin_sorted(values, wanted_sorted) -> np.ndarray:
+    """Boolean mask: which ``values`` are in ``wanted_sorted`` (sorted, unique int64), in parallel."""
+    out = np.empty(len(values), np.bool_)
+    if len(values):
+        match_sorted(np.asarray(values), np.asarray(wanted_sorted, np.int64), out)
+    return out

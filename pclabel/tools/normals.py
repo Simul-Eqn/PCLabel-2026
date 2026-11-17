@@ -9,7 +9,7 @@
 3. **Growth** from the clicked voxel, as in PCL. A neighbour (an occupied voxel within ``connect``) joins when its
    normal is within ``smoothness`` degrees of the current voxel's (the sign of a normal does not matter). It then
    carries the growth on only if its curvature is below ``curvature`` (PCL's seeds). So the region follows
-   surfaces that bend slowly and stops at creases and edges (kerb lips, wall corners) and on rough surfaces
+   surfaces that bend slowly and stops at creases and edges (curb lips, wall corners) and on rough surfaces
    (vegetation). The growth stays inside the cube of half-size ``radius`` around the click.
 4. **Points:** every point in a grown voxel.
 
@@ -24,10 +24,11 @@ from dataclasses import asdict, dataclass
 import numba as nb
 import numpy as np
 
+from pclabel.store.tiles import tiles_meeting
 from pclabel.tools import sets
+from pclabel.tools.voxels import BITS, EMPTY, find, grown, hash_slot, local_normals
+from pclabel.tools.selection import reach as filter_reach, restrict
 
-EMPTY = np.int64(-1)
-BITS = 21  # per axis in a voxel key: up to 2 million voxels along each side of the cube
 
 
 @dataclass(frozen=True)
@@ -70,28 +71,9 @@ class NormalGrowResult:
     info: dict
 
 
-def build_key(params: NormalGrowParams, clip=None, inside=None) -> tuple:
-    c = None if clip is None else (tuple(np.asarray(clip[0], float)), tuple(np.asarray(clip[1], float)))
-    return (params.radius, params.voxel, params.normal_radius, c, None if inside is None else inside.token)
-
-
-@nb.njit(nogil=True, cache=True, inline="always")
-def _hash(key, mask):
-    h = np.uint64(key) * np.uint64(0x9E3779B97F4A7C15)
-    return np.int64((h >> np.uint64(29)) & np.uint64(mask))
-
-
-@nb.njit(nogil=True, cache=True)
-def _find(keys, key):
-    mask = keys.shape[0] - 1
-    h = _hash(key, mask)
-    while True:
-        k = keys[h]
-        if k == key:
-            return h
-        if k == EMPTY:
-            return -1
-        h = (h + 1) & mask
+def build_key(params: NormalGrowParams, filters=None) -> tuple:
+    f = filters.key() if filters is not None else (None, None)
+    return (params.radius, params.voxel, params.normal_radius, *f)
 
 
 @nb.njit(nogil=True, cache=True)
@@ -111,7 +93,7 @@ def _insert(xyz, i0, b, lo, voxel, n_side, clip_on, clo, chi, in_on, inside, key
         if ix < 0 or iy < 0 or iz < 0 or ix >= n_side or iy >= n_side or iz >= n_side:
             continue
         key = (np.int64(ix) << (2 * BITS)) | (np.int64(iy) << BITS) | np.int64(iz)
-        h = _hash(key, mask)
+        h = hash_slot(key, mask)
         while keys[h] != EMPTY and keys[h] != key:
             h = (h + 1) & mask
         if keys[h] == EMPTY:
@@ -124,70 +106,6 @@ def _insert(xyz, i0, b, lo, voxel, n_side, clip_on, clo, chi, in_on, inside, key
         sums[h, 2] += z
         cnt[h] += 1
     return b, used
-
-
-@nb.njit(nogil=True, cache=True)
-def _rehash(keys, sums, cnt, nkeys, nsums, ncnt):
-    mask = nkeys.shape[0] - 1
-    for s in range(keys.shape[0]):
-        k = keys[s]
-        if k == EMPTY:
-            continue
-        h = _hash(k, mask)
-        while nkeys[h] != EMPTY:
-            h = (h + 1) & mask
-        nkeys[h] = k
-        nsums[h] = sums[s]
-        ncnt[h] = cnt[s]
-
-
-@nb.njit(parallel=True, nogil=True, cache=True)
-def _normals(keys, centroid, reach, radius, normal, curvature, rough):
-    """PCA normals, surface variation and roughness (the spread off the local plane, sqrt of the smallest
-    eigenvalue, metres) of every voxel from the voxels within ``radius`` (``reach`` voxels)."""
-    mask = np.int64((1 << BITS) - 1)
-    r2 = radius * radius
-    for s in nb.prange(keys.shape[0]):
-        k = keys[s]
-        if k == EMPTY:
-            continue
-        ix, iy, iz = (k >> (2 * BITS)) & mask, (k >> BITS) & mask, k & mask
-        c = centroid[s]
-        m = 0
-        mean = np.zeros(3)
-        cov = np.zeros((3, 3))
-        for dx in range(-reach, reach + 1):
-            for dy in range(-reach, reach + 1):
-                for dz in range(-reach, reach + 1):
-                    jx, jy, jz = ix + dx, iy + dy, iz + dz
-                    if jx < 0 or jy < 0 or jz < 0:
-                        continue
-                    t = _find(keys, (jx << (2 * BITS)) | (jy << BITS) | jz)
-                    if t < 0:
-                        continue
-                    q = centroid[t]
-                    d0, d1, d2 = q[0] - c[0], q[1] - c[1], q[2] - c[2]
-                    if d0 * d0 + d1 * d1 + d2 * d2 > r2:
-                        continue
-                    m += 1
-                    for a in range(3):
-                        mean[a] += q[a]
-                        for b in range(3):
-                            cov[a, b] += q[a] * q[b]
-        if m < 3:
-            normal[s, 0] = np.nan
-            curvature[s] = np.nan
-            rough[s] = np.nan
-            continue
-        mean /= m
-        for a in range(3):
-            for b in range(3):
-                cov[a, b] = cov[a, b] / m - mean[a] * mean[b]
-        w, v = np.linalg.eigh(cov)
-        normal[s] = v[:, 0]
-        tot = w[0] + w[1] + w[2]
-        curvature[s] = max(w[0], 0.0) / tot if tot > 0 else 0.0
-        rough[s] = np.sqrt(max(w[0], 0.0))
 
 
 @nb.njit(nogil=True, cache=True)
@@ -214,7 +132,7 @@ def _grow(keys, normal, curvature, seed, reach, lo_i, hi_i, cos_t, max_curv, reg
                     jx, jy, jz = ix + dx, iy + dy, iz + dz
                     if jx < lo_i[0] or jy < lo_i[1] or jz < lo_i[2] or jx > hi_i[0] or jy > hi_i[1] or jz > hi_i[2]:
                         continue
-                    t = _find(keys, (jx << (2 * BITS)) | (jy << BITS) | jz)
+                    t = find(keys, (jx << (2 * BITS)) | (jy << BITS) | jz)
                     if t < 0 or region[t]:
                         continue
                     n1 = normal[t]
@@ -240,7 +158,7 @@ def _classify(xyz, a, b, lo, voxel, n_side, keys, region, out):
         iz = int(np.floor((xyz[i, 2] - lo[2]) / voxel))
         ok = False
         if 0 <= ix < n_side and 0 <= iy < n_side and 0 <= iz < n_side:
-            t = _find(keys, (np.int64(ix) << (2 * BITS)) | (np.int64(iy) << BITS) | np.int64(iz))
+            t = find(keys, (np.int64(ix) << (2 * BITS)) | (np.int64(iy) << BITS) | np.int64(iz))
             ok = t >= 0 and region[t]
         out[k] = ok
 
@@ -248,9 +166,10 @@ def _classify(xyz, a, b, lo, voxel, n_side, keys, region, out):
 PICTURE_SCALE = 1.5  # the voxels' half-size, in reaches
 
 
-def build_voxels(xyz, tiles, centre, params: NormalGrowParams, clip=None, inside=None) -> VoxelNormals:
+def build_voxels(xyz, tiles, centre, params: NormalGrowParams, filters=None) -> VoxelNormals:
     """Voxels, centroids, normals and curvature in a cube of half-size PICTURE_SCALE x the reach around ``centre``,
-    from the points within the clip box and ``inside`` (a PointMask)."""
+    from the points ``filters`` reach (its clip box and point mask)."""
+    clip, inside = filter_reach(filters)
     p = params
     half = PICTURE_SCALE * p.radius
     n_side = int(np.ceil(2 * half / p.voxel)) + 1
@@ -260,10 +179,7 @@ def build_voxels(xyz, tiles, centre, params: NormalGrowParams, clip=None, inside
     lo = np.floor((centre - half) / p.voxel) * p.voxel  # a fixed lattice
     hi = lo + n_side * p.voxel
     t = tiles
-    cand = np.flatnonzero((t["x1"] >= lo[0]) & (t["x0"] <= hi[0]) & (t["y1"] >= lo[1]) & (t["y0"] <= hi[1])
-                          & (t["zmax"] >= lo[2]) & (t["zmin"] <= hi[2]))  # fmt: skip
-    if inside is not None:
-        cand = inside.keep_tiles(t, cand)
+    cand = tiles_meeting(t, lo, hi, inside)
     in_on, in_mask = sets.mask_args(inside)
     size = 1 << 20
     keys = np.full(size, EMPTY, np.int64)
@@ -280,29 +196,28 @@ def build_voxels(xyz, tiles, centre, params: NormalGrowParams, clip=None, inside
             i, used = _insert(arr, i, b, lo, p.voxel, n_side, clip is not None, clo, chi, in_on, in_mask, keys, sums,
                               cnt, used, size // 2)  # fmt: skip
             if i < b:  # half full: double the table
-                size *= 2
-                nk, ns, nc = np.full(size, EMPTY, np.int64), np.zeros((size, 3)), np.zeros(size, np.int32)
-                _rehash(keys, sums, cnt, nk, ns, nc)
-                keys, sums, cnt = nk, ns, nc
+                keys, sums, cnt = grown(keys, sums, cnt)
+                size = keys.shape[0]
     centroid = sums / np.maximum(cnt, 1)[:, None]
     normal = np.full((size, 3), np.nan)
     curvature = np.full(size, np.nan)
     rough = np.full(size, np.nan)
     reach = int(np.ceil(p.normal_radius / p.voxel))
-    _normals(keys, centroid, reach, p.normal_radius, normal, curvature, rough)
-    return VoxelNormals(lo, p.voxel, n_side, keys, centroid, cnt, normal, curvature, build_key(p, clip, inside),
+    local_normals(keys, centroid, reach, p.normal_radius, normal, curvature, rough)
+    return VoxelNormals(lo, p.voxel, n_side, keys, centroid, cnt, normal, curvature, build_key(p, filters),
                         int(cnt.sum()))  # fmt: skip
 
 
 def normal_grow(xyz, tiles, seed, params: NormalGrowParams = NormalGrowParams(), *, voxels=None,
-                clip=None, inside=None) -> NormalGrowResult:  # fmt: skip
+                filters=None) -> NormalGrowResult:  # fmt: skip
     """Run the geometric grow from ``seed`` (local). Pass ``voxels`` from an earlier run to reuse them when they were
     built with the same settings and cover this click's reach."""
     p = params
     seed = np.asarray(seed, np.float64)
-    reused = voxels is not None and voxels.key == build_key(p, clip, inside) and voxels.covers(seed, p.radius)
+    clip, inside = filter_reach(filters)
+    reused = voxels is not None and voxels.key == build_key(p, filters) and voxels.covers(seed, p.radius)
     if not reused:
-        voxels = build_voxels(xyz, tiles, seed, p, clip, inside)
+        voxels = build_voxels(xyz, tiles, seed, p, filters)
     v = voxels
     vi = np.floor((seed - v.lo) / v.voxel).astype(np.int64)
     s = -1
@@ -312,7 +227,7 @@ def normal_grow(xyz, tiles, seed, params: NormalGrowParams = NormalGrowParams(),
             j = vi + np.array(d) - r
             if np.any(j < 0):
                 continue
-            t = _find(v.keys, (np.int64(j[0]) << (2 * BITS)) | (np.int64(j[1]) << BITS) | np.int64(j[2]))
+            t = find(v.keys, (np.int64(j[0]) << (2 * BITS)) | (np.int64(j[1]) << BITS) | np.int64(j[2]))
             if t >= 0 and np.isfinite(v.normal[t, 0]):
                 dist = float(np.linalg.norm(v.centroid[t] - seed))
                 best = min(best, (dist, int(t)))
@@ -331,10 +246,7 @@ def normal_grow(xyz, tiles, seed, params: NormalGrowParams = NormalGrowParams(),
     lo_w = v.lo + lo_i * v.voxel
     hi_w = v.lo + (hi_i + 1) * v.voxel
     t = tiles
-    cand = np.flatnonzero((t["x1"] >= lo_w[0]) & (t["x0"] <= hi_w[0]) & (t["y1"] >= lo_w[1]) & (t["y0"] <= hi_w[1])
-                          & (t["zmax"] >= lo_w[2]) & (t["zmin"] <= hi_w[2]))  # fmt: skip
-    if inside is not None:
-        cand = inside.keep_tiles(t, cand)
+    cand = tiles_meeting(t, lo_w, hi_w, inside)
     arr = np.asarray(xyz)
     parts = []
     for k in cand:
@@ -342,11 +254,7 @@ def normal_grow(xyz, tiles, seed, params: NormalGrowParams = NormalGrowParams(),
         out = np.empty(b - a, np.bool_)
         _classify(arr, a, b, v.lo, v.voxel, v.n_side, v.keys, region, out)
         idx = np.flatnonzero(out).astype(np.int64) + a
-        if inside is not None and idx.size:
-            idx = idx[inside.mask[idx]]
-        if clip is not None and idx.size:
-            q = arr[idx]
-            idx = idx[np.all((q >= clip[0]) & (q <= clip[1]), axis=1)]
+        idx = restrict(arr, idx, clip, inside)
         parts.append(idx)
     idx = np.concatenate(parts) if parts else np.empty(0, np.int64)
     reached = bool(np.any(region & _on_box_edge(v, lo_i, hi_i)))

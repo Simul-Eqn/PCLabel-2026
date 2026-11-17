@@ -1,4 +1,4 @@
-"""Geometry of drawn curves (SPEC §13): a plane perpendicular to the height axis fitted to clicked points, the
+"""Geometry of drawn curves: a plane perpendicular to the height axis fitted to clicked points, the
 clicked points projected onto it, and a smooth curve through them.
 
 The curve is piecewise cubic Bézier, one piece between consecutive nodes; a closed curve (a loop) has one more piece,
@@ -113,9 +113,172 @@ def set_handle(node, h_in, h_out, side: int, target, normal) -> tuple[np.ndarray
     return h_in, h_out
 
 
-def length(polyline: np.ndarray) -> float:
+def _dp(v: np.ndarray, tol: float) -> list:
+    """Douglas-Peucker: indices of the vertices kept so that the straight pieces stay within ``tol`` (3D)."""
+    keep = {0, len(v) - 1}
+    stack = [(0, len(v) - 1)]
+    while stack:
+        a, b = stack.pop()
+        if b <= a + 1:
+            continue
+        ab = v[b] - v[a]
+        L = float(np.linalg.norm(ab))
+        w = v[a + 1 : b] - v[a]
+        d = np.linalg.norm(np.cross(w, ab / L), axis=1) if L > 1e-12 else np.linalg.norm(w, axis=1)
+        k = int(np.argmax(d))
+        if d[k] > tol:
+            keep.add(a + 1 + k)
+            stack += [(a, a + 1 + k), (a + 1 + k, b)]
+    return sorted(keep)
+
+
+def resample(vertices, step: float, closed: bool = False) -> np.ndarray:
+    """Points ``step`` apart (about) along a line through the vertices, its vertices among them; a closed line's
+    first point is not repeated at the end."""
+    v = np.asarray(vertices, np.float64).reshape(-1, 3)
+    if closed and len(v) > 2:
+        v = np.vstack([v, v[:1]])
+    out = [v[:1]]
+    for a, b in zip(v[:-1], v[1:]):
+        k = max(1, int(np.ceil(np.linalg.norm(b - a) / step)))
+        out.append(a + (np.arange(1, k + 1) / k)[:, None] * (b - a))
+    p = np.vstack(out)
+    return p[:-1] if closed and len(v) > 3 else p
+
+
+def even_points(vertices, step: float, closed: bool = False) -> np.ndarray:
+    """Points evenly spaced, about ``step`` apart, along the line by length. Unlike ``resample`` the vertices are not
+    kept, so a densely sampled line gives points ``step`` apart too. A closed line's first point is not repeated."""
+    v = np.asarray(vertices, np.float64).reshape(-1, 3)
+    if closed and len(v) > 2:
+        v = np.vstack([v, v[:1]])
+    s = arc_length(v)
+    k = max(2, int(round(s[-1] / step)) + 1)
+    t = np.linspace(0.0, s[-1], k)
+    if closed and len(vertices) > 2:
+        t = t[:-1]
+    return np.column_stack([np.interp(t, s, v[:, j]) for j in range(3)])
+
+
+def sample_along(line, spacing: float):
+    """An open line sampled every ``spacing`` along each piece (its vertices among the samples), with the unit
+    direction and the distance along the line at each sample. Returns (points, directions, distances, length)."""
+    v = np.asarray(line, np.float64)
+    seg = np.diff(v, axis=0)
+    L = np.linalg.norm(seg, axis=1)
+    keep = L > 1e-9
+    v = np.vstack([v[:1], v[1:][keep]])
+    seg, L = seg[keep], L[keep]
+    if not len(seg):
+        raise ValueError("the reference line has no length")
+    pts, dirs, s = [], [], []
+    acc = 0.0
+    for a, d, ln in zip(v[:-1], seg, L):
+        k = max(1, int(np.ceil(ln / spacing)))
+        t = np.arange(k) / k
+        pts.append(a + t[:, None] * d)
+        dirs.append(np.repeat((d / ln)[None], k, 0))
+        s.append(acc + t * ln)
+        acc += ln
+    pts.append(v[-1:])
+    dirs.append((seg[-1] / L[-1])[None])
+    s.append(np.array([acc]))
+    return np.vstack(pts), np.vstack(dirs), np.concatenate(s), acc
+
+
+def smooth_line(vertices, scale: float = 1.0, max_shift: float = 0.05, closed: bool = False,
+                step: float = 0.02) -> tuple[np.ndarray, float]:  # fmt: skip
+    """(smoothed points ``step`` apart, largest shift): a Gaussian average along the line (sigma ``scale`` m of
+    length), each point moved at most ``max_shift`` (so a real corner is rounded by no more than that). An open
+    line's ends stay where they are (the line is mirrored through each end, so near an end it keeps its direction).
+    Heights are smoothed with the rest."""
+    p = resample(vertices, step, closed)
+    n = len(p)
+    if n < 3 or scale <= 0:
+        return p, 0.0
+    r = max(1, int(np.ceil(3 * scale / step)))
+    k = np.exp(-0.5 * (np.arange(-r, r + 1) * step / scale) ** 2)
+    k /= k.sum()
+    if closed:
+        reps = r // n + 1
+        pad = np.vstack([p] * (2 * reps + 1))
+        lo = reps * n - r
+        ext = pad[lo : lo + n + 2 * r]
+    else:
+        m = min(r, n - 1)
+        left = 2 * p[0] - p[m:0:-1]
+        right = 2 * p[-1] - p[-2 : -m - 2 : -1]
+        ext = np.vstack([left, p, right])
+        if m < r:  # a line shorter than the kernel: repeat the mirrored ends
+            ext = np.vstack([np.repeat(ext[:1], r - m, 0), ext, np.repeat(ext[-1:], r - m, 0)])
+    s = np.stack([np.convolve(ext[:, j], k, mode="valid") for j in range(3)], axis=1)
+    d = s - p
+    dn = np.linalg.norm(d, axis=1)
+    f = np.minimum(1.0, max_shift / np.maximum(dn, 1e-12))
+    s = p + d * f[:, None]
+    if not closed:
+        s[0], s[-1] = p[0], p[-1]
+    return s, float(np.minimum(dn, max_shift).max())
+
+
+def wiggle(points, closed: bool = False) -> float:
+    """Total turning across the line's direction (degrees, sum of |turn| between consecutive pieces of points about
+    evenly spaced): how wavy a line is (a straight line 0, a circle 360)."""
+    p = np.asarray(points, np.float64)
+    if closed:
+        p = np.vstack([p[-1:], p, p[:1]])
+    d = np.diff(p[:, :2], axis=0)
+    d = d[np.linalg.norm(d, axis=1) > 1e-9]
+    a = np.arctan2(d[:, 1], d[:, 0])
+    t = (np.diff(a) + np.pi) % (2 * np.pi) - np.pi
+    return float(np.degrees(np.abs(t).sum()))
+
+
+def simplify(vertices, tol: float, closed: bool = False) -> list:
+    """Indices of the vertices kept so that straight pieces between them stay within ``tol`` of the others."""
+    v = np.asarray(vertices, np.float64).reshape(-1, 3)
+    if len(v) <= 2:
+        return list(range(len(v)))
+    if not closed:
+        return _dp(v, tol)
+    idx = _dp(np.vstack([v, v[:1]]), tol)[:-1]
+    return idx if len(idx) >= 3 else sorted({0, len(v) // 3, 2 * len(v) // 3})
+
+
+def nodes_within(vertices, tol: float = 0.01, closed: bool = False) -> tuple[list, float]:
+    """(indices of ``vertices`` to make nodes of, largest distance of a vertex from the curve): the fewest nodes
+    found (Douglas-Peucker at ``tol``, then the vertex furthest from the curve added as a node until every vertex is
+    within ``tol``) so that the curve with automatic handles through them passes within ``tol`` of every vertex.
+    For a traced line made into an editable curve."""
+    from scipy.spatial import cKDTree
+
+    v = np.asarray(vertices, np.float64).reshape(-1, 3)
+    if len(v) <= 2:
+        return list(range(len(v))), 0.0
+    idx = _dp(np.vstack([v, v[:1]]), tol)[:-1] if closed else _dp(v, tol)
+    if closed and len(idx) < 3:
+        idx = sorted({0, len(v) // 3, 2 * len(v) // 3})
+    while True:
+        nodes = v[idx]
+        nan = np.full_like(nodes, np.nan)
+        d = cKDTree(bezier(nodes, nan, nan.copy(), min(0.01, tol / 2), closed)).query(v)[0]
+        k = int(np.argmax(d))
+        if d[k] <= tol or k in idx:
+            return idx, float(d.max())
+        idx = sorted(idx + [k])
+
+
+def length(polyline, closed: bool = False) -> float:
+    """The line's length; ``closed``: with the piece from the last vertex back to the first (more than 2 vertices)."""
     p = np.asarray(polyline, np.float64)
-    return float(np.linalg.norm(np.diff(p, axis=0), axis=1).sum()) if len(p) > 1 else 0.0
+    out = float(np.linalg.norm(np.diff(p, axis=0), axis=1).sum()) if len(p) > 1 else 0.0
+    return out + (float(np.linalg.norm(p[-1] - p[0])) if closed and len(p) > 2 else 0.0)
+
+
+def arc_length(polyline) -> np.ndarray:
+    """(m,): the distance along the line to each vertex, from 0."""
+    p = np.asarray(polyline, np.float64)
+    return np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(p, axis=0), axis=1))]
 
 
 def closest(nodes, h_in, h_out, point, samples: int = 64, closed: bool = False) -> tuple[int, float]:

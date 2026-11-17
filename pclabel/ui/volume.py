@@ -37,10 +37,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pclabel.analysis.geometry import frame_axes
 from pclabel.tools.volume import (
     VolumeParams,
     box_spec,
-    frame_axes,
     inset_outline,
     loop_centre,
     loop_spec,
@@ -97,7 +97,7 @@ class VolumeDock(QDockWidget):
             f.addRow(label, sp)
             self.spins[name] = (sp, k)
         self.spins["inset"][0].setToolTip("pull the loop in evenly by this much (the same distance everywhere, e.g. off "
-                                          "the kerb line); negative pushes it out")  # fmt: skip
+                                          "the curb line); negative pushes it out")  # fmt: skip
         self.spins["bottom"][0].setToolTip("from the clicked point (box, cylinder) or the curve's plane (loop), along "
                                            "the height axis or the curve's plane normal")  # fmt: skip
         self.step = _spin(0.1, 500, 10.0, 1.0, 2, " cm")
@@ -246,7 +246,7 @@ class VolumeController(QObject):
     def use_selected_curve(self, quiet: bool = False):
         """The closed curve being edited or selected in the Annotations panel becomes the loop."""
         a = self.w.annot
-        cands = ([a.editing] if a.editing is not None else []) + a._selected_items()
+        cands = ([a.editing] if a.editing is not None else []) + a.selected_items()
         c = next((x for x in cands if x.kind == "curve" and x.closed), None)
         if c is None:
             if not quiet:
@@ -372,11 +372,8 @@ class VolumeController(QObject):
         lines = None
         if self.vp.tool != "volume" and d.clip_volume_on and d.clip_volume is not None:
             lines = [(q, CLIP_COLOR, 1.2) for q in d.clip_volume.outline(min(self.dock.verticals.value(), 16))]
-        self.vp.makeCurrent()
-        try:
+        with self.vp.current():
             r.set_vectors(lines, None, layer="clip")
-        finally:
-            self.vp.doneCurrent()
         self.vp.update()
 
     def confirm(self, op: str):
@@ -429,11 +426,8 @@ class VolumeController(QObject):
                 size = f"{p.length:.2f} x {p.width:.2f} m" if p.shape == "box" else f"radius {p.radius:.2f} m"
                 self.dock.status.setText(f"{p.shape} {size}, {p.bottom:+.2f} to {p.top:+.2f} m along the height axis; "
                                          f"base at {np.round(self.base + self.w.project.offset, 3).tolist()}")  # fmt: skip
-        self.vp.makeCurrent()
-        try:
+        with self.vp.current():
             r.set_vectors(lines, points, layer="volume")
-        finally:
-            self.vp.doneCurrent()
         if self.vp.tool == "volume" and self.dock.live.isChecked() and lines is not None:
             self.clip_to_this()  # the clip follows the volume
         else:

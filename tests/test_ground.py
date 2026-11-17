@@ -1,29 +1,23 @@
-"""Ground grow on the synthetic street (crowned road, markings, drains, a lowered kerb with a pavement ramp)."""
+"""Ground grow on the synthetic street (crowned road, markings, drains, a lowered curb with a pavement ramp)."""
 
 from dataclasses import replace
 
 import numpy as np
 import pytest
 
-from pclabel.store.tiles import TilingParams, build_tiles
-from pclabel.synth import make_street
+from pclabel.synth import is_material, store_order
 from pclabel.tools.ground import GroundGrowParams, ground_grow
+from pclabel.tools.selection import SelectFilters
 
 # the synthetic scan is about 40x sparser than streets 1, so cells are 20 cm here (10 cm is the default)
 P = GroundGrowParams(cell=0.2, max_gap=0.6, intensity_range=1.0)
 
 
 @pytest.fixture(scope="module")
-def scene(taxonomy):
-    s = make_street(n_target=1_000_000, seed=3)
-    tiles, order = build_tiles(s.xyz, TilingParams(max_points=50_000))
-    xyz = np.ascontiguousarray(s.xyz[order])
-    cls, flags = s.cls[order], s.flags[order]
-    road = cls == taxonomy.class_id("road")
-    d = np.where(road, np.hypot(xyz[:, 0] + 5, xyz[:, 1] + 1.5), np.inf)
-    seed = xyz[np.argmin(d)].astype(np.float64)  # on the road, near the scanner
-    return {"xyz": xyz, "inten": s.intensity[order], "tiles": tiles, "cls": cls, "flags": flags, "seed": seed,
-            "params": s.params}  # fmt: skip
+def scene(street_1m):
+    xyz, mat = street_1m["xyz"], street_1m["mat"]
+    d = np.where(is_material(mat, "road"), np.hypot(xyz[:, 0] + 5, xyz[:, 1] + 1.5), np.inf)
+    return dict(street_1m, seed=xyz[np.argmin(d)].astype(np.float64))  # on the road, near the scanner
 
 
 def selected(scene, params):
@@ -35,22 +29,21 @@ def selected(scene, params):
 
 def test_grows_over_the_road_and_its_markings_only(scene, taxonomy):
     sel, r = selected(scene, P)
-    cls = scene["cls"]
-    road = cls == taxonomy.class_id("road")
-    marking = (scene["flags"] & taxonomy.flag_mask("marking")) > 0
-    assert (sel & ~road).sum() <= 0.005 * sel.sum()  # kerb and drain-lip points at road level, at most 0.5 %
+    mat = scene["mat"]
+    road = is_material(mat, "road", "marking")
+    marking = is_material(mat, "marking")
+    assert (sel & ~road).sum() <= 0.005 * sel.sum()  # curb and drain-lip points at road level, at most 0.5 %
     for name in ("pavement", "grass", "tree_trunk", "tree_canopy", "lamp_post"):
-        assert not (sel & (cls == taxonomy.class_id(name))).any(), name
+        assert not (sel & is_material(mat, name)).any(), name
     assert sel[road].mean() > 0.95
     assert sel[marking].mean() > 0.9  # paint is bridged, not a boundary
     assert r.info["cells_bridged"] > 0 and np.all(np.diff(r.indices) > 0)
 
 
 def test_intensity_is_what_stops_the_walkway(scene, taxonomy):
-    """At the lowered kerb the pavement ramps down to road height: without the intensity checks the grow leaks
+    """At the lowered curb the pavement ramps down to road height: without the intensity checks the grow leaks
     onto it, with them it does not."""
-    cls = scene["cls"]
-    pavement = cls == taxonomy.class_id("pavement")
+    pavement = is_material(scene["mat"], "pavement")
     leak, _ = selected(scene, replace(P, intensity_step=1.0, intensity_range=1.0, max_step=0.025))
     held, _ = selected(scene, replace(P, max_step=0.025))
     assert (leak & pavement).sum() > 10_000
@@ -58,7 +51,7 @@ def test_intensity_is_what_stops_the_walkway(scene, taxonomy):
 
 
 def test_markings_need_bridging(scene, taxonomy):
-    marking = (scene["flags"] & taxonomy.flag_mask("marking")) > 0
+    marking = is_material(scene["mat"], "marking")
     bridged, _ = selected(scene, P)
     plain, r = selected(scene, replace(P, marking_width=0.0))
     assert r.info["cells_bridged"] == 0
@@ -94,15 +87,15 @@ def test_reach_limits_the_grow(scene):
 def test_seed_without_ground_data(scene):
     with pytest.raises(ValueError):
         ground_grow(scene["xyz"], scene["inten"], scene["tiles"], scene["seed"] + (0, 0, 0), P,
-                    clip=(scene["seed"] + 100, scene["seed"] + 101))  # fmt: skip
+                    filters=SelectFilters(clip_min=tuple(scene["seed"] + 100), clip_max=tuple(scene["seed"] + 101)))
 
 
 def patch(parts, max_points=10_000_000):
     """Store-ordered arrays from [(xyz (n, 3), intensity 0..1 (n,)), ...]."""
     xyz = np.vstack([p[0] for p in parts]).astype(np.float32)
     inten = (np.concatenate([p[1] for p in parts]) * 65535).astype(np.uint16)
-    tiles, order = build_tiles(xyz, TilingParams(max_points=max_points))
-    return np.ascontiguousarray(xyz[order]), inten[order], tiles
+    xyz, tiles, inten = store_order(xyz, max_points, inten)
+    return xyz, inten, tiles
 
 
 def flat(rng, x0, x1, y0, y1, density, z=0.0, inten=0.05):
@@ -141,7 +134,7 @@ def test_intensity_is_compared_with_the_local_road_not_the_seed():
     assert local.info["stopped_by"]["intensity vs local road"] < 5
 
 
-def test_gaps_are_crossed_but_not_up_a_kerb():
+def test_gaps_are_crossed_but_not_up_a_curb():
     rng = np.random.default_rng(2)
     # a flat road with a 0.6 m no-point strip across it (a pole's shadow)
     a = flat(rng, 0, 10, 0, 3, 2000)
@@ -149,7 +142,7 @@ def test_gaps_are_crossed_but_not_up_a_kerb():
     xyz, inten, tiles = patch([a, b])
     r = ground_grow(xyz, inten, tiles, np.array([5.0, 1.5, 0.0]), GroundGrowParams(radius=25))
     assert (xyz[r.indices, 0] > 10.6).sum() > 0.95 * len(b[0])
-    # a 15 cm kerb top behind a 0.6 m no-point strip (the strip behind a kerb that faces away)
+    # a 15 cm curb top behind a 0.6 m no-point strip (the strip behind a curb that faces away)
     c = flat(rng, 0, 10, 0, 3, 2000)
     d = flat(rng, 10.6, 20, 0, 3, 2000, z=0.15)
     xyz, inten, tiles = patch([c, d])

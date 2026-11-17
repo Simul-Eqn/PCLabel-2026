@@ -87,13 +87,13 @@ class PointSource:
     xyz: np.ndarray
     rgb: np.ndarray | None
     intensity: np.ndarray | None
-    labels: np.ndarray | None
-    flags: np.ndarray | None
+    labels: np.ndarray | None = None  # per-point class ids (the class mode; synthetic ground truth only)
+    flags: np.ndarray | None = None
     offset: np.ndarray = field(default_factory=lambda: np.zeros(3))
 
     @classmethod
     def from_project(cls, p) -> "PointSource":
-        return cls(p.tiles, p.xyz, p.rgb, p.intensity, p.labels, p.flags, p.offset)
+        return cls(p.tiles, p.xyz, p.rgb, p.intensity, offset=p.offset)
 
     @property
     def n(self) -> int:
@@ -116,6 +116,7 @@ class Display:
     flat_color: tuple = (0.80, 0.80, 0.78)
     gamma: float = 0.6
     intensity_range: tuple = (0.0, 1.0)  # stretched to black..white before gamma
+    intensity_hide: bool = False  # hide points outside intensity_range (in every colour mode)
     height_range: tuple = (0.0, 10.0)
     period: float = 0.03
     h0: float = 0.0
@@ -496,7 +497,7 @@ class PointRenderer:
         u = self._uniforms(self.prog, {
             "u_mvp": np.ascontiguousarray(mvp.T, np.float32).tobytes(),
             "u_mode": int(d.mode), "u_gamma": float(d.gamma),
-            "u_irange": tuple(float(v) for v in d.intensity_range),
+            "u_irange": tuple(float(v) for v in d.intensity_range), "u_ihide": int(d.intensity_hide),
             "u_h_normal": tuple(float(v) for v in d.height_normal),
             "u_h_origin": tuple(float(v) for v in np.asarray(d.height_origin, np.float64) - off),
             "u_band_on": int(d.band_on), "u_band": tuple(float(v) for v in d.band),
@@ -753,8 +754,3 @@ class PointRenderer:
         """The last frame's depth buffer, (h, w) float32 window depth, row 0 at the top (for selection)."""
         (w, h), fbo, _, _ = self._target
         return np.frombuffer(fbo.read(components=1, attachment=-1, dtype="f4"), np.float32).reshape(h, w)[::-1].copy()
-
-    def read_color(self) -> np.ndarray:
-        """The last frame's point colours (before EDL), (h, w, 3) uint8, row 0 at the top."""
-        (w, h), fbo, _, _ = self._target
-        return np.frombuffer(fbo.read(components=3), np.uint8).reshape(h, w, 3)[::-1]

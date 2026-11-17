@@ -13,6 +13,8 @@ from dataclasses import dataclass
 import numba as nb
 import numpy as np
 
+from pclabel.analysis.geometry import boxes_visible, frustum_planes
+
 
 @nb.njit(nogil=True, cache=True)
 def rasterize_polygon(poly, width, height):
@@ -185,13 +187,27 @@ class SelectFilters:
         """The candidate tiles that can hold points these filters keep (the clip to a point set skips the rest)."""
         return cand if self.inside is None else self.inside.keep_tiles(tiles, cand)
 
-    def apply(self, xyz: np.ndarray, idx: np.ndarray) -> np.ndarray:
-        if self.inside is not None and idx.size:
-            idx = idx[self.inside.mask[idx]]
-        if idx.size == 0 or (self.clip_min is None and self.band is None and self.volume is None):
-            return idx
-        q = np.asarray(xyz[idx], np.float64)
+    def box(self):
+        """The clip box as (lo, hi) local float64 arrays, or None."""
+        if self.clip_min is None:
+            return None
+        return np.asarray(self.clip_min, np.float64), np.asarray(self.clip_max, np.float64)
+
+    def key(self) -> tuple:
+        """What a seed tool's cached grid, picture or voxels depend on: the clip box and the point mask."""
+        b = self.box()
+        return (None if b is None else (tuple(b[0]), tuple(b[1])), None if self.inside is None else self.inside.token)
+
+    def keep(self, xyz: np.ndarray, idx: np.ndarray) -> np.ndarray:
+        """Boolean mask over ``idx``: the points these filters keep (the point mask first, then the clip box, the
+        height slice and the clip volume)."""
+        idx = np.asarray(idx, np.int64)
         keep = np.ones(len(idx), bool)
+        if self.inside is not None and idx.size:
+            keep &= self.inside.mask[idx]
+        if idx.size == 0 or (self.clip_min is None and self.band is None and self.volume is None):
+            return keep
+        q = np.asarray(xyz[idx], np.float64)
         if self.clip_min is not None:
             keep &= np.all((q >= np.asarray(self.clip_min)) & (q <= np.asarray(self.clip_max)), axis=1)
         if self.band is not None:
@@ -199,7 +215,32 @@ class SelectFilters:
             keep &= (hh >= self.band[0]) & (hh <= self.band[1])
         if self.volume is not None:
             keep &= self.volume.contains(q)
-        return idx[keep]
+        return keep
+
+    def apply(self, xyz: np.ndarray, idx: np.ndarray) -> np.ndarray:
+        """The store indices these filters keep."""
+        idx = np.asarray(idx, np.int64)
+        return idx[self.keep(xyz, idx)]
+
+
+def restrict(xyz, idx, clip=None, inside=None) -> np.ndarray:
+    """The store indices ``idx`` that a seed tool keeps: in the point mask ``inside``, then in the clip box ``clip``
+    ((lo, hi) local), in that order."""
+    if inside is not None and idx.size:
+        idx = idx[inside.mask[idx]]
+    if clip is not None and idx.size:
+        q = xyz[idx]
+        idx = idx[np.all((q >= clip[0]) & (q <= clip[1]), axis=1)]
+    return idx
+
+
+def reach(filters) -> tuple:
+    """(clip box or None, point mask or None) of ``filters`` (or None): what the seed tools (grow, magic select,
+    geometric grow) and the clean-up read their points through. The height slice and the clip volume are applied by
+    the caller to what they select."""
+    if filters is None:
+        return None, None
+    return filters.box(), filters.inside
 
 
 def select_visible(
@@ -212,7 +253,7 @@ def select_visible(
     filters: SelectFilters | None = None,
     dilate_px: int = 2,
 ) -> np.ndarray:
-    """Store indices (sorted, int64) of every point inside a screen polygon (SPEC §4), at full resolution.
+    """Store indices (sorted, int64) of every point inside a screen polygon, at full resolution.
 
     Only tiles whose projected box meets the polygon's bounding box are scanned. With ``depth`` only points not
     hidden behind the drawn surface are kept; the depth buffer is min-filtered over ``dilate_px`` pixels first,
@@ -233,8 +274,6 @@ def select_visible(
     x0, y0, x1, y1, _ = project_boxes(lo, hi, mvp, (w, h))
     bx0, by0 = poly.min(0)
     bx1, by1 = poly.max(0)
-    from pclabel.render.camera import boxes_visible, frustum_planes  # numpy only (no GL)
-
     cand = np.flatnonzero(boxes_visible(frustum_planes(mvp), lo, hi) & (x1 >= bx0) & (x0 <= bx1) & (y1 >= by0)
                           & (y0 <= by1))  # fmt: skip
     if filters is not None:

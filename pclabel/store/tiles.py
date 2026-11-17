@@ -202,3 +202,19 @@ def build_tiles(xyz: np.ndarray, params: TilingParams = TilingParams()) -> tuple
     tiles["size"] = [size * cell for _, _, size, _, _ in leaves]
     tiles["start"], tiles["count"] = starts, counts
     return tiles, order
+
+
+def tile_box_mask(tiles, lo, hi) -> np.ndarray:
+    """Which tiles' bounds meet the box ``lo``..``hi`` (local): two values each test x and y, three also z."""
+    t = tiles
+    m = (t["x1"] >= lo[0]) & (t["x0"] <= hi[0]) & (t["y1"] >= lo[1]) & (t["y0"] <= hi[1])
+    if len(lo) > 2:
+        m &= (t["zmax"] >= lo[2]) & (t["zmin"] <= hi[2])
+    return m
+
+
+def tiles_meeting(tiles, lo, hi, inside=None) -> np.ndarray:
+    """Indices (table order) of the tiles whose bounds meet the box ``lo``..``hi``; with ``inside`` (a
+    ``tools.sets.PointMask``), only those holding any of its points."""
+    cand = np.flatnonzero(tile_box_mask(tiles, lo, hi))
+    return cand if inside is None else inside.keep_tiles(tiles, cand)

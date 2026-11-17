@@ -1,10 +1,10 @@
 """Magic select (intensity): from a click on a road marking, select the connected ground area of similar intensity,
-like the magic wand of an image editor, on an intensity picture of the ground (SPEC §11).
+like the magic wand of an image editor, on an intensity picture of the ground.
 
 1. Picture. The ground surface comes from cells as in ground grow (``ground_cell``, 10 cm: the points within
    ``surface_band`` of a cell's 5th percentile height, their median height). Every point within ``surface_tol`` of
    its cell's surface is a *ground point*. Ground points are binned into square pixels (``pixel``, 2 cm) that hold
-   their mean intensity and mean height. Vehicles, canopy and kerb faces above the ground and drain floors below it
+   their mean intensity and mean height. Vehicles, canopy and curb faces above the ground and drain floors below it
    are not in the picture. Far from the scanner the points lie on scan lines several cm apart, so many pixels there
    are empty.
 2. Gaps. An empty pixel within ``max_gap`` / 2 of a pixel with data takes that pixel's values (the nearest one), as
@@ -17,11 +17,11 @@ like the magic wand of an image editor, on an intensity picture of the ground (S
      0.03-0.10), so a factor separates paint from road where a fixed difference cannot. The reference is the
      clicked pixel's intensity, as in an image editor; with ``memory`` > 0 it is a running (geometric) average
      along the fill over about that distance, which follows a line whose intensity fades with range;
-   - its height differs from the current pixel's by at most ``max_step``, so the fill does not climb a kerb onto
-     bright kerb paint.
+   - its height differs from the current pixel's by at most ``max_step``, so the fill does not climb a curb onto
+     bright curb paint.
    Each refused pixel records why. With ``contiguous`` off, every pixel within ``tolerance`` of the clicked one is
    taken, connected to it or not, on the surface the click is on (the ground reachable from it without a height
-   step, e.g. the road between its kerbs): all the dashes of a line, and anything else as bright there. The fill
+   step, e.g. the road between its curbs): all the dashes of a line, and anything else as bright there. The fill
    stays inside the square of half-size ``radius`` around the click.
 4. Points: every ground point in a selected pixel.
 
@@ -39,7 +39,10 @@ from dataclasses import asdict, dataclass
 import numba as nb
 import numpy as np
 
+from pclabel.analysis.geometry import disk
+from pclabel.store.tiles import tiles_meeting
 from pclabel.tools import sets
+from pclabel.tools.selection import reach as filter_reach, restrict
 from pclabel.tools.ground import (
     R_GAP,
     R_HEIGHT,
@@ -103,11 +106,10 @@ class MagicResult:
     info: dict
 
 
-def picture_key(params: MagicSelectParams, clip=None, inside=None) -> tuple:
+def picture_key(params: MagicSelectParams, filters=None) -> tuple:
     p = params
-    c = None if clip is None else (tuple(np.asarray(clip[0], float)), tuple(np.asarray(clip[1], float)))
-    return (p.radius, p.pixel, p.surface_tol, p.ground_cell, p.surface_band, p.cell_points, c,
-            None if inside is None else inside.token)  # fmt: skip
+    f = filters.key() if filters is not None else (None, None)
+    return (p.radius, p.pixel, p.surface_tol, p.ground_cell, p.surface_band, p.cell_points, *f)
 
 
 @nb.njit(nogil=True, cache=True)
@@ -174,10 +176,10 @@ def _classify(xyz, a, b, gx0, gy0, gcell, gnx, gny, surf, tol, x0, y0, pixel, nx
         out[k] = ok
 
 
-def intensity_image(xyz, intensity, tiles, centre, params: MagicSelectParams, clip=None,
-                    inside=None) -> IntensityImage:  # fmt: skip
+def intensity_image(xyz, intensity, tiles, centre, params: MagicSelectParams, filters=None) -> IntensityImage:
     """The ground's intensity picture around ``centre`` (local coordinates), PICTURE_SCALE x the reach, from the
-    points within the clip box and ``inside`` (a PointMask)."""
+    points ``filters`` reach (its clip box and point mask)."""
+    clip, inside = filter_reach(filters)
     p = params
     centre = np.asarray(centre, np.float64)
     half = PICTURE_SCALE * p.radius
@@ -192,7 +194,7 @@ def intensity_image(xyz, intensity, tiles, centre, params: MagicSelectParams, cl
     gy0 = np.floor(y0 / g) * g
     gn = int(np.ceil((x0 + n * p.pixel - gx0) / g)) + 1
     gp = GroundGrowParams(cell=g, surface_band=p.surface_band, cell_points=p.cell_points)
-    grid = cell_grid(xyz, intensity, tiles, centre, gp, clip, extent=(gx0, gy0, gn, gn), inside=inside)
+    grid = cell_grid(xyz, intensity, tiles, centre, gp, filters, extent=(gx0, gy0, gn, gn))
     in_on, in_mask = sets.mask_args(inside)
     s_i = np.zeros((n, n))
     s_z = np.zeros((n, n))
@@ -226,18 +228,18 @@ def intensity_image(xyz, intensity, tiles, centre, params: MagicSelectParams, cl
     z = np.full((n, n), np.nan)
     inten[has] = s_i[has] / cnt[has]
     z[has] = s_z[has] / cnt[has]
-    return IntensityImage(float(x0), float(y0), p.pixel, n, n, inten, z, cnt, grid, picture_key(p, clip, inside),
+    return IntensityImage(float(x0), float(y0), p.pixel, n, n, inten, z, cnt, grid, picture_key(p, filters),
                           int(cnt.sum()))  # fmt: skip
 
 
 def _disc_offsets(r: float):
     """Offsets within r pixels (not the centre), nearest first; ties in a fixed order."""
-    k = int(np.floor(r))
-    dy, dx = np.mgrid[-k : k + 1, -k : k + 1]
-    dy, dx = dy.ravel(), dx.ravel()
+    m = disk(r)
+    k = m.shape[0] // 2
+    m[k, k] = False
+    dy, dx = np.nonzero(m)
+    dy, dx = dy - k, dx - k
     d2 = dy**2 + dx**2
-    keep = (d2 > 0) & (d2 <= r * r + 1e-9)
-    dy, dx, d2 = dy[keep], dx[keep], d2[keep]
     o = np.lexsort((dx, dy, d2))
     return dy[o].astype(np.int64), dx[o].astype(np.int64)
 
@@ -327,9 +329,7 @@ def select_region_points(xyz, tiles, img: IntensityImage, region: np.ndarray, pa
     lo = np.array([img.x0 + xs.min() * img.pixel, img.y0 + ys.min() * img.pixel])
     hi = np.array([img.x0 + (xs.max() + 1) * img.pixel, img.y0 + (ys.max() + 1) * img.pixel])
     t = tiles
-    cand = np.flatnonzero((t["x1"] >= lo[0]) & (t["x0"] <= hi[0]) & (t["y1"] >= lo[1]) & (t["y0"] <= hi[1]))
-    if inside is not None:
-        cand = inside.keep_tiles(t, cand)
+    cand = tiles_meeting(t, lo, hi, inside)
     arr = np.asarray(xyz)
     g = img.grid
     parts = []
@@ -339,23 +339,20 @@ def select_region_points(xyz, tiles, img: IntensityImage, region: np.ndarray, pa
         _classify(arr, a, b, g.x0, g.y0, g.cell, g.nx, g.ny, g.surf, params.surface_tol, img.x0, img.y0, img.pixel,
                   img.nx, img.ny, region, out)  # fmt: skip
         idx = np.flatnonzero(out) + a
-        if inside is not None and idx.size:
-            idx = idx[inside.mask[idx]]
-        if clip is not None and idx.size:
-            q = arr[idx]
-            idx = idx[np.all((q >= clip[0]) & (q <= clip[1]), axis=1)]
+        idx = restrict(arr, idx, clip, inside)
         parts.append(idx.astype(np.int64))
     return np.concatenate(parts) if parts else np.empty(0, np.int64)
 
 
 def magic_select(xyz, intensity, tiles, seed, params: MagicSelectParams = MagicSelectParams(), *, image=None,
-                 clip=None, inside=None) -> MagicResult:  # fmt: skip
+                 filters=None) -> MagicResult:  # fmt: skip
     """Run the whole tool. Pass the ``image`` of an earlier run: it is reused when it was built with the same
     settings and covers this click's reach, so later clicks and threshold changes do not re-read the points."""
     seed = np.asarray(seed, np.float64)
-    reused = image is not None and image.key == picture_key(params, clip, inside) and image.covers(seed, params.radius)
+    clip, inside = filter_reach(filters)
+    reused = image is not None and image.key == picture_key(params, filters) and image.covers(seed, params.radius)
     if not reused:
-        image = intensity_image(xyz, intensity, tiles, seed, params, clip, inside)
+        image = intensity_image(xyz, intensity, tiles, seed, params, filters)
     region, info = magic_region(image, seed, params)
     idx = select_region_points(xyz, tiles, image, region, params, clip, inside)
     info["points"] = int(idx.size)

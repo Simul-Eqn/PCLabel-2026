@@ -7,7 +7,7 @@ outer stretches, so for the tools the middle one is not there: a 3 m gap no grow
 import numpy as np
 import pytest
 
-from pclabel.store.tiles import TilingParams, build_tiles
+from pclabel.synth import store_order
 from pclabel.tools import sets
 from pclabel.tools.cleanup import CleanParams, clean_selection
 from pclabel.tools.ground import GroundGrowParams, ground_grow
@@ -33,8 +33,7 @@ def make_scene(marking=None):
     parts = [road(rng, x0, x1, marking=marking) for x0, x1 in ((0, 10), (10, 13), (13, 23))]
     xyz = np.vstack([p[0] for p in parts]).astype(np.float32)
     inten = (np.concatenate([p[1] for p in parts]) * 65535).astype(np.uint16)
-    tiles, order = build_tiles(xyz, TilingParams(max_points=40_000))
-    xyz, inten = np.ascontiguousarray(xyz[order]), inten[order]
+    xyz, tiles, inten = store_order(xyz, 40_000, inten)
     keep = np.flatnonzero((xyz[:, 0] < 10) | (xyz[:, 0] > 13))
     return xyz, inten, tiles, sets.PointMask(keep, len(xyz), "outer stretches")
 
@@ -62,7 +61,7 @@ def test_grow_select_sees_only_the_set(scene):
     far = xyz[:, 0] > 13
     free = ground_grow(xyz, inten, tiles, seed, p)
     assert (xyz[free.indices, 0] > 13).sum() > 0.95 * far.sum()  # over the middle stretch
-    clipped = ground_grow(xyz, inten, tiles, seed, p, inside=inside)
+    clipped = ground_grow(xyz, inten, tiles, seed, p, filters=SelectFilters(inside=inside))
     # not the free result trimmed: without the middle stretch the far one is never reached
     assert inside.mask[clipped.indices].all() and (xyz[clipped.indices, 0] > 13).sum() == 0
     assert (xyz[clipped.indices, 0] < 10).sum() > 0.95 * (xyz[:, 0] < 10).sum()
@@ -77,10 +76,10 @@ def test_geometric_grow_sees_only_the_set(scene):
     p = NormalGrowParams(voxel=0.05, normal_radius=0.15, connect=0.075, radius=25)
     free = normal_grow(xyz, tiles, seed, p)
     assert (xyz[free.indices, 0] > 13).sum() > 0.95 * (xyz[:, 0] > 13).sum()
-    clipped = normal_grow(xyz, tiles, seed, p, inside=inside)
+    clipped = normal_grow(xyz, tiles, seed, p, filters=SelectFilters(inside=inside))
     assert inside.mask[clipped.indices].all() and (xyz[clipped.indices, 0] > 13).sum() == 0
     assert clipped.info["voxels_reused"] is False and clipped.voxels.key != free.voxels.key
-    again = normal_grow(xyz, tiles, seed, p, voxels=clipped.voxels, inside=inside)
+    again = normal_grow(xyz, tiles, seed, p, voxels=clipped.voxels, filters=SelectFilters(inside=inside))
     assert again.info["voxels_reused"] and np.array_equal(again.indices, clipped.indices)
 
 
@@ -90,7 +89,7 @@ def test_magic_select_sees_only_the_set():
     line = np.abs(xyz[:, 1] - 1.5) < 0.09
     free = magic_select(xyz, inten, tiles, seed, p)
     assert (xyz[free.indices, 0] > 13).sum() > 0.9 * (line & (xyz[:, 0] > 13)).sum()  # along the whole line
-    clipped = magic_select(xyz, inten, tiles, seed, p, image=free.image, inside=inside)
+    clipped = magic_select(xyz, inten, tiles, seed, p, image=free.image, filters=SelectFilters(inside=inside))
     assert not clipped.info["picture_reused"]  # a picture of other points
     assert inside.mask[clipped.indices].all() and (xyz[clipped.indices, 0] > 13).sum() == 0
     assert (line & (xyz[:, 0] < 9.5) & (xyz[:, 0] > 1))[clipped.indices].sum() > 0  # still the line before the gap
@@ -123,6 +122,6 @@ def test_clean_up_reads_only_the_set(scene):
     sel = inside.indices[xyz[inside.indices, 2] <= 0]  # about half the set's points
     args = (xyz, tiles, sel, (0, 0, 1), (1, 0, 0), np.zeros(3), CleanParams())
     _, _, free = clean_selection(*args)
-    added, removed, info = clean_selection(*args, inside=inside)
+    added, removed, info = clean_selection(*args, SelectFilters(inside=inside))
     assert free["region_points"] == len(xyz) and info["region_points"] == inside.indices.size
     assert inside.mask[added].all() and inside.mask[removed].all() and info["added"] > 0

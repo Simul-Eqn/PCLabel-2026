@@ -93,11 +93,10 @@ def test_depth_test_keeps_front_drops_hidden():
 
 def test_select_visible_matches_kernel_and_filters(street):
     """Tile culling must not lose points: select_visible == the kernel over every point; filters drop the rest."""
-    from pclabel.store.tiles import TilingParams, build_tiles
+    from pclabel.synth import store_order
     from pclabel.tools.selection import SelectFilters, select_visible
 
-    tiles, order = build_tiles(street.xyz, TilingParams(max_points=20_000))
-    xyz = np.ascontiguousarray(street.xyz[order])
+    xyz, tiles = store_order(street.xyz, 20_000)
     W, H = 640, 480
     cam = OrbitCamera(target=np.array([0.0, 0.0, 0.0]), distance=25, yaw=-80, pitch=50)
     cam.update_clip(xyz.min(0), xyz.max(0))

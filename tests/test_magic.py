@@ -1,29 +1,24 @@
 """Magic select by intensity on the synthetic street (dashed centre line, double yellow lines) and on small patches
-(scan-line gaps, a fading line, painted kerbs)."""
+(scan-line gaps, a fading line, painted curbs)."""
 
 from dataclasses import replace
 
 import numpy as np
 import pytest
 
-from pclabel.store.tiles import TilingParams, build_tiles
-from pclabel.synth import make_street
+from pclabel.synth import is_material, store_order
 from pclabel.tools.magic import MagicSelectParams, magic_select
 
 P = MagicSelectParams(radius=8.0)
 
 
 @pytest.fixture(scope="module")
-def scene(taxonomy):
-    s = make_street(n_target=1_000_000, seed=3)
-    tiles, order = build_tiles(s.xyz, TilingParams(max_points=50_000))
-    xyz = np.ascontiguousarray(s.xyz[order])
-    cls, flags = s.cls[order], s.flags[order]
-    marking = (flags & taxonomy.flag_mask("marking")) > 0
+def scene(street_1m):
+    xyz, mat = street_1m["xyz"], street_1m["mat"]
+    marking = is_material(mat, "marking")
     dash = marking & (np.abs(xyz[:, 1]) < 0.1) & (xyz[:, 0] > -3) & (xyz[:, 0] < 0)  # the centre dash x -3..0
     d = np.where(dash, np.hypot(xyz[:, 0] + 1.5, xyz[:, 1]), np.inf)
-    return {"xyz": xyz, "inten": s.intensity[order], "tiles": tiles, "cls": cls, "marking": marking, "dash": dash,
-            "seed": xyz[np.argmin(d)].astype(np.float64)}  # fmt: skip
+    return dict(street_1m, marking=marking, dash=dash, seed=xyz[np.argmin(d)].astype(np.float64))
 
 
 def selected(scene, params, seed=None, **kw):
@@ -38,7 +33,7 @@ def test_selects_the_clicked_dash(scene, taxonomy):
     assert sel[scene["dash"]].mean() > 0.98
     assert (sel & scene["marking"]).sum() > 0.97 * sel.sum()
     assert not (sel & scene["marking"] & ~scene["dash"]).any()  # contiguous: not the next dash, not the yellow lines
-    assert not (sel & (scene["cls"] != taxonomy.class_id("road"))).any()
+    assert not (sel & ~is_material(scene["mat"], "road", "marking")).any()
     assert np.all(np.diff(r.indices) > 0) and r.info["params"]["tolerance"] == 2.0
     lo, hi = r.info["accepted_intensity"]
     assert lo == pytest.approx(r.info["seed_intensity"] / 2) and hi == pytest.approx(r.info["seed_intensity"] * 2)
@@ -46,20 +41,19 @@ def test_selects_the_clicked_dash(scene, taxonomy):
 
 def test_not_contiguous_takes_the_other_markings_on_the_road(scene, taxonomy):
     sel, _ = selected(scene, replace(P, contiguous=False))
-    cls = scene["cls"]
     assert (sel & scene["marking"] & ~scene["dash"]).sum() > 10_000  # other dashes and the yellow lines
     assert (sel & scene["marking"]).sum() > 0.85 * sel.sum()
     for name in ("pavement", "grass", "tree_trunk", "tree_canopy", "lamp_post"):  # as bright, but not on the road
-        assert not (sel & (cls == taxonomy.class_id(name))).any(), name
+        assert not (sel & is_material(scene["mat"], name)).any(), name
 
 
 def test_tolerance_is_a_factor(scene, taxonomy):
     tight, _ = selected(scene, replace(P, tolerance=1.05))  # the dash's own spread is about +-10 %
     assert tight[scene["dash"]].sum() < 0.5 * scene["dash"].sum()
-    wide, r = selected(scene, replace(P, tolerance=10.0))  # takes the road too, but not up the kerbs
-    road = scene["cls"] == taxonomy.class_id("road")
+    wide, r = selected(scene, replace(P, tolerance=10.0))  # takes the road too, but not up the curbs
+    road = is_material(scene["mat"], "road", "marking")
     assert (wide & road & ~scene["marking"]).sum() > 100_000
-    assert not (wide & (scene["cls"] == taxonomy.class_id("pavement"))).any()
+    assert not (wide & is_material(scene["mat"], "pavement")).any()
     assert r.info["stopped_by"]["height step"] > 0
 
 
@@ -85,8 +79,8 @@ def patch(parts, max_points=200_000):
     """Store-ordered arrays from [(xyz (n, 3), intensity 0..1 (n,)), ...]."""
     xyz = np.vstack([p[0] for p in parts]).astype(np.float32)
     inten = (np.clip(np.concatenate([p[1] for p in parts]), 0, 1) * 65535).astype(np.uint16)
-    tiles, order = build_tiles(xyz, TilingParams(max_points=max_points))
-    return np.ascontiguousarray(xyz[order]), inten[order], tiles
+    xyz, tiles, inten = store_order(xyz, max_points, inten)
+    return xyz, inten, tiles
 
 
 def flat(rng, x0, x1, y0, y1, density, inten, z=0.0):
@@ -133,17 +127,17 @@ def test_follow_drift_along_a_fading_line():
     assert np.all((y >= 1.45 - p.pixel) & (y <= 1.6 + p.pixel))  # road points only in edge pixels
 
 
-def test_does_not_climb_onto_kerb_paint():
-    """A line along the kerb toe, and the kerb top (15 cm up) painted as bright: the height step keeps them apart."""
+def test_does_not_climb_onto_curb_paint():
+    """A line along the curb toe, and the curb top (15 cm up) painted as bright: the height step keeps them apart."""
     rng = np.random.default_rng(5)
     road = flat(rng, 0, 6, 0, 1.9, 3000, lambda q: np.full(len(q), 0.05))
     line = flat(rng, 0, 6, 1.9, 2.0, 3000, lambda q: np.full(len(q), 0.45))
-    kerb = flat(rng, 0, 6, 2.0, 2.3, 3000, lambda q: np.full(len(q), 0.45), z=0.15)
-    xyz, inten, tiles = patch([road, line, kerb])
+    curb = flat(rng, 0, 6, 2.0, 2.3, 3000, lambda q: np.full(len(q), 0.45), z=0.15)
+    xyz, inten, tiles = patch([road, line, curb])
     seed = np.array([3.0, 1.95, 0.0])
     r = magic_select(xyz, inten, tiles, seed, MagicSelectParams(radius=4.0))
     q = xyz[r.indices]
     assert np.all(q[:, 2] < 0.1) and len(q) > 0.95 * len(line[0])
     assert r.info["stopped_by"]["height step"] > 0
     climbed = magic_select(xyz, inten, tiles, seed, MagicSelectParams(radius=4.0, max_step=0.3))
-    assert (xyz[climbed.indices, 2] > 0.1).sum() > 0.9 * len(kerb[0])
+    assert (xyz[climbed.indices, 2] > 0.1).sum() > 0.9 * len(curb[0])

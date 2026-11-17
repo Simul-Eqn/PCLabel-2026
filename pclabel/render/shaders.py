@@ -1,5 +1,5 @@
 """Shader sources (no Qt). All colour modes are computed here from per-point attributes and uniforms, so changing
-a mode, range or period never touches the point data (SPEC §2).
+a mode, range or period never touches the point data.
 
 Height (for the height ramp, the wrap and the slice) is measured along the active height frame:
 ``h = dot(p - u_h_origin, u_h_normal)`` with ``p`` and ``u_h_origin`` in local (store) coordinates. The scan frame
@@ -29,6 +29,7 @@ uniform int u_band_on;       // slice: show only u_band.x <= h <= u_band.y
 uniform vec2 u_band;
 uniform float u_gamma;
 uniform vec2 u_irange;       // intensity stretch (0..1 of the stored range)
+uniform int u_ihide;         // 1: hide points outside u_irange (the intensity window, to find paint)
 uniform vec2 u_hrange;
 uniform vec3 u_flat;
 uniform float u_period;
@@ -90,7 +91,9 @@ void main() {
     bool clipped = (u_clip_on == 1 && (any(lessThan(in_pos, u_clip_min)) || any(greaterThan(in_pos, u_clip_max))))
                    || (u_vol_on > 0 && outside_volume(in_pos))
                    || (u_set_on == 1 && (in_extra & 1u) == 0u);
-    bool sliced = u_band_on == 1 && (h < u_band.x || h > u_band.y);
+    float i_raw = float(in_int) / 65535.0;
+    bool sliced = (u_band_on == 1 && (h < u_band.x || h > u_band.y))
+                  || (u_ihide == 1 && (i_raw < u_irange.x || i_raw > u_irange.y));
     vec4 lab = texelFetch(u_labels, ivec2(int(in_ann), 0), 0);
     bool labelled = in_ann != 0u && lab.a > 0.5;
     if (clipped || sliced || cls.a < 0.5 || (u_mode == 7 && u_labels_only == 1 && !labelled)) {

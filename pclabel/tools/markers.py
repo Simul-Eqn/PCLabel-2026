@@ -13,12 +13,13 @@ to how it was placed.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 import numpy as np
 
+from pclabel.analysis.geometry import frame_axes
 from pclabel.tools.trees import fit_trunk
-from pclabel.tools.volume import frame_axes
+from pclabel.tools.volume import VolumeParams, select_volume
 
 ACROSS = {"mean": "the mean of the points", "circle": "the centre of a circle fitted to them (poles, trunks)"}
 HEIGHTS = {"mean": "their mean height", "lowest": "their lowest point"}
@@ -29,6 +30,51 @@ class MarkerParams:
     across: str = "mean"  # "mean" | "circle": where the marker goes across the height axis
     height: str = "mean"  # "mean" | "lowest": where it goes along the height axis
     trim: float = 0.03  # m, circle: points further than this off the circle are left out and the circle fitted again
+    # markers by clicking (marker_at_click):
+    snap_radius: float = 0.40  # m: a click snaps to a circle fitted to the points this far around it
+    snap_band: float = 0.25  # m above and below the click: the points the circle is fitted to
+    drop_reach: float = 0.30  # m beyond snap_radius: "lowest" looks for the ground this far around
+    drop_depth: float = 6.0  # m below the click: and this far down
+    ground_percentile: float = 2.0  # "lowest": the ground is this percentile of those points' heights
+
+
+def marker_at_click(xyz, tiles, click, axis, params: MarkerParams = MarkerParams(), along=(1.0, 0.0, 0.0),
+                    filters=None) -> dict:  # fmt: skip
+    """Where a marker for a click on the cloud goes (``click``, local).
+
+    - across the height axis: the click itself ("mean"), or the centre of a circle fitted to the points within
+      ``snap_radius`` of it and ``snap_band`` above and below ("circle": click a pole or a trunk anywhere, the marker
+      goes on its axis); if no circle fits, the click;
+    - along it: the click's height ("mean"), or the ground below the click ("lowest": the ``ground_percentile`` of
+      the points within ``snap_radius + drop_reach`` across and ``drop_depth`` below: the foot of what was clicked).
+    Returns {"position", "record"}."""
+    n, _, _ = frame_axes(axis, along)
+    c = np.asarray(click, np.float64)
+    pos = c.copy()
+    p = params
+    rec = {"tool": "marker_click", "across": "click", "height": "click", "points": 0, "params": asdict(p)}
+    if p.across == "circle":
+        vp = VolumeParams("cylinder", radius=p.snap_radius, bottom=-p.snap_band, top=p.snap_band)
+        idx = select_volume(xyz, tiles, c, n, along, vp, filters)
+        try:
+            res = place_marker(xyz, idx, n, MarkerParams("circle", "mean", p.trim), along)
+        except ValueError:
+            rec["note"] = "no circle around the click: at the click"
+        else:
+            q = res["position"]
+            pos = q - np.dot(q - c, n) * n  # across: the circle's centre; along: the click's height
+            rec.update({k: v for k, v in res["record"].items() if k not in ("tool", "height", "spread", "height_range")})
+            rec.update(across="circle", snap_radius=p.snap_radius)
+    if p.height == "lowest":
+        vp = VolumeParams("cylinder", radius=p.snap_radius + p.drop_reach, bottom=-p.drop_depth, top=0.0)
+        idx = select_volume(xyz, tiles, pos, n, along, vp, filters)
+        if idx.size:
+            h = (np.asarray(xyz[idx], np.float64) - pos) @ n
+            pos = pos + float(np.percentile(h, p.ground_percentile)) * n
+            rec["height"] = "lowest"
+        else:
+            rec["note"] = (rec.get("note", "") + "; no points below: at the click's height").lstrip("; ")
+    return {"position": pos, "record": rec}
 
 
 def place_marker(xyz, idx, axis, params: MarkerParams = MarkerParams(), along=(1.0, 0.0, 0.0)) -> dict:

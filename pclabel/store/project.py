@@ -7,18 +7,26 @@ from pathlib import Path
 
 import numpy as np
 
-from pclabel.store.importer import SCAN_METADATA_FIELDS, SCHEMA, write_json_atomic
+from pclabel.store.importer import SCAN_METADATA_FIELDS, SCHEMAS
+from pclabel.store.util import write_json_atomic
 
 FRAMES_SCHEMA = "pclabel.frames/1"
 
 
+def source_doc(project) -> dict:
+    """The scan a file belongs to, as every export writes it: {file, sha256, n_valid} (``project``: a Project, or
+    anything with its ``meta`` and ``n``)."""
+    src = project.meta.get("source", {})
+    return {"file": Path(src.get("path", "")).name, "sha256": src.get("sha256"), "n_valid": project.n}
+
+
 class Project:
-    """Open a project directory. Point columns are read-only memmaps (labels change only via the journal, M3)."""
+    """Open a project directory. Point columns are read-only memmaps; labels live in the annotations, never in the columns."""
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.meta = json.loads((self.path / "project.json").read_text(encoding="utf-8"))
-        if self.meta.get("schema") != SCHEMA:
+        if self.meta.get("schema") not in SCHEMAS:
             raise ValueError(f"{self.path}: unsupported project schema {self.meta.get('schema')!r}")
         self.n = int(self.meta["n_valid"])
         self.offset = np.asarray(self.meta["offset"], dtype=np.float64)
@@ -27,8 +35,6 @@ class Project:
         self.rgb = self._map("rgb")
         self.intensity = self._map("intensity")
         self.source_index = self._map("source_index")
-        self.labels = self._map("labels")
-        self.flags = self._map("flags")
 
     def _map(self, key: str, mode: str = "r"):
         col = self.meta["columns"].get(key)
@@ -93,5 +99,5 @@ class Project:
         write_json_atomic(self.path / "frames.json", {"schema": FRAMES_SCHEMA, "active": active, "frames": frames})
 
     def close(self):
-        for key in ("xyz", "rgb", "intensity", "source_index", "labels", "flags"):
+        for key in ("xyz", "rgb", "intensity", "source_index"):
             setattr(self, key, None)

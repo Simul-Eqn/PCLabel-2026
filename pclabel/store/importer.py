@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import gc
 import hashlib
-import json
 import os
 import re
 import shutil
@@ -32,9 +31,11 @@ import numpy as np
 from pclabel import __version__
 from pclabel.io.e57 import default_offset, iter_chunks, read_info
 from pclabel.store.tiles import TilingParams, build_tiles
+from pclabel.store.util import write_json_atomic
 from pclabel.sysinfo import memory_gb
 
-SCHEMA = "pclabel.project/1"
+SCHEMA = "pclabel.project/2"  # 2 (2026-11-16): no labels/ and flags columns (labels live on annotations)
+SCHEMAS = ("pclabel.project/1", SCHEMA)  # read; a schema 1 project's zero-filled label columns are not read
 SCAN_METADATA_FIELDS = ("scanner", "capture", "datetime", "weather", "surface_wetness", "settings", "notes")
 # share of the whole import, for one progress bar
 STAGE_WEIGHTS = {"read": 0.60, "tile": 0.08, "reorder": 0.27, "finish": 0.05}
@@ -282,12 +283,6 @@ def _import_into(src: Path, out: Path, name: str, params: ImportParams, job: _Jo
                                 "maps": "source index -> raw record index (all scans, file order)"}  # fmt: skip
     del order
     np.save(out / "tiles.npy", tiles)
-    (out / "labels").mkdir()
-    for key in ("labels", "flags"):
-        f = f"labels/{key}.u8"
-        with open(out / f, "wb") as fh:
-            fh.truncate(n)  # zeros: 0 = unassessed, no flags
-        columns[key] = {"file": f, "dtype": "|u1", "shape": [n], "order": "store"}
 
     # drop the source-order temporaries (close every map first: Windows keeps mapped files locked)
     del s_xyz, s_rgb, s_int, s_raw, work, srcmap
@@ -343,9 +338,3 @@ def _import_into(src: Path, out: Path, name: str, params: ImportParams, job: _Jo
         "scan_metadata": {k: ("static" if k == "capture" else "") for k in SCAN_METADATA_FIELDS},
     }
     write_json_atomic(out / "project.json", meta)
-
-
-def write_json_atomic(path: Path, obj):
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(obj, indent=2), encoding="utf-8")
-    os.replace(tmp, path)

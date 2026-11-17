@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pclabel.render.shaders import MODE_NAMES
+from pclabel.render.shaders import MODE_CLASS, MODE_NAMES
 
 
 EXTRA_DECIMALS = 1  # tool panels take one more decimal than they show by default (finer thresholds, 2026-10-20)
@@ -57,7 +57,8 @@ class DisplayDock(QDockWidget):
         f = QFormLayout(w)
         self.mode = QComboBox()
         for k in sorted(MODE_NAMES):
-            self.mode.addItem(MODE_NAMES[k], k)
+            if k != MODE_CLASS:  # a project has no per-point classes: labels live on annotations
+                self.mode.addItem(MODE_NAMES[k], k)
         f.addRow("colour (C)", self.mode)
         ir = QHBoxLayout()
         self.imin, self.imax = _spin(0.0, 1.0, 0.0, 0.01, 3), _spin(0.0, 1.0, 1.0, 0.01, 3)
@@ -66,6 +67,10 @@ class DisplayDock(QDockWidget):
         for x in (self.imin, self.imax, self.iauto):
             ir.addWidget(x)
         f.addRow("intensity range", ir)
+        self.ihide = QCheckBox("hide points outside the intensity range")
+        self.ihide.setToolTip("the intensity window: only points whose intensity is in the range are drawn (e.g. to "
+                              "see paint); display only: selection tools still reach the hidden points")  # fmt: skip
+        f.addRow("", self.ihide)
         self.gamma = _spin(0.1, 4.0, 0.6, 0.05, 2)
         f.addRow("intensity gamma", self.gamma)
         hr = QHBoxLayout()
@@ -107,7 +112,7 @@ class DisplayDock(QDockWidget):
         for s in (self.imin, self.imax, self.gamma, self.hmin, self.hmax, self.period, self.h0, self.size, self.max_size,
                   self.edl_strength, self.edl_radius):  # fmt: skip
             s.valueChanged.connect(self.changed)
-        for c in (self.adaptive, self.round, self.edl):
+        for c in (self.adaptive, self.round, self.edl, self.ihide):
             c.toggled.connect(self.changed)
         self.mode.currentIndexChanged.connect(self.changed)
         self.bg.clicked.connect(self._pick_bg)
@@ -130,6 +135,7 @@ class DisplayDock(QDockWidget):
         d.mode = self.mode.currentData()
         d.gamma = self.gamma.value()
         d.intensity_range = (self.imin.value(), self.imax.value())
+        d.intensity_hide = self.ihide.isChecked()
         d.height_range = (self.hmin.value(), self.hmax.value())
         d.period = self.period.value() / 100
         d.h0 = self.h0.value() / 100
@@ -294,6 +300,7 @@ class ScanMetaDock(QDockWidget):
             e.setText(meta.get(k, ""))
         self.capture.setCurrentText(meta.get("capture", "static") or "static")
         self.notes.setPlainText(meta.get("notes", ""))
+        self._timer.stop()  # filling the fields is not an edit: project.json is not written on open
         self.project = project
         self.setEnabled(project is not None)
 
@@ -306,21 +313,21 @@ class ScanMetaDock(QDockWidget):
         self.project.set_scan_metadata(**vals)
 
 
-def fmt_point_rows(project, taxonomy, pick, scan_of_source) -> list[tuple[str, str]]:
-    """Info-panel rows for a picked store index."""
+def fmt_point_rows(project, taxonomy, pick, scan_of_source, model=None) -> list[tuple[str, str]]:
+    """Info-panel rows for a picked store index; ``model`` (the annotations) gives its labels."""
+    from pclabel.ops.labels import labels_at
+
     i = pick.index
     src_i = int(project.source_index[i])
     raw_i = int(project.raw_index()[src_i])
     p = np.asarray(project.xyz[i], np.float64) + project.offset
-    names = {int(c["id"]): c["name"] for c in taxonomy.classes}
-    lab = int(project.labels[i])
-    fl = int(project.flags[i])
-    flag_names = [f["name"] for f in taxonomy.flags if fl & (1 << int(f["bit"]))]
-    rows = [
-        ("x, y, z (scan frame)", f"{p[0]:.3f}, {p[1]:.3f}, {p[2]:.3f} m"),
-        ("class", f"{lab} {names.get(lab, '?')}"),
-        ("flags", ", ".join(flag_names) or "none"),
-    ]
+    at = labels_at(model, taxonomy, i) if model is not None else None
+    rows = [("x, y, z (scan frame)", f"{p[0]:.3f}, {p[1]:.3f}, {p[2]:.3f} m")]
+    if at is not None:
+        rows += [("class", at["class"] or "unassessed"), ("flags", ", ".join(at["flags"]) or "none"),
+                 ("in point sets", "; ".join(f"{n} ({lab or 'no label'})" for n, lab in at["sets"]) or "none")]  # fmt: skip
+        if at["conflict"]:
+            rows.append(("conflict", at["conflict"]))
     if project.rgb is not None:
         r, g, b = (int(v) for v in project.rgb[i])
         rows.append(("RGB", f"{r}, {g}, {b}"))
@@ -340,7 +347,6 @@ def fmt_point_rows(project, taxonomy, pick, scan_of_source) -> list[tuple[str, s
         ("source index (export order)", f"{src_i:,}"),
         ("raw record index", f"{raw_i:,}"),
         ("tile", f"{pick.tile}"),
-        ("provenance", "no label operations yet (the journal arrives in M3)"),
     ]
     return rows
 
@@ -530,7 +536,7 @@ class GrowDock(SeedToolDock):
     TITLE, OBJECT = "Grow select", "grow"
     HINT = ("With grow select (G), click a surface: it grows over what is connected to it. Height and intensity: "
             "ground smooth in height and similar in intensity. Geometric: surfaces whose normals turn slowly "
-            "(walls, kerb faces, poles too). Shift+click adds, Ctrl+click subtracts; a changed threshold or mode "
+            "(walls, curb faces, poles too). Shift+click adds, Ctrl+click subtracts; a changed threshold or mode "
             "re-runs the last click.")  # fmt: skip
     NORMAL_FIELDS = (
         ("smoothness", "smoothness", 1, 0.1, 90, 0.5, 1, "°",
@@ -547,7 +553,7 @@ class GrowDock(SeedToolDock):
                      ("#4070ff", "intensity vs road"), ("#30e030", "gap too wide"))  # fmt: skip
     FIELDS = (
         ("max_step", "height step", 100, 0.1, 50, 0.5, 1, " cm",
-         "largest height change between neighbouring cells: kerbs are bigger, road roughness smaller"),
+         "largest height change between neighbouring cells: curbs are bigger, road roughness smaller"),
         ("intensity_step", "intensity step", 1, 0.0, 1.0, 0.005, 3, "",
          "largest intensity change between neighbouring cells (intensity 0..1, as in Point info)"),
         ("intensity_range", "intensity vs road", 1, 0.0, 1.0, 0.01, 3, "",
@@ -559,9 +565,9 @@ class GrowDock(SeedToolDock):
         ("max_gap", "gap", 100, 0, 500, 10, 0, " cm",
          "empty cells (no points: far scan lines, pole shadows) the grow may step over"),
         ("max_slope", "slope across gaps", 100, 0, 50, 1, 0, " %",
-         "extra height allowed per metre across a gap (road grade and crossfall); kerbs are steeper"),
+         "extra height allowed per metre across a gap (road grade and crossfall); curbs are steeper"),
         ("max_roughness", "roughness", 100, 0.1, 50, 0.5, 1, " cm",
-         "cells rougher than this (kerb faces, vegetation, objects) are not ground"),
+         "cells rougher than this (curb faces, vegetation, objects) are not ground"),
         ("surface_tol", "surface tolerance", 100, 0.5, 50, 0.5, 1, " cm",
          "points this close to their cell's surface are selected; drains below and objects above are not"),
         ("cell", "cell size", 100, 2, 100, 1, 0, " cm", "the grid the grow runs on"),
@@ -577,7 +583,7 @@ class GrowDock(SeedToolDock):
         self.mode = QComboBox()
         self.mode.addItem("height and intensity", "height")
         self.mode.addItem("geometric: surface normals", "normals")
-        self.mode.setToolTip("height and intensity: ground (cells, kerbs and walkways stop it); geometric: any "
+        self.mode.setToolTip("height and intensity: ground (cells, curbs and walkways stop it); geometric: any "
                              "surface, by its normals (PCL's region growing)")  # fmt: skip
         self.form.insertRow(1, "mode", self.mode)
         self.normal_spins = {}
@@ -640,7 +646,7 @@ class MagicDock(SeedToolDock):
          "empty strips up to this wide are bridged: far from the scanner the points lie on scan lines several cm "
          "apart. Lower it if two markings close together merge"),
         ("max_step", "height step", 100, 0.1, 50, 0.5, 1, " cm",
-         "largest height change between neighbouring pixels: keeps the fill off kerbs"),
+         "largest height change between neighbouring pixels: keeps the fill off curbs"),
         ("pixel", "pixel size", 100, 0.5, 10, 0.5, 1, " cm",
          "the intensity picture's resolution: selection edges are this precise; smaller needs denser points"),
         ("surface_tol", "surface tolerance", 100, 0.5, 50, 0.5, 1, " cm",
@@ -649,7 +655,7 @@ class MagicDock(SeedToolDock):
     )  # fmt: skip
     CHECKS = (("contiguous", "contiguous",
                "off: every pixel of similar intensity on the surface clicked (reachable without a height step, e.g. "
-               "the road between its kerbs), connected or not: all the dashes of a line, and anything as bright"),)  # fmt: skip
+               "the road between its curbs), connected or not: all the dashes of a line, and anything as bright"),)  # fmt: skip
 
     def __init__(self, parent=None):
         from pclabel.tools.magic import MagicSelectParams
