@@ -11,8 +11,9 @@ one; they work on lines and markers selected in Annotations, and save lines the 
 - Every run (saved or not) is appended to the project's ``trace_log.jsonl``: start, direction, settings, steps and
   why it stopped, so attempts that failed can be looked at and replayed.
 - Saving makes a directory "curb trace NN" or "marking trace NN" (in the directory selected in Annotations, like
-  Ctrl+G) with a polyline per piece: the curb's ``curb_bottom`` (toe) and ``curb_top`` (lip), or the marking's label
-  (``road_line`` by default). Each keeps ``{tool, assisted: true, params, start, toward, height_axis, stopped, ...}``:
+  Ctrl+G) with a line per piece, saved as a curve with no plane unless "polylines" is chosen: the curb's lip
+  (labelled ``curb``) and, only if "toe" is ticked, its toe (no label), or the marking's label (``road_line`` by
+  default). Each keeps ``{tool, assisted: true, params, start, toward, height_axis, stopped, ...}``:
   the parameters are the thresholds being studied, and the lines are marked as drawn by a tool.
 """
 
@@ -100,8 +101,8 @@ class TraceDock(QDockWidget):
         lines = QHBoxLayout()
         self.c_toe = QCheckBox("toe (a helper line, no label)")
         self.c_lip = QCheckBox("lip (the curb line)")
+        self.c_lip.setChecked(True)  # the standard's curb is one line, the lip; the toe is off unless asked for
         for b in (self.c_toe, self.c_lip):
-            b.setChecked(True)
             lines.addWidget(b)
         for label, wdg in (("follow", self.c_follow), ("step", self.c_step), ("curb height", self.c_height), ("curb is", self.c_side),
                            ("search across", self.c_search), ("face up to", self.c_face), ("skip gaps up to", self.c_gap),

@@ -57,9 +57,8 @@ keep theirs, and a note at the top of that file explains them.
   installed in the env until it is rebuilt).
 - No doc or code string mentions the journal or a milestone.
 
-Left: `mobile-colorized-v2-1.dxf` (7.3 MB, a vendor's drawing, tracked at the repo root) belongs beside its scan in
-`../review_commercial/ROCK_planimetrics/mobile_mapping/`. **Ask the user** before moving it, and update the path
-in `docs/CONTEXT.md`.
+`mobile-colorized-v2-1.dxf` (7.3 MB, a vendor's drawing) is no longer tracked in the repo; its copy is beside its
+scan in `../review_commercial/ROCK_planimetrics/mobile_mapping/`.
 
 ---
 

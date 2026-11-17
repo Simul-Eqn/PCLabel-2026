@@ -165,7 +165,7 @@ Lines and markers these tools draw are marked `assisted` with their parameters. 
   further along. Cross-sections every `step` find the toe and the lip, both measured; the side is found
   automatically and a start on the curb top is moved onto the road. Space stops, Backspace takes back a step, two
   more clicks trace on, Enter saves a directory `curb trace NN` of `lip k` lines labelled `curb` and, if "toe" is
-  ticked, unlabelled `toe k` helper lines (the taxonomy's `tools` section sets these labels). "Follow the top edge only" needs no road beside the curb and saves only the lip. Every run is logged in
+  ticked (it is off by default), unlabelled `toe k` helper lines (the taxonomy's `tools` section sets these labels). "Follow the top edge only" needs no road beside the curb and saves only the lip. Every run is logged in
   the project's `trace_log.jsonl`. Gaps at drains are left, never drawn over. Fails: stops at lowered curbs, rolled
   faces wider than `max_face`, turns sharper than `max_turn`, and cars at the curb.
 - **Marking tracer** (`Ctrl+Shift+T`, `tools/linetrace.py`, `LineTraceParams`): click the paint, then along it;

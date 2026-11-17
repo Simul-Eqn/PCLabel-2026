@@ -1,11 +1,16 @@
 # Plan 02: the automatic pipeline
 
 Written 2026-11-16 in a planning session, for the maintainer who will build it. Facts about the code are from
-commit `29f6472`; facts about the labelled projects are from the projects directory on that day. Where the code
+commit `29f6472` unless a later one is named; facts about the labelled projects are from the projects directory on that day. Where the code
 contradicts this plan, trust the code and note the difference in your report.
 
+Amended 2026-11-17, after plan 01 was done (commit `785842a`) and reviewed with the user: the curb is one `curb`
+curve, the user judges the output in the app (the scorer points to places, it does not pass or fail), the tracer's
+sparse-data failure and two measured reference examples were added (section 9), and the painted-curb cue was
+removed (it is not in the user's notes).
+
 Read [01_cleanup.md](01_cleanup.md) first. Its part A (the labelling standard) decides which labels the pipeline
-writes, and its steps marked "before the pipeline" create the Qt-free layer this plan builds on.
+writes, and its part C created the Qt-free `ops/` layer this plan builds on.
 
 ## 1. Goal
 
@@ -52,7 +57,7 @@ per-point label columns are all zero and there is no journal.
 
 | | streets 1 (634M points) | ExchangeGreen 1 (257M points) |
 |---|---|---|
-| curbs | 6 hand-clicked curves labelled `curb`, 778 m | 6 curves and 1 polyline labelled `curb_top`, 443 m, made by the curb tracer and then hand-edited; plus 2 hand curves labelled `curb`, 130 m |
+| curbs | 6 hand-clicked curves labelled `curb`, 778 m | 6 curves and 1 polyline named `curb_top k` or `lip k`, 443 m, made by the curb tracer, joined and then hand-edited; plus 2 hand curves (`tli_left`, `tli_right`), 130 m. All are labelled `curb` |
 | road markings | 23 `road_line` point sets, 9.87M points, 6 marked uncertain | 13 `road_line` point sets, 1.13M points |
 | trees | 127 `tree` markers, 129 `tree_trunk` band sets, 17 uncertain | 29 markers, 29 band sets (the user says trees and poles are only partly done here) |
 | poles | 7 `lamp_post`, 15 `other_pole`, 1 `pole` markers | 4 `lamp_post`, 4 `other_pole` markers |
@@ -60,8 +65,16 @@ per-point label columns are all zero and there is no journal.
 
 Things to know about this reference:
 
-- **Curb lines follow the top outer edge of the upper curb** (the lip), by the user's standard. Hand lines labelled
-  `curb` and `curb_top` both mean that.
+- **Curb lines follow the top outer edge of the upper curb** (the lip), by the user's standard: one line per curb,
+  labelled `curb`, saved as a curve. The tracer makes a polyline; it converts to a curve with no plane without
+  loss, and that is how the app saves it. The toe line is not part of the standard: the tracer's "toe" box is off
+  by default and the pipeline never writes one.
+- **The user's curb lines are not exact.** The user says their lines sometimes sit off the edge. On the two
+  stretches measured (section 9) they are within 3 to 4 cm of the lip the tracer's section measures. So the
+  reference is good to a few centimetres, not to millimetres, and the user compares the output with it themselves
+  (P1).
+- ExchangeGreen 1 also holds the user's test traces (`curb trace 01`, `tli_curb/curb trace 02`): unedited tracer
+  output labelled `curb` that lies on top of the reference curves. They are examples (section 9), not reference.
 - In streets 1, `top_curbs/top` and `top_curbs/bottom` are most likely the two curbs on either side of the *top
   road* (the user names things by position in the top view: top road, bottom road), not a lip and a toe. Check
   by measuring the step at both before using them.
@@ -117,7 +130,6 @@ design input. Where one is marked *hypothesis*, measure it before relying on it 
 | Drains sit at the foot of curbs, and some of their points are below the road. They are the lowest points in the scan. Not every drain has such points. | Three uses. (a) The ground surface must be robust to pits, or every height near a drain is wrong. (b) A compact pit below the road surface is positive evidence that a curb runs beside it. (c) A gap in a traced curb that coincides with a pit is a drain, so the line is bridged across it and the bridge records why. |
 | Curbs have two stages: a strip about 40 cm wide at road level (often concrete, where the drains are), then the raised curb. The strip is sometimes faint and sometimes absent. | The curb line is the lip of the raised stage. The road ends at the outer edge of the strip, so the road mask stops there. Where the strip is absent the road runs to the curb's toe. The strip is brighter than asphalt, so it must be excluded before looking for paint. |
 | The curb's face is often missing: across the road from the scanner only the top is seen, with a band of no points between road and curb top. | Curb detection cannot require face points. It compares the road surface with the curb top across an empty band of up to about 0.3 m. |
-| Curbs are often painted in alternating black and white stretches of roughly 1 m. | A periodic intensity or brightness signal along a line is evidence that the line is a curb and not a hedge edge, a wall or a car. It is confirmation only: many curbs are unpainted. |
 | The curb tracer goes wrong at drains and sometimes at bushes. | Fix the causes in the tracer itself (P3), so the interactive tool improves too. |
 | A walkway can look like a road in intensity (ExchangeGreen). What tells them apart is that no curb bounds it. | Road is defined from curbs (the low side of a curb line), not from intensity alone. |
 | Paint is separable from asphalt by intensity, and one click selects a whole dash above about 2,000 points/m². Below about 500 points/m² it rarely works; the user's standard treats that as the limit for "uncertain". | Marking detection uses contrast against the local road surface, never a global threshold. Results in cells below 500 points/m² are marked uncertain. |
@@ -159,20 +171,35 @@ Rules of the design:
 
 ## 6. Work packages
 
-Do them in this order. Each ends with the tests passing, a short written result, and (from P3 on) a score on both
-labelled scans. Stop and report instead of pressing on if a package misses its acceptance check and the cause is
-not clear after a reasonable attempt.
+Do them in this order. Each ends with the tests passing, a short written result, a run the user can open in the
+app beside their labels (from P3 on), and a "try it". **Stop after each package and wait for the user**: they look
+at the result and say whether to go on. The percentages under "acceptance" are what to report and aim at; whether
+a result is good enough is the user's call, made by looking.
 
-### P1. Scoring and the headless run format
+### P1. Comparing a run with the labels, and the headless run format
 
-Build the scorer first, so that every later choice is measured.
+Build the comparison first, so that every later choice is measured and the user can see it. The user knows their
+labels are imperfect and wants to compare by eye; the numbers exist to say where to look and to catch regressions.
 
 Build:
 
 - `python -m pclabel score <project> --run <id | path to an annotations export>`.
+- **Opening a run in the app beside the hand labels**: a menu entry that lists the project's runs (the annotation
+  import exists). This is the first half of P6, moved here because it is how the user judges everything after.
+- **A list of places to look at** in `score.json` and the text report: the spans where the automatic and the
+  reference curb lines differ most, the reference spans with nothing automatic, the automatic spans with nothing
+  in the reference, and the same for markings and markers. Each has coordinates as the app shows them, so the user
+  can go there.
+- **A check that does not use the labels:** for any curb line, how far it lies from the lip measured in the cloud
+  (the anchors of `curbfit.fit`: share of sections with an anchor, mean and largest distance). Report it for the
+  automatic lines and for the reference lines alike; where the two disagree, it says which is nearer the edge.
 - Reference selection: hand items by label, leaving out unlabelled items, items whose `uncertain` is set, and
   items marked `assisted` that were never edited. Uncertain reference items are "don't care": matching one is
-  neither a hit nor a false alarm.
+  neither a hit nor a false alarm. Print the list of items used and left out, with the reason, so the user can
+  correct it (as of 2026-11-17 the rule leaves out the test traces, rightly, and also
+  `tri_curb/wraparound/curb_top 3`, 2.2 m, which the user probably counts: ask).
+- One constant per tool module for the name in its saved record (`source.tool`), since the selection reads it
+  (left over from plan 01, C13). The "piece" rename of C13 is dropped.
 - The assessed area. Until the user provides one (section 8), use the labelled `road` point sets rasterised at
   0.5 m and dilated by 3 m. Detections outside the assessed area are counted separately and are not false alarms.
 - **Curb metric.** Resample both sets of lines every 5 cm. *Completeness* is the share of reference length with
@@ -184,7 +211,9 @@ Build:
   the reference points, among points inside the assessed area. Also per item: the share of reference marking
   items with at least half their points found, because a few zebra crossings dominate the point count.
 - **Tree and pole metric.** Match markers one to one, nearest first, within 0.5 m. Report precision, recall, the
-  centre distance, the radius difference, and tree-versus-pole confusion among matched pairs.
+  centre distance, the radius difference, and tree-versus-pole confusion among matched pairs. Every kind of pole
+  (`lta_lamp_post`, `lamp_post`, `traffic_light_pole`, `other_pole`, `pole`) counts as a pole, through the
+  taxonomy's tree; the kind is reported separately.
 - `score.json` with a `schema` field, and a one-screen text table.
 - The run directory layout of section 2 and a writer that turns stage results into the exchange file.
 
@@ -193,10 +222,12 @@ Acceptance:
 - Scoring a copy of the hand labels against themselves gives 100 % everywhere.
 - Synthetic tests: a line shifted sideways by 7 cm passes at 10 cm and fails at 5 cm; a line with a third
   removed scores two thirds completeness; an extra tree lowers precision only.
-- **A baseline for the tool as it is today.** `trace_log.jsonl` in ExchangeGreen 1 logs 40 curb tracer runs. If
-  it records each run's start, direction and parameters, replay them headless and score the raw result against
-  the final edited lines. That number is how much hand correction the semi-automatic tracer needs now, and it is
-  the figure the pipeline has to beat without clicks.
+- **A baseline for the tool as it is today.** `trace_log.jsonl` in ExchangeGreen 1 logs every curb tracer run
+  (41 on 2026-11-17, many of them starts that found no curb) with its start, direction and parameters, in scan
+  coordinates. Replaying works: `bench/experiments/trace_vs_curve.py` replays a saved trace and reproduces it.
+  Replay them all headless and compare the raw result with the final edited lines. That is how much hand
+  correction the semi-automatic tracer needs now, and it is the figure the pipeline has to beat without clicks.
+- The two examples of section 9 come out of `score` with the numbers given there.
 
 ### P2. Scan-wide ground raster, and the measurements that set the thresholds
 
@@ -221,8 +252,9 @@ numbers can be reproduced):
    `curbtrace.section`. Known so far: ExchangeGreen steps 8 to 10 cm, streets 1 steps 0.12 to 0.33 m (the latter
    unverified).
 3. The gradient on each side of the hand curb lines. Does the sign change, including at lowered sections?
-4. Intensity and brightness along the hand curb lines: how much of the length shows a periodic pattern, and with
-   what period?
+4. Point density along the hand curb lines (on the road beside the curb and on its top), and against it: whether
+   `curbtrace.section` finds a lip, and how far from the hand line. The user's requirement is that the tracer
+   works down to 500 points/m²; this says how much of the labelled curb length is above that.
 5. Depth, length and spacing of the pits beside the hand curb lines.
 6. Paint-to-road intensity ratio for the hand `road_line` sets, against density and against distance from the
    nearest scanner position (`project.json` has the poses).
@@ -240,47 +272,63 @@ Acceptance:
 ### P3. Curbs
 
 Pipeline: step candidates from the raster → seeds → `curbtrace.run_trace` → `linejoin.join_lines` →
-`curbfit.fit` → smoothing → checks → `curb_top` lines.
+`curbfit.fit` → smoothing → checks → one `curb` curve per curb (the lip; a curve with no plane, as
+`ops/trace.line_item` makes it; no toe line).
 
 Candidates: cells where the lowest-layer height rises by a curb-like amount (range from P2, measurement 2) within
 about 0.3 m, allowing an empty band between, with a paved low side. Group them into chains, take the direction
 from the chain, and seed the tracer on the low side. Repeat until every chain is either covered by a traced line
 or rejected with a recorded reason.
 
-Fix these in `curbtrace` (line numbers at commit `29f6472`). Add a synthetic test for each before fixing it:
+Fix these in `tools/curbtrace.py` (all still present at `785842a`). Add a synthetic test for each before fixing
+it:
 
-- **Drains.** The "is this bin road" test has no lower bound (`:112`), so a pit passes as road and drags the road
-  reference down; the road beyond the pit can then pass as a curb lip. Give the road test a lower bound, treat a
-  pit as its own event, and record it on the result.
-- The road reference is the median of the bins near the section centre (`:96-103`), which is wrong when the
-  centre is over a grating. Take it from the ground raster.
-- A gap ends the trace after 1.0 m (`:233`), which is shorter than some inlets. Let a gap explained by a pit run
-  longer.
-- The first section after a gap is accepted without the turn check (`:218`, `:238`), and the trace steps
-  straight ahead while skipping (`:235`), so it drifts on bends.
-- **Bushes.** The section box reaches 0.8 m above the centre (`:75`) and the road test uses the bin's 80th
+- **Sparse data** (measured, section 9, example 1). A cross-section is `step` (0.3 m) long with 2 cm bins and a
+  bin needs `min_points` (3), so below about 500 points/m² most bins on the curb top are empty. `section` then
+  decides the top was not seen (`top_seen` false) and puts the lip at the far edge of what it did see: 5 to 9 cm
+  too far onto the curb in the trace, 25 cm in one section, with height spikes of 4 to 5 cm. Below that the road
+  bins fail too ("no road beside the start"). The user's requirement: **the tracer works at 500 points/m²**.
+  Widen the bins or pool points along the curb when a section is sparse, and do not emit a lip vertex where the
+  top was not seen (a gap, or the neighbours' line carried across and marked inferred). Record the section's
+  density on the result.
+- **Drains.** In `section`, the "is this bin road" test has no lower bound (`surf[j] <= last_h +
+  road_tolerance`), so a pit passes as road and drags the road reference down; the road beyond the pit can then
+  pass as a curb lip. Give the road test a lower bound, treat a pit as its own event, and record it on the
+  result. Example 2 of section 9 has the channel at the curb's foot: there the lip holds and the toe wanders, so
+  the pipeline must not use the toe line for anything but the step height.
+- The road reference in `section` is the median of the bins near the section centre (`near`), which is wrong when
+  the centre is over a grating. Take it from the ground raster.
+- A gap ends the trace after `max_gap` (1.0 m), which is shorter than some inlets. Let a gap explained by a pit
+  run longer.
+- In `trace`, the first section after a gap is accepted without the turn check (both checks need `not missed`),
+  and the trace steps straight ahead while skipping, so it drifts on bends.
+- **Bushes.** The section box reaches `box_above` (0.8 m) above the centre and the road test uses the bin's 80th
   percentile, so overhanging foliage makes road bins fail. Nothing limits the curb's height or tests that its top
   is flat, so a hedge edge, a car side or a wall can pass as a lip. Add a maximum height and a test on the top's
   roughness, and bound the box from the raster.
 - The synthetic street (`pclabel/synth/street.py`) has drains, a lowered curb, one tree and markings. Add what the
   tests above need: a hedge over the curb, an inlet longer than 1 m, a parked car at the curb, a curb seen only
-  from above with an empty band, a two-stage curb with a strip, two roads with different slopes, and a painted
-  curb.
+  from above with an empty band, a two-stage curb with a strip, two roads with different slopes, and a curb whose
+  density falls from 2,000 to 300 points/m² along its length.
 
 Checks on a finished line, each recorded per sample: step height in range, top flat, supported by raster
-candidates along most of its length, optional paint periodicity (P2, measurement 4). A line that fails is written
+candidates along most of its length. A line that fails is written
 into a `rejected` directory with the reason, not dropped, so the user can see what was thrown away.
 
 Leave lowered curbs for the end of this package. The user's standard draws the curb curve straight across a
 lowered section. Bridging a gap is right at a lowered curb and wrong at a side road, where the curb turns away.
 Use what P2 found (a residual step of a few centimetres, a material edge, a gradient sign change) and mark every
-bridged span as inferred.
+bridged span as inferred. Example 2 of section 9 has a lowered stretch 6 m long that the user's curve crosses
+straight; `curbfit`'s `max_bridge` (8 m) already carries a line across such a stretch.
 
 Acceptance (provisional targets; set the real ones with the user after the first full run):
 
 - streets 1 and ExchangeGreen 1: completeness at least 85 % and correctness at least 90 % at 10 cm, with the
   median sideways offset under 3 cm.
 - Better than the replayed-clicks baseline from P1 on ExchangeGreen 1.
+- The two examples of section 9, traced from the same starts: no lip vertex more than 3 cm from the reference
+  where the density is at least 500 points/m², and example 2 carried across its lowered stretch to the curb
+  beyond.
 - Named places from the user's notes come out right, checked by eye in the app (streets 1 coordinates as shown
   in the app; confirm whether they include the project offset):
   drain under a curb near (-5.542, 12.612, -1.454); two-stage curb near (-22.075, 19.725, -1.547); curb seen as
@@ -324,8 +372,9 @@ out whole.
    line up. Allow a lean (one labelled tree leans 18.5°). Hedges, fences, walls, people and cars do not.
 4. Merge thin stems within about 0.5 m of one another into one object (a sapling and its stakes).
 5. Classify. Shorter than 2 m: vegetation, no marker. Straight, vertical, constant radius, nothing leafy above:
-   pole. Otherwise tree. Start with the plain `pole` label and split lamp posts from other poles only if P2
-   shows an easy cue.
+   pole. Otherwise tree. Start with the plain `pole` label and split lamp posts from other poles (usually road
+   signage) only if P2 shows an easy cue. Whether a lamp post is LTA's cannot be seen in a scan: the pipeline
+   writes `lamp_post` at most, never `lta_lamp_post`, and never an `asset_id`. The user sets those.
 6. Write, per tree, a directory with a `tree` marker at the fitted centre at ground height and a `tree_trunk`
    point set of the band, as the tree tool does. Poles get a marker only.
 
@@ -337,7 +386,7 @@ distance under 5 cm. ExchangeGreen 1's trees are incomplete, so report recall on
 
 Small UI work that makes the pipeline useful for labelling:
 
-- Open a run beside the hand labels (the import exists; add a menu entry that lists the project's runs).
+- (Opening a run beside the hand labels is built in P1.)
 - Accept, edit or delete automatic items. Accepting moves the item into the hand tree; editing sets `edited`.
 - A per-run summary: how many items were accepted unchanged, edited, deleted, and how much the user added.
 
@@ -371,9 +420,56 @@ Report the P6 summary. Do not tune on this scan before the first run.
 2. **The assessed area.** Scoring needs to know where the user looked. The cleanest answer is one closed curve
    per labelled scan, drawn in the app and labelled as the assessed area. Until then the scorer uses the fallback
    in P1.
-3. **Targets.** The acceptance numbers above are proposals. The user sets what is good enough once the first
-   full run shows where things stand.
+3. **Targets.** The acceptance numbers above are proposals. The user judges each package's result in the app and
+   says what is good enough. One target is the user's already: the curb tracer works at 500 points/m².
 4. **Whether a sapling's support poles belong to the tree**, and whether the tree's labels change when it grows
    past 2 m. Both are marked TODO in the user's standard; P5 assumes the poles belong to the tree.
 5. **A third labelled scan.** Two scans from one city are a thin basis. P7 produces a third cheaply if the user
    is willing to correct one run.
+
+## 9. Two reference examples for the curb tracer
+
+Both are in ExchangeGreen 1, given by the user on 2026-11-17: a saved, unedited trace beside the user's own curve
+for the same curb. Reproduce them with
+
+```
+python bench/experiments/trace_vs_curve.py "ExchangeGreen 1" "tmi_curb/curb_top 1" "curb trace 01/lip 1"
+python bench/experiments/trace_vs_curve.py "ExchangeGreen 1" "tli_curb/tli_right" "tli_curb/curb trace 02/lip 1"
+```
+
+The script is read-only. It replays the trace from its saved start and settings, and also places the tracer's
+cross-section every 0.3 m along the whole reference curve. "Arc" is the distance along the reference curve.
+Numbers are from 2026-11-17 at commit `785842a`.
+
+**Example 1: sparse data.** Reference `tmi_curb/curb_top 1` (46.6 m; joined from tracer lips and edited, so not
+independent of the tracer). Trace `curb trace 01/lip 1`: 71 sections, arc 21.3 down to 0.2 m, ending where the
+curve ends.
+
+- Sideways, lip minus reference: median +0.2 cm; 87 % of sections within 2 cm, 94 % within 3 cm, 97 % within
+  5 cm; worst 8.8 cm. Height: median 0.
+- All the errors are in the last 4.5 m (arc 0 to 4.5 m), where a 4 cm by 30 cm strip of the section holds 3 to 17
+  points (about 250 to 1,400 points/m²). At arc 2.2, 2.1 and 0.2 m the top was not seen and the lip is 7.4, 5.0
+  and 8.8 cm too far onto the curb; at arc 0.2 m it is also 4.1 cm too high.
+- Along the whole reference the section finds a lip in 154 of 156 places, 96 % of them within 3 cm.
+- What to fix: the sparse-data item of P3.
+
+**Example 2: a channel at the foot, a lowered stretch, and a far end the scanner hardly saw.** Reference
+`tli_curb/tli_right` (103.4 m; hand-clicked, 33 nodes, drawn in a fitted plane, so independent of the tracer).
+Trace `tli_curb/curb trace 02/lip 1`: 163 sections, arc 7.5 to 56.4 m. The user gave it as the example for
+drains.
+
+- Sideways, lip minus reference: median -0.8 cm; 93 % within 3 cm, 100 % within 5 cm; worst 4.1 cm. Between arc
+  12 and 24 m the lip is a steady 3 to 4 cm on the road side of the curve and 1.5 to 2 cm below it: the
+  cross-section there puts the face at the tracer's lip, so this looks like the hand curve sitting slightly onto the
+  curb, not a tracer error. Ask the user before treating it as either.
+- The road surface dips 2 to 4 cm in the 0.2 m before the curb (arc 15 m: the channel where the drains are). The
+  measured step is 10 to 14 cm there against 9 to 10 cm elsewhere, and the saved **toe** line is up to 16 cm from
+  the reference (median 3.8 cm). The lip is not disturbed. No section of this trace shows a lip pulled off by a
+  drain; if the user has seen that happen here, ask for the place.
+- The trace stops at arc 56.4 m: from 56.7 to 62.4 m there is no step (the surface is flat to within 3 cm; a
+  lowered curb). The user's curve runs straight across, and the curb resumes from arc 62.7 to 84 m, which the
+  trace never reaches.
+- From arc 84.5 m to the end (19 m) the section finds almost nothing: "no road beside the start", then "no
+  points". The curb top has 3 to 8 points per 5 cm by 30 cm strip and the road fewer. This stretch is below
+  500 points/m²; a line there is inferred or uncertain.
+- What to fix: bridging a lowered stretch (end of P3), the toe not used as a line, and the sparse-data item.

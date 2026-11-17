@@ -2053,6 +2053,10 @@ def test_trace_panel_curb_and_marking(window, monkeypatch):
     assert len(tr.runs[0]["result"]["toe"]) == 5 and len(tr.runs[0]["result"]["top_seen"]) == 5  # a step taken back
     n0 = len(a.model.root)
     a.dock.tree.clearSelection()
+    assert tr.dock.c_lip.isChecked() and not tr.dock.c_toe.isChecked()  # the default saves the curb line only
+    only_lip = tr_mod.trace_ops.run_lines(tr.runs, window.project.offset, window.taxonomy, toe=False)
+    assert [(name, label) for name, _, label, _ in only_lip] == [("lip 1", "curb"), ("lip 2", "curb")]
+    tr.dock.c_toe.setChecked(True)  # the helper lines too
     QApplication.sendEvent(vp, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier))
     d = a.model.root[-1]
     assert len(a.model.root) == n0 + 1 and d.name.startswith("curb trace ")

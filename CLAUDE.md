@@ -12,8 +12,8 @@ The app makes the reference labels, shows the pipeline's output beside them, and
 **Priorities:** curb lines and road markings first; then trees and poles as a 2D map (a marker each, plus the
 trunk's cross-section for trees); then surfaces.
 
-**Current work:** [docs/plans/01_cleanup.md](docs/plans/01_cleanup.md), then
-[docs/plans/02_auto_pipeline.md](docs/plans/02_auto_pipeline.md). Background on the downstream use is in
+**Current work:** [docs/plans/02_auto_pipeline.md](docs/plans/02_auto_pipeline.md)
+([docs/plans/01_cleanup.md](docs/plans/01_cleanup.md) is done). Background on the downstream use is in
 [docs/CONTEXT.md](docs/CONTEXT.md).
 
 ## you maintain this code
