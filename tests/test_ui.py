@@ -1223,7 +1223,7 @@ def test_clip_to_point_sets(window):
     inside = grown()
     assert inside.size > 0 and np.isin(inside, ps.indices).all()
     window.toggle_point_set_clip()  # Ctrl+Shift+K: off (the set kept)
-    assert not d.clip_set_on and vp.pick_inside is None and window._filters().inside is None
+    assert not d.clip_set_on and vp.pick_inside is None and window.filters().inside is None
     vp.seed_picked.emit(xyz[seed], "replace")
     assert not np.isin(grown(), ps.indices).all()  # unclipped, the grow goes on along the road
     window.toggle_point_set_clip()  # and on again
@@ -1968,7 +1968,7 @@ def test_trace_panel_curb_and_marking(window, monkeypatch):
     from PySide6.QtGui import QKeyEvent
     from PySide6.QtWidgets import QApplication
 
-    import pclabel.ui.trace as tr_mod
+    import pclabel.ui.trace.tracer as tr_mod
 
     app = QApplication.instance()
     assert window.settle()
@@ -1995,7 +1995,7 @@ def test_trace_panel_curb_and_marking(window, monkeypatch):
     assert "further along" in tr.dock.status.text()
     vp.seed_picked.emit(p0 + [1.0, 0, 0], "replace")
     t0 = time.perf_counter()
-    while (tr._busy or not tr.runs) and time.perf_counter() - t0 < 30:
+    while (tr.busy or not tr.runs) and time.perf_counter() - t0 < 30:
         app.processEvents()
     assert threads and threads[0] is not threading.main_thread() and len(tr.runs) == 1
     assert "6 steps (2 pieces)" in tr.dock.status.text()
@@ -2037,7 +2037,7 @@ def test_trace_panel_curb_and_marking(window, monkeypatch):
     tr.click(p0)
     tr.click(p0 + [1.0, 0, 0])
     t0 = time.perf_counter()
-    while (tr._busy or not tr.runs) and time.perf_counter() - t0 < 30:
+    while (tr.busy or not tr.runs) and time.perf_counter() - t0 < 30:
         app.processEvents()
     assert "2 pieces" in tr.dock.status.text()
     tr.dock.save_as.setCurrentIndex(tr.dock.save_as.findData("polyline"))  # every vertex exactly
@@ -2066,14 +2066,14 @@ def test_clearance_along_a_line(window):
     seg = a.model.add(Segment(np.array([0.0, 5.0, g]), np.array([12.0, 5.0, g])), "along the verge")
     a.changed()
     a.dock.tree.clearSelection()
-    assert tr.clearance() is None and "select one line" in tr.dock.status.text()  # nothing selected
-    tr.dock.k_width.setValue(3.0)
+    assert tr.clearance.run() is None and "select one line" in tr.dock.status.text()  # nothing selected
+    tr.clearance.box.half_width.setValue(3.0)
     n0 = len(a.model.root)
-    assert tr.clearance(seg.id, points="all")
+    assert tr.clearance.run(seg.id, points="all")
     t0 = time.perf_counter()
-    while tr._busy and time.perf_counter() - t0 < 60:
+    while tr.busy and time.perf_counter() - t0 < 60:
         app.processEvents()
-    res = tr.last_clearance
+    res = tr.clearance.last
     assert res is not None and res["places"] and res["params"]["half_width"] == 3.0
     d = a.model.root[-1]
     assert len(a.model.root) == n0 + 1 and d.name.startswith("clearance ")
@@ -2104,18 +2104,18 @@ def test_cover_outlines_and_marker_attributes(window):
     assert a.model.node(mk.id).attributes == {}
     window.redo()
     a._item_of(mk.id).setSelected(True)
-    (d,) = tr.cover_outlines()
+    (d,) = tr.covers.outline_selected()
     m2, ring = d.children
     assert d.name.startswith("cover ") and m2.id == mk.id and m2.label == "cover" and ring.label == "cover"
     assert ring.closed and ring.source["tool"] == "cover_template" and ring.source["template"]["diameter"] == pytest.approx(0.62)
     assert np.allclose(np.linalg.norm(ring.vertices - p0, axis=1), 0.31)
-    tr.dock.o_shape.setCurrentIndex(tr.dock.o_shape.findData("rectangle"))
+    tr.covers.box.shape.setCurrentIndex(tr.covers.box.shape.findData("rectangle"))
     a.dock.tree.clearSelection()
     a._item_of(d.id).setSelected(True)  # the directory: its outline
-    assert tr.reshape_outlines() == 1
+    assert tr.covers.reshape_selected() == 1
     ring = a.model.node(ring.id)
     assert len(ring.vertices) == 4 and ring.source["template"]["shape"] == "rectangle"
-    tr.dock.o_shape.setCurrentIndex(tr.dock.o_shape.findData("circle"))
+    tr.covers.box.shape.setCurrentIndex(tr.covers.box.shape.findData("circle"))
 
 
 def test_click_to_place_markers(window):
@@ -2184,7 +2184,7 @@ def test_join_traced_pieces(window):
     n0 = len(a.model.root)
     a.dock.tree.clearSelection()
     a._item_of(d.id).setSelected(True)
-    out = tr.join_selected()
+    out = tr.join.run()
     joined = a.model.root[-1]
     assert joined.name == "curb trace 99 joined" and len(a.model.root) == n0  # the emptied directory went
     assert sorted(x.label for x in out) == ["curb_bottom", "curb_top"]
@@ -2197,7 +2197,7 @@ def test_join_traced_pieces(window):
     assert a.model.root[-1].name == "curb trace 99" and len(a.model.root[-1].children) == 5
     a.dock.tree.clearSelection()
     a._item_of(a.model.root[-1].id).setSelected(True)
-    tr.join_selected(keep=True)
+    tr.join.run(keep=True)
     assert a.model.root[-2].name == "curb trace 99" and a.model.root[-1].name == "curb trace 99 joined"
 
 
@@ -2286,7 +2286,7 @@ def test_smooth_onto_the_curb_top(window, monkeypatch):
 
     from PySide6.QtWidgets import QApplication
 
-    import pclabel.ui.trace as tr_mod
+    import pclabel.ui.trace.curb_fit as fit_mod
     from pclabel.store.annotations import Curve, Polyline
 
     app = QApplication.instance()
@@ -2318,14 +2318,14 @@ def test_smooth_onto_the_curb_top(window, monkeypatch):
 
         return curves.resample(verts, 0.02)
 
-    monkeypatch.setattr(tr_mod, "curb_fit", fake_fit)
-    tr.dock.f_smooth.setValue(1.5)
+    monkeypatch.setattr(fit_mod, "curb_fit", fake_fit)
+    tr.curb_fit.box.smooth.setValue(1.5)
     a.dock.tree.clearSelection()
     a._item_of(c.id).setSelected(True)
     a._item_of(pl.id).setSelected(True)
-    assert tr.fit_selected()
+    assert tr.curb_fit.run()
     t0 = time.perf_counter()
-    while tr._busy and time.perf_counter() - t0 < 30:
+    while tr.busy and time.perf_counter() - t0 < 30:
         app.processEvents()
     new = a.model.node(c.id)
     assert new is not c and new.kind == "curve" and new.mode == "free" and new.label == "curb_top" and new.name == "top"

@@ -163,7 +163,7 @@ class SplitController(QObject):
         """Work on this point set (or the one selected in the Annotations panel): compute its features."""
         a = self.w.annot
         if point_set_id is None:
-            sets_ = [m for m in a._selected_items() if m.kind == "points"]
+            sets_ = [m for m in a.selected_items() if m.kind == "points"]
             if not sets_:
                 self.dock.result.setText("select a point set in the Annotations panel first")
                 return

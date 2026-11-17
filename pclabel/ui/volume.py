@@ -246,7 +246,7 @@ class VolumeController(QObject):
     def use_selected_curve(self, quiet: bool = False):
         """The closed curve being edited or selected in the Annotations panel becomes the loop."""
         a = self.w.annot
-        cands = ([a.editing] if a.editing is not None else []) + a._selected_items()
+        cands = ([a.editing] if a.editing is not None else []) + a.selected_items()
         c = next((x for x in cands if x.kind == "curve" and x.closed), None)
         if c is None:
             if not quiet:

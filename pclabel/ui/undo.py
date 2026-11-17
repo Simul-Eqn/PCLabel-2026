@@ -14,6 +14,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from PySide6.QtCore import QEvent, QObject, Qt
+from PySide6.QtGui import QKeySequence
+from PySide6.QtWidgets import QAbstractSpinBox, QApplication
+
 
 @dataclass
 class Entry:
@@ -59,3 +63,98 @@ class UndoStack:
         while len(self.undo_entries) > self.limit or (
                 len(self.undo_entries) > 1 and sum(e.nbytes for e in self.undo_entries) > self.max_bytes):  # fmt: skip
             self.undo_entries.pop(0)
+
+
+class _UndoKeysToTheApp(QObject):
+    """Ctrl+Z / Ctrl+Y in a number field undo the app, not the field. A spin box keeps the focus after a change, and
+    Qt's own text undo then claims the keys: each press stepped the number back (e.g. 3D select's vertical lines)
+    instead of undoing the app. Text fields keep their own undo while typing."""
+
+    def eventFilter(self, obj, ev):
+        if ev.type() == QEvent.Type.ShortcutOverride and (
+            ev.matches(QKeySequence.StandardKey.Undo) or ev.matches(QKeySequence.StandardKey.Redo)
+            or (ev.key() == Qt.Key.Key_Y and ev.modifiers() == Qt.KeyboardModifier.ControlModifier)
+        ):  # fmt: skip
+            spin = isinstance(obj, QAbstractSpinBox) or isinstance(getattr(obj, "parent", lambda: None)(), QAbstractSpinBox)
+            if spin:
+                ev.ignore()  # not claimed: the window's Undo / Redo shortcut runs
+                return True
+        return False
+
+
+class UndoMixin:
+    """Part of MainWindow: checkpoints, undo and redo, and the Edit menu's text."""
+
+    def _init_undo(self):
+        self.history = UndoStack()  # Ctrl+Z / Ctrl+Y: the selection, planes and annotations (this session)
+        self._undo_keys = _UndoKeysToTheApp(self)
+        QApplication.instance().installEventFilter(self._undo_keys)
+
+    def _capture(self, kind: str):
+        """(snapshot, bytes held) of one kind of state."""
+        if kind == "selection":
+            return (self.selection, self.selection_def, list(self.selection_ops)), int(self.selection.nbytes)
+        if kind == "frames":
+            return (list(self.frames), self.active_frame, self._last_plane), 0
+        if kind == "annotations":
+            return self.annot.snapshot(), 0
+        raise ValueError(kind)
+
+    def _restore(self, kind: str, state):
+        if kind == "selection":
+            self.selection, self.selection_def, ops = state
+            self.selection_ops = list(ops)
+            self._grow_state = None  # threshold changes must not re-run a click that was undone
+            self._set_overlay()
+            self._show_selection_count()
+        elif kind == "frames":
+            frames, active, last = state
+            self.frames = list(frames)
+            self._last_plane = last
+            self.activate_frame(min(active, len(self.frames) - 1))
+        else:
+            self.annot.restore(state)
+
+    def checkpoint(self, kind: str, label: str, before=None):
+        """Record the state of ``kind`` before a change (or ``before``, a capture taken earlier)."""
+        state, nbytes = before if before is not None else self._capture(kind)
+        self.history.push(kind, label, state, nbytes)
+        self._update_undo_actions()
+
+    def _busy(self) -> bool:
+        if self._sel_busy or self._grow_busy:
+            self.statusBar().showMessage("still working: try again in a moment", 3000)
+            return True
+        return False
+
+    def undo(self):
+        if self.annot.pending:  # while drawing a segment or curve: take back the last clicked point
+            self.annot.back()
+            return
+        if self._busy():
+            return
+        e = self.history.undo(self._capture)
+        if e is None:
+            self.statusBar().showMessage("nothing to undo", 3000)
+            return
+        self._restore(e.kind, e.state)
+        self._update_undo_actions()
+        self.statusBar().showMessage(f"undone: {e.label}", 5000)
+
+    def redo(self):
+        if self._busy():
+            return
+        e = self.history.redo(self._capture)
+        if e is None:
+            self.statusBar().showMessage("nothing to redo", 3000)
+            return
+        self._restore(e.kind, e.state)
+        self._update_undo_actions()
+        self.statusBar().showMessage(f"redone: {e.label}", 5000)
+
+    def _update_undo_actions(self):
+        if not hasattr(self, "_undo_action"):
+            return
+        u, r = self.history.undo_entries, self.history.redo_entries
+        self._undo_action.setText(f"Undo {u[-1].label}" if u else "Undo")
+        self._redo_action.setText(f"Redo {r[-1].label}" if r else "Redo")

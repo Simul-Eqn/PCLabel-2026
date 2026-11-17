@@ -505,7 +505,7 @@ class Annotations:
                 return anc[-1] if anc else None
         raise KeyError(node_id)
 
-    def _siblings(self, node_id: str) -> list:
+    def siblings(self, node_id: str) -> list:
         p = self.parent(node_id)
         return self.root if p is None else p.children
 
@@ -563,7 +563,7 @@ class Annotations:
                 picked.append(x)
         dest = self.root if target_id is None else self.node(target_id).children
         for x in picked:
-            self._siblings(x.id).remove(x)
+            self.siblings(x.id).remove(x)
             dest.append(x)
 
     def duplicate(self, node_ids) -> list:
@@ -585,14 +585,14 @@ class Annotations:
             c.name = f"{x.name} copy"
             if c.color:
                 c.color = color
-            sib = self._siblings(x.id)
+            sib = self.siblings(x.id)
             sib.insert(sib.index(x) + 1, c)
             copies.append(c)
         return copies
 
     def remove(self, node_id: str):
         """Remove a node (a directory with everything in it)."""
-        self._siblings(node_id).remove(self.node(node_id))
+        self.siblings(node_id).remove(self.node(node_id))
 
     def points_of(self, node_id: str) -> np.ndarray:
         """Store indices (sorted) of a point set, or of all the point sets in a directory."""
@@ -621,7 +621,7 @@ class Annotations:
             _, color = self._next()
             parts.append(PointSet(ps.indices[mask], [*ps.provenance, dict(record, part=part)], f"{ps.name} {part}",
                                   color, ps.label, uncertain=ps.uncertain))  # fmt: skip
-        sib = self._siblings(ps.id)
+        sib = self.siblings(ps.id)
         i = sib.index(ps)
         sib[i : i + 1] = parts
         return parts[0], parts[1]
@@ -651,12 +651,12 @@ class Annotations:
             new = Polyline(line[idx], bool(x.closed), src)
         else:
             return None
-        return self._replace(x, new)
+        return self.replace_node(x, new)
 
-    def _replace(self, x, new):
+    def replace_node(self, x, new):
         """``new`` in ``x``'s place, with its id, name, colour, label and mark."""
         new.name, new.color, new.label, new.id, new.uncertain = x.name, x.color, x.label, x.id, x.uncertain
-        sib = self._siblings(x.id)
+        sib = self.siblings(x.id)
         sib[sib.index(x)] = new
         return new
 
@@ -690,7 +690,7 @@ class Annotations:
         else:
             idx = curves.simplify(s, 0.002, closed)
             new = Polyline(s[idx], closed, src)
-        return self._replace(x, new)
+        return self.replace_node(x, new)
 
     def join_curves(self, first_id: str, first_end: str, second_id: str, second_end: str, close: bool = False,
                     merge_within: float = 0.02) -> "Curve":  # fmt: skip
@@ -719,7 +719,7 @@ class Annotations:
                   picked_source=source, name=a.name, color=a.color, label=a.label, closed=bool(close),
                   uncertain=a.uncertain or b.uncertain, source=src)  # fmt: skip
         c.refit()
-        sib = self._siblings(a.id)
+        sib = self.siblings(a.id)
         sib[sib.index(a)] = c
         self.remove(b.id)
         return c

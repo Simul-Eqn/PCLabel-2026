@@ -103,7 +103,7 @@ and has a parameter dataclass. The pieces the pipeline reuses:
 1. Any proposal of where to start: no curb seeds, no paint seeds, no trunk candidates.
 2. A ground model for the whole scan. There is one global fitted plane at a time, plus the seed-bound grid above.
 3. Handling of drains and bushes in the curb tracer (causes in P3).
-4. An orchestrator, a writer and a scorer. Saving a trace result as annotations lives in `ui/trace.py`.
+4. An orchestrator, a writer and a scorer. Saving a trace result as annotations is in `ops/trace.py`, shared with the app.
 
 ## 4. The user's observations, and what the pipeline does with each
 

@@ -384,6 +384,18 @@ read):
   - Magic select keeps its picture (1.5 × the reach) for later clicks. Grids lie on fixed lattices, so results do
     not depend on which picture is reused.
 
+## the app
+
+`pclabel/ui/`. The window (`main_window.py`) holds the viewport, the docks and one controller per panel; its own
+parts are mixins in `selecting.py` (the selection, locks, filters and clips), `seed_tools.py` (clicks with grow,
+magic and the other click tools), `height_axes.py` (the fitted planes), `undo.py`, and `menus.py` (menus, keys,
+toolbar). The annotations controller is the package `ui/annotate/`: the panel (`dock.py`), the controller with its
+overlays (`controller.py`), and its mixins for drawing and curve editing, markers, items, set operations and the
+tree. The Trace panel is the package `ui/trace/`: the tracer (`tracer.py`) and one module per tool that works on
+the lines and markers selected in Annotations (clearance, cover outlines, joining, the curb-top fit); each tool
+module has its box and its controller. Controllers turn results into annotations through `ops/`, and change the
+model only between `AnnotationController.checkpoint` and `changed`.
+
 ## undo and saving
 
 There is no log of label operations and none is planned (D-004, D-007).
@@ -417,7 +429,7 @@ Exports never write a project's `annotations.json` or `annotations/`.
   exports.
 - numba kernels release the GIL.
 - A worker's result is delivered to its handler in the UI thread, which alone changes the selection and the
-  annotations.
+  annotations (`ui/worker.run_in_worker`; the tracer and the label map keep a relay of their own, for progress).
 
 ## performance targets
 

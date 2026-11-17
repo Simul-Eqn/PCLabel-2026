@@ -112,7 +112,12 @@ the same project files, since the user labels while the code changes).
   `curb_fit` at its next fit, and are read as they are until then). Not done: "piece" for its four meanings, and
   one record-name constant per tool module; both rename saved record values and are best done with plan 02's
   scoring, which reads them.
-- Left: C11 (splitting `ui/annotate.py`, `ui/main_window.py`, `ui/trace.py`).
+- C11: done. `ui/trace/` is the tracer and one module per tool of the panel (clearance, cover outlines, join,
+  curb-top fit: each its box and its controller; the panel looks as before). `ui/annotate/` is the panel, the
+  controller and five mixins (drawing, markers, items, set operations, tree). The window's selection, seed tools,
+  height axes and undo are mixins in their own modules, and its menus a function (`main_window.py` 1,163 lines to
+  429). The helpers other modules called became public (`filters`, `selected_items`, `directory_for_new`,
+  `Annotations.siblings`, `replace_node`). The largest module is now `ui/docks.py` (662 lines).
 
 Rules for every step:
 

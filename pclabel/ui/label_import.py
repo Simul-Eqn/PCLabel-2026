@@ -7,7 +7,6 @@ scan. The import is one undoable step: a directory named after the file, a direc
 
 from __future__ import annotations
 
-
 from PySide6.QtCore import QObject, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (

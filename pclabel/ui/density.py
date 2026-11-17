@@ -113,7 +113,7 @@ class DensityController(QObject):
     def start(self):
         """Work on the point sets selected in the Annotations panel (a directory: all its point sets)."""
         a = self.w.annot
-        items = [m for m in a._selected_items() if m.kind == "points"]
+        items = [m for m in a.selected_items() if m.kind == "points"]
         if not items:
             self.dock.result.setText("select a point set (or a directory) in the Annotations panel first")
             self._open()
