@@ -135,6 +135,29 @@ def test_scan_metadata_is_saved(window, project_dir):
     assert not window.project.static_capture
 
 
+def test_opening_a_project_does_not_write_it(window, project_dir):
+    """Filling the scan metadata panel on open is not an edit: project.json is left as it was."""
+    import time
+
+    from PySide6.QtWidgets import QApplication
+
+    t0 = time.perf_counter()
+    while time.perf_counter() - t0 < 1.0:  # an earlier test's window may still have an edit to save
+        QApplication.instance().processEvents()
+    path = project_dir / "project.json"
+    before = path.stat().st_mtime_ns
+    window.open_project(str(project_dir))
+    t0 = time.perf_counter()
+    while time.perf_counter() - t0 < 1.0:  # past the panel's 0.6 s autosave delay
+        QApplication.instance().processEvents()
+    assert path.stat().st_mtime_ns == before
+    window.meta.notes.setPlainText("after rain")  # an edit still saves
+    t0 = time.perf_counter()
+    while path.stat().st_mtime_ns == before and time.perf_counter() - t0 < 3.0:
+        QApplication.instance().processEvents()
+    assert json.loads(path.read_text(encoding="utf-8"))["scan_metadata"]["notes"] == "after rain"
+
+
 def test_settings_reach_a_renderer_created_later(gl, taxonomy, project_dir):
     """Opening a project before the GL context exists (python -m pclabel <project>) must still apply the docks."""
     from PySide6.QtCore import Qt
@@ -529,7 +552,6 @@ def test_export_a_plane(window, tmp_path):
 
 
 def test_undo_and_redo(window):
-    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance()
@@ -636,7 +658,7 @@ def test_3d_select_with_keys_and_locks(window):
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication
 
-    from pclabel.tools.volume import VolumeParams, frame_axes
+    from pclabel.tools.volume import frame_axes
 
     app = QApplication.instance()
     assert window.settle()
@@ -1761,6 +1783,30 @@ def test_mark_labels_uncertain(window):
     a._item_of(d.id).setSelected(True)
     a.dock.uncertain.click()
     assert "directories cannot be uncertain" in a.dock.status.text() and not hasattr(d, "uncertain")
+
+
+def test_label_typed_in_the_tree_is_saved(window):
+    """A label typed into the tree's label column is saved and drawn at once (one undo step); one that does not fit
+    the item is refused and the shown label put back."""
+    from PySide6.QtWidgets import QApplication
+
+    from pclabel.store.annotations import Annotations
+
+    a = window.annot
+    assert window.settle()
+    window.set_selection(np.arange(100, dtype=np.int64), {"tool": "test", "op": "replace"})
+    a.points_from_selection()
+    ps = a.model.root[-1]
+    a._item_of(ps.id).setText(1, "road")
+    QApplication.instance().processEvents()
+    assert a.model.node(ps.id).label == "road" and a._item_of(ps.id).text(1) == "road"
+    saved, _ = Annotations.load(window.project)
+    assert saved.node(ps.id).label == "road"
+    window.undo()
+    assert a.model.node(ps.id).label == ""
+    a._item_of(ps.id).setText(1, "curb")  # a class kept to lines
+    QApplication.instance().processEvents()
+    assert a.model.node(ps.id).label == "" and a._item_of(ps.id).text(1) == "" and "curb" in a.dock.status.text()
 
 
 def test_ctrl_g_puts_the_point_set_in_the_selected_directory(window):

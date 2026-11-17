@@ -300,6 +300,7 @@ class ScanMetaDock(QDockWidget):
             e.setText(meta.get(k, ""))
         self.capture.setCurrentText(meta.get("capture", "static") or "static")
         self.notes.setPlainText(meta.get("notes", ""))
+        self._timer.stop()  # filling the fields is not an edit: project.json is not written on open
         self.project = project
         self.setEnabled(project is not None)
 

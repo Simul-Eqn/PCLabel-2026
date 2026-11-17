@@ -106,7 +106,7 @@ class TreeMixin:
             if label != x.label:
                 self.checkpoint(f"label {label!r}" if label else "remove label")
                 x.label = label
-                QTimer.singleShot(0, self._changed)  # rebuilding the tree now would delete the item under the editor
+                QTimer.singleShot(0, self.changed)  # rebuilding the tree now would delete the item under the editor
             return
         name = item.text(0).strip()
         if col == 0 and name and name != x.name:
