@@ -1,3 +1,7 @@
+NOTE: THIS IS NOT THE UPDATED VERSION WITH AUTO TOOLS, WHICH IS IN A PRIVATE REPOSITORY. 
+this also lacks labels for zebra crossing and traffic light poles, and any further changes beyond that 
+
+
 # Setup Instructions 
 
 If anaconda: 
